@@ -151,11 +151,11 @@ class NMM_Exchange {
         }
 
         $responseBody = json_decode( $response['body']);
-        $bittrexPrice = (float) $responseBody->{'price'};
+        $binancePrice = (float) $responseBody->{'price'};
 
-        set_transient($transientKey, $bittrexPrice, $updateInterval);
+        set_transient($transientKey, $binancePrice, $updateInterval);
 
-        return $bittrexPrice;
+        return $binancePrice;
     }
 
     // gets crypto to USD conversion from an API
