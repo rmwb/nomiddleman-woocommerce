@@ -121,7 +121,7 @@ class NMM_Exchange {
             return $gateioPrice;
         }
 
-        $response = wp_remote_get('https://data.gateio.io/api2/1/ticker/' . strtolower($cryptoId) . '_usdt');
+        $response = wp_remote_get('https://data.gate.io/api2/1/ticker/' . strtolower($cryptoId) . '_usdt');
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             return 0;
