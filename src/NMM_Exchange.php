@@ -136,22 +136,22 @@ class NMM_Exchange {
     }
 
     // gets crypto to USD conversion from an API
-    public static function get_bittrex_price($cryptoId, $updateInterval) {
-        $transientKey = 'bittrex_' . $cryptoId . '_price';
-        $bittrexPrice = get_transient($transientKey);
+    public static function get_binance_price($cryptoId, $updateInterval) {
+        $transientKey = 'binance_' . $cryptoId . '_price';
+        $binancePrice = get_transient($transientKey);
 
-        if ($bittrexPrice !== false) {
-            return $bittrexPrice;
+        if ($binancePrice !== false) {
+            return $binancePrice;
         }
 
-        $response = wp_remote_get('https://bittrex.com/api/v1.1/public/getticker?market=USDT-' . $cryptoId);
+        $response = wp_remote_get('https://api.binance.com/api/v3/avgPrice?symbol=' . $cryptoId . 'USDT');
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             return 0;
         }
 
         $responseBody = json_decode( $response['body']);
-        $bittrexPrice = (float) $responseBody->{'result'}->{'Last'};
+        $bittrexPrice = (float) $responseBody->{'price'};
 
         set_transient($transientKey, $bittrexPrice, $updateInterval);
 
