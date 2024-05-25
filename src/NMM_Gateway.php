@@ -461,10 +461,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
         }
 
         if (in_array('3', $selectedPriceApis)) {
-            $bittrexPrice = NMM_Exchange::get_bittrex_price($cryptoId, $updateInterval);
+            $binancePrice = NMM_Exchange::get_binance_price($cryptoId, $updateInterval);
 
-            if ($bittrexPrice > 0) {
-                $prices[] = $bittrexPrice;  
+            if ($binancePrice > 0) {
+                $prices[] = $binancePrice;  
             }        
         }
 
