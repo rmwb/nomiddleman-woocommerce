@@ -378,7 +378,7 @@ $nmm_section = array(
                 '0' => 'CryptoCompare',
                 '1' => 'HitBTC',
                 '2' => 'GateIO',
-                '3' => 'Bittrex',
+                '3' => 'Binance',
                 '4' => 'Poloniex',
             ),
         ),
