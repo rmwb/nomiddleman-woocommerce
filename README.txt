@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.5.0
+Stable Tag: 2.6.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -103,6 +103,12 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 3. Customer Thank-You Page
 
 == Changelog ==
+
+= 2.6.0 =
+* Removed the bundled Redux Framework (outdated, known CVEs, PHP 8 first-load errors)
+* Settings page rebuilt with native WordPress admin UI at the same location; existing settings are preserved automatically (same option storage, no migration needed)
+* Privacy Mode sample address generation, wallet address validation, and all per-crypto options carried over
+* Import/export and reset buttons from the old Redux panel are no longer available
 
 = 2.5.0 =
 * PHP 8 compatibility (fixed fatal parse error on modern PHP)

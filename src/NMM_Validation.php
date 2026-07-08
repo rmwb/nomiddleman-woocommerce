@@ -1,11 +1,44 @@
 <?php
 
 class NMM_Validation {
-	public static function validate_redux_options($newValues, $oldValues) {
-		$oldSettings = new NMM_Settings($oldValues);
-		$newSettings = new NMM_Settings($newValues);		
 
-		$selectedCryptosChanged = $oldSettings->get_selected_cryptos() !== $newSettings->get_selected_cryptos();
+	/**
+	 * Sanitize callback for register_setting on the NMM_REDUX_ID option.
+	 * Ports the old Redux before_validation filter: strips invalid wallet
+	 * addresses, validates MPKs, disables misconfigured cryptos, refreshes
+	 * the carousel buffer, and surfaces errors as admin notices.
+	 */
+	public static function sanitize_options($newValues) {
+		// WordPress can invoke the sanitize callback twice on the first save
+		static $alreadyRan = false;
+		if ($alreadyRan) {
+			return $newValues;
+		}
+		$alreadyRan = true;
+
+		$oldValues = get_option(NMM_REDUX_ID, array());
+
+		if (!is_array($newValues)) {
+			return $oldValues;
+		}
+
+		// Unchecked checkbox groups are absent from the POST entirely
+		if (!array_key_exists('crypto_select', $newValues)) {
+			$newValues['crypto_select'] = array();
+		}
+		if (!array_key_exists('selected_price_apis', $newValues)) {
+			$newValues['selected_price_apis'] = array();
+		}
+
+		// Keys not present in the submitted form must survive the save
+		$newValues = array_merge((array) $oldValues, $newValues);
+
+		return self::validate($newValues, (array) $oldValues);
+	}
+
+	private static function validate($newValues, $oldValues) {
+		$oldSettings = new NMM_Settings($oldValues);
+		$newSettings = new NMM_Settings($newValues);
 
 		$atLeastOneInvalidCrypto = false;
 		$errorMessages = [];
@@ -14,16 +47,20 @@ class NMM_Validation {
 			$invalidCryptoSettings = false;
 			$cryptoId = $crypto->get_id();
 			$cryptoName = $crypto->get_name();
-			if ($newSettings->basic_enabled($cryptoId) || $newSettings->autopay_enabled($cryptoId)) {
+
+			// Only enforce mode requirements for cryptos the merchant enabled
+			$cryptoSelected = $newSettings->crypto_selected($cryptoId);
+
+			if ($cryptoSelected && ($newSettings->basic_enabled($cryptoId) || $newSettings->autopay_enabled($cryptoId))) {
 				$carouselAddresses = [];
 				$hasValidWalletAddress = false;
 				$addresses = $newSettings->get_addresses($cryptoId);
-				
+
 				foreach ($addresses as $ind => $address) {
 					if (NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
                         $carouselAddresses[] = trim($address);
                         $hasValidWalletAddress = true;
-                    }                    
+                    }
 				}
 				if (! $hasValidWalletAddress) {
 					$invalidCryptoSettings = true;
@@ -35,14 +72,14 @@ class NMM_Validation {
 					$carouselRepo->set_buffer($cryptoId, $carouselAddresses);
 				}
 			}
-			else if ($newSettings->hd_enabled($cryptoId)) {
+			else if ($cryptoSelected && $newSettings->hd_enabled($cryptoId)) {
 				$mpk = $newSettings->get_mpk($cryptoId);
 
 				if (NMM_Util::p_enabled()) {
-					if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {						
+					if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
 						$invalidCryptoSettings = true;
 						$atLeastOneInvalidCrypto = true;
-						$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '.';					
+						$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '.';
 					}
 				}
 				else {
@@ -50,10 +87,10 @@ class NMM_Validation {
 						$invalidCryptoSettings = true;
 						$atLeastOneInvalidCrypto = true;
 						if (NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
-							$errorMessages[] = 'Please use an xpub MPK. Disabling ' . $cryptoName . '.';                    
+							$errorMessages[] = 'Please use an xpub MPK. Disabling ' . $cryptoName . '.';
 						}
 						else {
-							$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '. If you have a wallet that supports this MPK, please contact us at <a href="mailto:support@nomiddlemancrypto.io">support@nomiddlemancrypto.io</a>.';
+							$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '.';
 						}
 					}
 					else {
@@ -73,10 +110,10 @@ class NMM_Validation {
 				if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
 					if ($address !== '') {
 						$invalidAddressKeys[] = $k;
-						$errorMessages[] = $cryptoName . ' has invalid address: ' . $address;
+						$errorMessages[] = $cryptoName . ' has invalid address: ' . esc_html($address);
 					}
 					else {
-						$invalidAddressKeys[] = $k;					
+						$invalidAddressKeys[] = $k;
                     }
                 }
 			}
@@ -87,6 +124,9 @@ class NMM_Validation {
 				else {
 					$newValues[$cryptoId . '_addresses'][$k] = '';
 				}
+			}
+			if (array_key_exists($cryptoId . '_addresses', $newValues) && is_array($newValues[$cryptoId . '_addresses'])) {
+				$newValues[$cryptoId . '_addresses'] = array_values($newValues[$cryptoId . '_addresses']);
 			}
 
 			if (NMM_Util::p_enabled()) {
@@ -105,30 +145,15 @@ class NMM_Validation {
 			}
 		} // foreach
 
-		$reduxInstance = ReduxFrameworkInstances::get_instance(NMM_REDUX_ID);
-
-		$noPriceApiSelected = false;
-
 		if (!$newSettings->price_api_selected()) {
-			$noPriceApiSelected = true;
-			// 4/10/2019 - This is always executed in Redux v3, commenting out so user doesnt see false error
-			//$errorMessages[] = 'At least one pricing API must be selected. Falling back to CryptoCompare.';
 			$newValues['selected_price_apis'] = ['0'];
 		}
 
-		$reduxInstance->set_options($newValues);
+		foreach ($errorMessages as $msg) {
+			add_settings_error('nmmpro_options', 'nmmpro_options_error', $msg, 'error');
+		}
 
-		if ($atLeastOneInvalidCrypto || $selectedCryptosChanged || $noPriceApiSelected) {
-        
-	        foreach ($errorMessages as $msg) {
-	            NMM_add_flash_notice($msg);
-	        }
-	        // hard reload page
-	        echo json_encode( array( 'status' => 'success', 'action' => 'reload' ) );
-	        die ();
-	    }
-
-	    return $newValues;
+		return $newValues;
 	}
 }
 

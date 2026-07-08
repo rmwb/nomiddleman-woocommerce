@@ -1,0 +1,152 @@
+.nmm-settings-wrap .nmm-version {
+	font-size: 12px;
+	color: #787c82;
+	font-weight: normal;
+	margin-left: 8px;
+}
+
+.nmm-settings-layout {
+	display: flex;
+	gap: 0;
+	margin-top: 16px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.nmm-tab-nav {
+	flex: 0 0 220px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	background: #f6f7f7;
+	border-right: 1px solid #c3c4c7;
+}
+
+.nmm-tab-nav li {
+	margin: 0;
+}
+
+.nmm-tab-nav a {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	text-decoration: none;
+	color: #2c3338;
+	border-bottom: 1px solid #dcdcde;
+}
+
+.nmm-tab-nav a:hover {
+	background: #f0f0f1;
+}
+
+.nmm-tab-nav a.nmm-tab-active {
+	background: #fff;
+	border-left: 4px solid #2271b1;
+	padding-left: 10px;
+	font-weight: 600;
+}
+
+.nmm-tab-icon {
+	width: 20px;
+	height: 20px;
+	vertical-align: middle;
+}
+
+.nmm-tab-panels {
+	flex: 1;
+	padding: 8px 24px 24px;
+	min-width: 0;
+}
+
+.nmm-tab-panel {
+	display: none;
+}
+
+.nmm-crypto-select,
+.nmm-price-apis {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+	gap: 6px;
+	max-width: 900px;
+}
+
+.nmm-crypto-choice {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+	background: #fff;
+	cursor: pointer;
+}
+
+.nmm-crypto-choice:hover {
+	border-color: #2271b1;
+}
+
+.nmm-crypto-choice img {
+	width: 18px;
+	height: 18px;
+}
+
+.nmm-multi-text-row {
+	margin-bottom: 6px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.nmm-multi-text-remove {
+	color: #b32d2e;
+	cursor: pointer;
+}
+
+.nmm-sample-addresses input {
+	display: block;
+	margin-bottom: 6px;
+	width: 100%;
+	max-width: 480px;
+}
+
+.nmm-danger {
+	color: #b32d2e;
+}
+
+.nmm-inline-notice {
+	margin: 0;
+}
+
+.nmm-flash-yellow {
+	background-color: #fcf9e8 !important;
+}
+
+.nmm-flash-green {
+	background-color: #edfaef !important;
+}
+
+.nmm-flash-red {
+	background-color: #fcf0f1 !important;
+}
+
+@media screen and (max-width: 782px) {
+	.nmm-settings-layout {
+		flex-direction: column;
+	}
+
+	.nmm-tab-nav {
+		flex: none;
+		display: flex;
+		flex-wrap: wrap;
+		border-right: none;
+		border-bottom: 1px solid #c3c4c7;
+	}
+
+	.nmm-tab-nav a.nmm-tab-active {
+		border-left: none;
+		border-bottom: 3px solid #2271b1;
+		padding-left: 14px;
+	}
+}
