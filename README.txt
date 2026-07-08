@@ -106,6 +106,9 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 
 = 2.6.0 =
 * EOS payment verification restored: dead EOSPark API (and its hardcoded key) replaced with the public Hyperion history API, with Greymass as fallback
+* Restored payment verification for 6 more coins whose explorers had shut down: ADA (Koios), BSV (WhatsOnChain), DGB (digiexplorer.info), XTZ (TzKT), ZEC (Blockchair), BLK (explorer.blackcoin.nl)
+* BTX Privacy Mode balance checks restored via chainz.cryptoid.info; BTX Autopay remains unavailable (no free transaction API)
+* LSK, XEM, ONION, and XMY verification remains unavailable: their chains or last public explorers no longer exist
 * Removed the bundled Redux Framework (outdated, known CVEs, PHP 8 first-load errors)
 * Settings page rebuilt with native WordPress admin UI at the same location; existing settings are preserved automatically (same option storage, no migration needed)
 * Privacy Mode sample address generation, wallet address validation, and all per-crypto options carried over

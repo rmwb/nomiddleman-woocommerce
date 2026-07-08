@@ -215,7 +215,7 @@ class NMM_Hd {
 	}
 	
 	private static function get_total_received_for_bitcore_address($address) {
-		$result = NMM_Blockchain::get_insight_total_received_for_btx_address($address);
+		$result = NMM_Blockchain::get_chainz_total_received_for_btx_address($address);
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];

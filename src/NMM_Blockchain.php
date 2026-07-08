@@ -318,17 +318,19 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_insight_total_received_for_btx_address($address) {		
+	public static function get_chainz_total_received_for_btx_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
-		$request = 'https://insight.bitcore.cc/api/addr/' . $address;
+
+		// chainz answers this query keyless; returns a plain decimal BTX amount.
+		// Their API etiquette asks for at most one request every 10 seconds.
+		$request = 'https://chainz.cryptoid.info/btx/api.dws?q=getreceivedbyaddress&a=' . rawurlencode($address);
 
 		$args = array(
 			'user-agent' => $userAgentString
 		);
 
 		$response = wp_remote_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
+		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body']))) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
 				'result' => 'error',
@@ -338,7 +340,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceived = (float) json_decode($response['body'])->balance;
+		$totalReceived = (float) trim($response['body']);
 
 		$result = array (
 			'result' => 'success',
@@ -350,8 +352,13 @@ class NMM_Blockchain {
 
 
 	public static function get_ada_address_transactions($address) {
-		$request = 'https://cardanoexplorer.com/api/addresses/summary/' . $address;
-		$response = wp_remote_get($request);
+		// Koios public tier: list txs for the address, then fetch each tx's outputs
+		$request = 'https://api.koios.rest/api/v1/address_txs';
+
+		$response = wp_remote_post($request, array(
+			'headers' => array('Content-Type' => 'application/json'),
+			'body' => json_encode(array('_addresses' => array($address))),
+		));
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -364,10 +371,9 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$rawTxList = json_decode($response['body']);
 
-		$rawTransactions = $body->Right->caTxList;
-		if (!is_array($rawTransactions)) {
+		if (!is_array($rawTxList)) {
 			$result = array(
 				'result' => 'error',
 				'message' => 'No transactions found',
@@ -375,19 +381,58 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// most recent first, and cap the outputs lookup to a sane batch
+		usort($rawTxList, function($a, $b) {
+			return $b->block_height <=> $a->block_height;
+		});
+		$rawTxList = array_slice($rawTxList, 0, 25);
+
+		$txHashes = array();
+		$txTimes = array();
+		foreach ($rawTxList as $row) {
+			$txHashes[] = $row->tx_hash;
+			$txTimes[$row->tx_hash] = $row->block_time;
+		}
+
 		$transactions = array();
 
-		foreach ($rawTransactions as $rawTransaction) {
-			$outputs = $rawTransaction->ctbOutputs;
+		if (count($txHashes) > 0) {
+			$response2 = wp_remote_post('https://api.koios.rest/api/v1/tx_utxos', array(
+				'headers' => array('Content-Type' => 'application/json'),
+				'body' => json_encode(array('_tx_hashes' => $txHashes)),
+			));
 
-			foreach ($outputs as $output) {
-				if ($output[0] === $address) {
-					$amount = $output[1]->getCoin;
-					$transactions[] = new NMM_Transaction($amount,
+			if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( koios tx_utxos ): ' . print_r($response2, true));
+
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+
+			$utxoRows = json_decode($response2['body']);
+
+			foreach ((array) $utxoRows as $utxoRow) {
+				if (!isset($utxoRow->outputs) || !is_array($utxoRow->outputs)) {
+					continue;
+				}
+
+				// amounts are in lovelace (1e-6 ADA), matching ADA's round precision
+				$received = 0;
+				foreach ($utxoRow->outputs as $output) {
+					if (isset($output->payment_addr->bech32) && $output->payment_addr->bech32 === $address) {
+						$received += (float) $output->value;
+					}
+				}
+
+				if ($received > 0) {
+					$transactions[] = new NMM_Transaction($received,
 														  10000,
-														  $rawTransaction->ctbTimeIssued,
-														  $rawTransaction->ctbId);
-				}				
+														  isset($txTimes[$utxoRow->tx_hash]) ? $txTimes[$utxoRow->tx_hash] : time(),
+														  $utxoRow->tx_hash);
+				}
 			}
 		}
 
@@ -483,7 +528,7 @@ class NMM_Blockchain {
 
 	public static function get_blk_address_transactions($address) {
 		
-		$request = 'https://blackcoin.holytransaction.com/ext/getaddress/' . $address;
+		$request = 'https://explorer.blackcoin.nl/ext/getaddress/' . $address;
 
 		$response = wp_remote_get($request);
 
@@ -510,6 +555,10 @@ class NMM_Blockchain {
 		}
 
 		$rawTransactionIds = $body->last_txs;
+		if (is_array($rawTransactionIds)) {
+			// each entry costs one HTTP request; only inspect the most recent ones
+			$rawTransactionIds = array_slice($rawTransactionIds, -25);
+		}
 		if (!is_array($rawTransactionIds)) {
 			$result = array(
 				'result' => 'error',
@@ -525,7 +574,7 @@ class NMM_Blockchain {
 
 				$txId = $rawTransactionId->addresses;
 
-				$request2 = 'https://blackcoin.holytransaction.com/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
+				$request2 = 'https://explorer.blackcoin.nl/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
 				
 				$response2 = wp_remote_get($request2);
 
@@ -538,10 +587,19 @@ class NMM_Blockchain {
 				$vouts = $rawTransaction->vout;
 
 				foreach ($vouts as $vout) {
-					if ($vout->scriptPubKey->addresses[0] === $address) {
+					// newer nodes emit scriptPubKey.address (singular); older ones an addresses array
+					$voutAddresses = array();
+					if (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) {
+						$voutAddresses = $vout->scriptPubKey->addresses;
+					}
+					elseif (isset($vout->scriptPubKey->address)) {
+						$voutAddresses = array($vout->scriptPubKey->address);
+					}
+
+					if (in_array($address, $voutAddresses, true)) {
 						$transactions[] = new NMM_Transaction($vout->value * 100000000,
-															  $rawTransaction->confirmations,
-															  $rawTransaction->time,
+															  isset($rawTransaction->confirmations) ? $rawTransaction->confirmations : 0,
+															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
 															  $rawTransaction->txid);
 					}
 				}
@@ -560,8 +618,9 @@ class NMM_Blockchain {
 	}
 
 	public static function get_bsv_address_transactions($address) {
-		
-		$request = 'https://api.blockchair.com/bitcoin-sv/outputs?q=recipient(' . $address . ')';
+
+		// WhatsOnChain: tx-hash history first, then a bulk lookup for amounts
+		$request = 'https://api.whatsonchain.com/v1/bsv/main/address/' . rawurlencode($address) . '/history';
 
 		$response = wp_remote_get($request);
 
@@ -576,10 +635,9 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$history = json_decode($response['body']);
 
-		$rawTransactions = $body->data;
-		if (!is_array($rawTransactions)) {
+		if (!is_array($history)) {
 			$result = array(
 				'result' => 'error',
 				'message' => 'No transactions found',
@@ -587,14 +645,62 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// newest entries are last in the history; keep the 20 most recent
+		$history = array_slice($history, -20);
+
+		$tipHeight = 0;
+		$tipResponse = wp_remote_get('https://api.whatsonchain.com/v1/bsv/main/chain/info');
+		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
+			$tipBody = json_decode($tipResponse['body']);
+			if (isset($tipBody->blocks)) {
+				$tipHeight = (int) $tipBody->blocks;
+			}
+		}
+
+		$txHashes = array();
+		$txHeights = array();
+		foreach ($history as $entry) {
+			if (isset($entry->tx_hash)) {
+				$txHashes[] = $entry->tx_hash;
+				$txHeights[$entry->tx_hash] = isset($entry->height) ? (int) $entry->height : 0;
+			}
+		}
+
 		$transactions = array();
-		foreach ($rawTransactions as $rawTransaction) {
-				
-			$transactions[] = new NMM_Transaction($rawTransaction->value,
-												  10000,
-												  strtotime($rawTransaction->time),
-												  $rawTransaction->transaction_hash);
-			
+
+		if (count($txHashes) > 0) {
+			$response2 = wp_remote_post('https://api.whatsonchain.com/v1/bsv/main/txs', array(
+				'headers' => array('Content-Type' => 'application/json'),
+				'body' => json_encode(array('txids' => $txHashes)),
+			));
+
+			if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( whatsonchain bulk txs ): ' . print_r($response2, true));
+
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+
+			foreach ((array) json_decode($response2['body']) as $rawTransaction) {
+				if (!isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+					continue;
+				}
+
+				$height = isset($txHeights[$rawTransaction->txid]) ? $txHeights[$rawTransaction->txid] : 0;
+				$confirmations = ($height > 0 && $tipHeight > 0) ? $tipHeight - $height + 1 : 0;
+
+				foreach ($rawTransaction->vout as $vout) {
+					if (isset($vout->scriptPubKey->addresses) && in_array($address, $vout->scriptPubKey->addresses, true)) {
+						$transactions[] = new NMM_Transaction($vout->value * 100000000,
+															  $confirmations,
+															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
+															  $rawTransaction->txid);
+					}
+				}
+			}
 		}
 
 		$result = array (
@@ -912,15 +1018,14 @@ class NMM_Blockchain {
 	}
 
     public static function get_dgb_address_transactions($address) {
-        $args = array('timeout' => 25);
-        $request = 'https://explorer-1.us.digibyteservers.io/api/txs/?address=' . $address;
+        // digiexplorer.info runs an Esplora API (same interface as mempool.space)
+        $request = 'https://digiexplorer.info/api/address/' . rawurlencode($address) . '/txs';
 
-        $response = wp_remote_get($request, $args);
+        $response = wp_remote_get($request);
 
         if (is_wp_error($response) || $response['response']['code'] !== 200) {
             NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 
-            //TODO: https://digiexplorer.info/
             $result = array(
                 'result' => 'error',
                 'total_received' => '',
@@ -929,9 +1034,8 @@ class NMM_Blockchain {
             return $result;
         }
 
-        $body = json_decode($response['body']);
+        $rawTransactions = json_decode($response['body']);
 
-        $rawTransactions = $body->txs;
         if (!is_array($rawTransactions)) {
             $result = array(
                 'result' => 'error',
@@ -940,18 +1044,32 @@ class NMM_Blockchain {
 
             return $result;
         }
+
+        // Esplora omits confirmation counts, so fetch the tip height
+        $tipHeight = 0;
+        $tipResponse = wp_remote_get('https://digiexplorer.info/api/blocks/tip/height');
+        if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
+            $tipHeight = (int) $tipResponse['body'];
+        }
+
         $transactions = array();
         foreach ($rawTransactions as $rawTransaction) {
+            $confirmations = 0;
+            $time = time();
+
+            if (!empty($rawTransaction->status->confirmed) && $tipHeight > 0) {
+                $confirmations = $tipHeight - (int) $rawTransaction->status->block_height + 1;
+                $time = $rawTransaction->status->block_time;
+            }
+
             foreach ($rawTransaction->vout as $vout) {
-                if ($vout->scriptPubKey->addresses[0] === $address) {
-                    $transactions[] = new NMM_Transaction($vout->value * 100000000,
-                        $rawTransaction->confirmations,
-                        $rawTransaction->time,
+                if (isset($vout->scriptpubkey_address) && $vout->scriptpubkey_address === $address) {
+                    $transactions[] = new NMM_Transaction($vout->value,
+                        $confirmations,
+                        $time,
                         $rawTransaction->txid);
                 }
             }
-
-
         }
 
         $result = array (
@@ -1351,6 +1469,10 @@ class NMM_Blockchain {
 		}
 
 		$rawTransactionIds = $body->last_txs;
+		if (is_array($rawTransactionIds)) {
+			// each entry costs one HTTP request; only inspect the most recent ones
+			$rawTransactionIds = array_slice($rawTransactionIds, -25);
+		}
 		if (!is_array($rawTransactionIds)) {
 			$result = array(
 				'result' => 'error',
@@ -1379,10 +1501,19 @@ class NMM_Blockchain {
 				$vouts = $rawTransaction->vout;
 
 				foreach ($vouts as $vout) {
-					if ($vout->scriptPubKey->addresses[0] === $address) {
+					// newer nodes emit scriptPubKey.address (singular); older ones an addresses array
+					$voutAddresses = array();
+					if (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) {
+						$voutAddresses = $vout->scriptPubKey->addresses;
+					}
+					elseif (isset($vout->scriptPubKey->address)) {
+						$voutAddresses = array($vout->scriptPubKey->address);
+					}
+
+					if (in_array($address, $voutAddresses, true)) {
 						$transactions[] = new NMM_Transaction($vout->value * 100000000,
-															  $rawTransaction->confirmations,
-															  $rawTransaction->time,
+															  isset($rawTransaction->confirmations) ? $rawTransaction->confirmations : 0,
+															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
 															  $rawTransaction->txid);
 					}
 				}
@@ -1716,8 +1847,9 @@ class NMM_Blockchain {
 	}
 
 	public static function get_xtz_address_transactions($address) {
-		
-		$request = 'https://api6.tzscan.io/v3/balance_updates/' . $address;
+
+		// TzKT: applied incoming transactions; amount is in mutez (1e-6 XTZ)
+		$request = 'https://api.tzkt.io/v1/operations/transactions?target=' . rawurlencode($address) . '&status=applied&limit=50&sort.desc=id';
 
 		$response = wp_remote_get($request);
 
@@ -1732,9 +1864,8 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$rawTransactions = json_decode($response['body']);
 
-		$rawTransactions = $body;
 		if (!is_array($rawTransactions)) {
 			$result = array(
 				'result' => 'error',
@@ -1746,13 +1877,14 @@ class NMM_Blockchain {
 		$transactions = array();
 
 		foreach ($rawTransactions as $rawTransaction) {
-			if ($rawTransaction->account === $address && $rawTransaction->diff > 0) {
-				
-				$transactions[] = new NMM_Transaction($rawTransaction->diff,
-												  10000, 
-												  strtotime($rawTransaction->date->date),
-												  strtotime($rawTransaction->date->date));
-			}			
+			if (!isset($rawTransaction->amount, $rawTransaction->hash) || $rawTransaction->amount <= 0) {
+				continue;
+			}
+
+			$transactions[] = new NMM_Transaction($rawTransaction->amount,
+											  10000,
+											  strtotime($rawTransaction->timestamp),
+											  $rawTransaction->hash);
 		}
 
 		$result = array (
@@ -1764,8 +1896,9 @@ class NMM_Blockchain {
 	}
 
 	public static function get_zec_address_transactions($address) {
-		
-		$request = 'https://chain.so/api/v2/get_tx_received/ZEC/' . $address;
+
+		// Blockchair outputs filtered by recipient; values are in zatoshi (1e-8 ZEC)
+		$request = 'https://api.blockchair.com/zcash/outputs?q=recipient(' . rawurlencode($address) . ')&limit=50&s=block_id(desc)';
 
 		$response = wp_remote_get($request);
 
@@ -1782,8 +1915,7 @@ class NMM_Blockchain {
 
 		$body = json_decode($response['body']);
 
-		$rawTransactions = $body->data->txs;
-		if (!is_array($rawTransactions)) {
+		if (!isset($body->data) || !is_array($body->data)) {
 			$result = array(
 				'result' => 'error',
 				'message' => 'No transactions found',
@@ -1791,22 +1923,27 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// ZEC requires real confirmation counts; blockchair context carries the tip
+		$tipHeight = isset($body->context->state) ? (int) $body->context->state : 0;
+
 		$transactions = array();
-		foreach ($rawTransactions as $rawTransaction) {			
-				
-			$transactions[] = new NMM_Transaction($rawTransaction->value * 100000000,
-												  $rawTransaction->confirmations,
-												  $rawTransaction->time,
-												  $rawTransaction->txid);
-			
+		foreach ($body->data as $output) {
+			$confirmations = 0;
+			if ($tipHeight > 0 && isset($output->block_id) && $output->block_id > 0) {
+				$confirmations = $tipHeight - (int) $output->block_id + 1;
+			}
+
+			$transactions[] = new NMM_Transaction($output->value,
+												  $confirmations,
+												  strtotime($output->time),
+												  $output->transaction_hash);
 		}
 
-		$result = array (
+		return array(
 			'result' => 'success',
 			'transactions' => $transactions,
 		);
-
-		return $result;
 	}
 
 	public static function get_erc20_address_transactions($cryptoId, $address) {
