@@ -107,7 +107,14 @@ if ($run('BTX')) { sleep(10); /* chainz etiquette */ check('BTX hd chainz', NMM_
 // --- exchange rates ---
 if ($run('RATES')) {
 	check_price('CoinGecko BTC/USD', function() { return NMM_Exchange::get_coingecko_price('BTC', 60); });
-	check_price('Binance BTC/USDT', function() { return NMM_Exchange::get_binance_price('BTC', 60); });
+	// Binance geo-blocks US IPs (HTTP 451) - GitHub-hosted runners live there.
+	// Skip when blocked; still fail on real outages.
+	$binanceProbe = wp_remote_get('https://api.binance.com/api/v3/ping');
+	if (!is_wp_error($binanceProbe) && (int) $binanceProbe['response']['code'] === 451) {
+		printf("%-22s %-5s %s\n", 'Binance BTC/USDT', 'skip', 'geo-blocked from this runner (451)');
+	} else {
+		check_price('Binance BTC/USDT', function() { return NMM_Exchange::get_binance_price('BTC', 60); });
+	}
 	check_price('EUR->USD frankfurter', function() { return NMM_Exchange::get_order_total_in_usd(100, 'EUR'); });
 	check_price('AUD->USD frankfurter', function() { return NMM_Exchange::get_order_total_in_usd(100, 'AUD'); });
 }
