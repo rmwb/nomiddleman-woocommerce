@@ -2,3 +2,6 @@ vendor/
 composer.json
 composer.lock
 node_modules/
+
+# runtime-generated payment QR codes - never commit
+assets/img/tmp*_qrcode.png
