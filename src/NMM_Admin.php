@@ -34,6 +34,9 @@ class NMM_Admin {
         add_action('admin_enqueue_scripts', function() {
             wp_enqueue_style('nmm-admin-styles', NMM_PLUGIN_DIR . '/assets/css/nmm-admin-settings.css', array(), NMM_VERSION);
             wp_enqueue_script('nmm-admin-scripts', NMM_PLUGIN_DIR . '/assets/js/nmm-admin.js', array('jquery'), NMM_VERSION, true);
+            wp_localize_script('nmm-admin-scripts', 'nmmAdmin', array(
+                'mpkNonce' => wp_create_nonce('nmm_first_mpk_address'),
+            ));
         });
     }
 

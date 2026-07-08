@@ -39,43 +39,6 @@ class NMM_Util {
 		return false;
 	}
 	
-	public static function serialize_buffer($buffer) {
-		return self::safe_string_escape(serialize($buffer));
-	}
-
-	// credit: http://www.php.net/manual/en/function.mysql-real-escape-string.php#100854
-	private static function safe_string_escape($str)
-	{
-	   $len=strlen($str);
-	   $escapeCount=0;
-	   $targetString='';
-	   for ($offset=0; $offset<$len; $offset++)
-	   {
-	     switch($c=$str[$offset])
-	     {
-	         case "'":
-	         // Escapes this quote only if its not preceded by an unescaped backslash
-	                 if($escapeCount % 2 == 0) $targetString.="\\";
-	                 $escapeCount=0;
-	                 $targetString.=$c;
-	                 break;
-	         case '"':
-	         // Escapes this quote only if its not preceded by an unescaped backslash
-	                 if($escapeCount % 2 == 0) $targetString.="\\";
-	                 $escapeCount=0;
-	                 $targetString.=$c;
-	                 break;
-	         case '\\':
-	                 $escapeCount++;
-	                 $targetString.=$c;
-	                 break;
-	         default:
-	                 $escapeCount=0;
-	                 $targetString.=$c;
-	     }
-	   }
-	   return $targetString;
-	}
 }
 
 ?>

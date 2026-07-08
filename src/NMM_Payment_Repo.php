@@ -1,10 +1,10 @@
 <?php
 
 class NMM_Payment_Repo {
-	private $tableName;	
+	private $tableName;
 
 	public function __construct() {
-		global $wpdb;		
+		global $wpdb;
 
 		$this->tableName = $wpdb->prefix . NMM_PAYMENT_TABLE;
 	}
@@ -12,12 +12,13 @@ class NMM_Payment_Repo {
 	public function insert($address, $cryptocurrency, $orderId, $paymentAmount, $status, $hdAddress = '0') {
 		NMM_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status . ' with order amount of: ' . $paymentAmount);
 		global $wpdb;
-		$currentTime = time();
-		$query = "INSERT INTO `$this->tableName`
-					(`address`,  `cryptocurrency`,  `order_id`, `order_amount`, `status`, `ordered_at`, `hd_address`) VALUES
-					('$address', '$cryptocurrency', '$orderId', '$paymentAmount', '$status', '$currentTime', '$hdAddress')";
 
-		$wpdb->query($query);
+		$wpdb->query($wpdb->prepare(
+			"INSERT INTO `$this->tableName`
+				(`address`, `cryptocurrency`, `order_id`, `order_amount`, `status`, `ordered_at`, `hd_address`) VALUES
+				(%s, %s, %d, %s, %s, %d, %s)",
+			$address, $cryptocurrency, $orderId, $paymentAmount, $status, time(), $hdAddress
+		));
 	}
 
 	public function get_unpaid() {
@@ -41,7 +42,7 @@ class NMM_Payment_Repo {
 		global $wpdb;
 
 		$query = "SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'";
-		
+
 		$results = $wpdb->get_results($query, ARRAY_A);
 
 		return $results;
@@ -50,55 +51,57 @@ class NMM_Payment_Repo {
 	public function get_unpaid_for_address($cryptoId, $address) {
 		global $wpdb;
 
-		$query = "SELECT `cryptocurrency`,
-						 `order_id`,
-						 `order_amount`,
-						 `status`,
-						 `ordered_at`
-				  FROM `$this->tableName`
-				  WHERE `status` = 'unpaid'
-				  AND `address` = '$address'
-				  AND `cryptocurrency` = '$cryptoId'";
-
-		$results = $wpdb->get_results($query, ARRAY_A);
+		$results = $wpdb->get_results($wpdb->prepare(
+			"SELECT `cryptocurrency`,
+					`order_id`,
+					`order_amount`,
+					`status`,
+					`ordered_at`
+			 FROM `$this->tableName`
+			 WHERE `status` = 'unpaid'
+			 AND `address` = %s
+			 AND `cryptocurrency` = %s",
+			$address, $cryptoId
+		), ARRAY_A);
 
 		return $results;
 	}
 
 	public function set_status($orderId, $orderAmount, $status) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'updating ' . $orderId . ' to ' . $status);		
-		
-		$query = "UPDATE `$this->tableName`
-				  SET `status` = '$status'
-				  WHERE `order_amount` = '$orderAmount'
-				  AND `order_id` = '$orderId'";				  
-		
-		$wpdb->query($query);
+		NMM_Util::log(__FILE__, __LINE__, 'updating ' . $orderId . ' to ' . $status);
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = %s
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d",
+			$status, $orderAmount, $orderId
+		));
 	}
 
 	public function set_hash($orderId, $orderAmount, $hash) {
 		global $wpdb;
-		
-		
-		$query = "UPDATE `$this->tableName`
-				  SET `tx_hash` = '$hash'
-				  WHERE `order_amount` = '$orderAmount'
-				  AND `order_id` = '$orderId'";				  
-		
-		$wpdb->query($query);
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `tx_hash` = %s
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d",
+			$hash, $orderAmount, $orderId
+		));
 	}
 
 	public function set_ordered_at($orderId, $orderAmount, $orderedAt) {
 		global $wpdb;
-		
-		
-		$query = "UPDATE `$this->tableName`
-				  SET `ordered_at` = '$orderedAt'
-				  WHERE `order_amount` = '$orderAmount'
-				  AND `order_id` = '$orderId'";				  
-		
-		$wpdb->query($query);
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `ordered_at` = %d
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d",
+			$orderedAt, $orderAmount, $orderId
+		));
 	}
 }
 

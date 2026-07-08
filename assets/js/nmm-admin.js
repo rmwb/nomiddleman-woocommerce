@@ -82,6 +82,7 @@
 			url: window.ajaxurl || 'admin-ajax.php',
 			data: {
 				action: 'firstmpkaddress',
+				_ajax_nonce: (window.nmmAdmin || {}).mpkNonce || '',
 				mpk: mpk,
 				cryptoId: cryptoId,
 				hdMode: '0'

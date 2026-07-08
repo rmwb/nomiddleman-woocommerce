@@ -212,7 +212,13 @@ function NMM_display_flash_notices() {
 }
 
 function NMM_first_mpk_address_ajax() {
-	
+
+		check_ajax_referer('nmm_first_mpk_address');
+
+		if (!current_user_can('manage_options')) {
+			wp_die('', '', 403);
+		}
+
 		if (!isset($_POST) || !is_array($_POST) || !array_key_exists('mpk', $_POST) || !array_key_exists('cryptoId', $_POST)) {
 			return;
 		}

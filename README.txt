@@ -105,6 +105,7 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 == Changelog ==
 
 = 2.6.0 =
+* Security hardening: all plugin database queries now use $wpdb->prepare(); the MPK preview AJAX endpoint requires a nonce and admin capability; stored address buffers are unserialized with object instantiation disabled; customer-facing output (payment message, addresses, QR URLs) is escaped
 * EOS payment verification restored: dead EOSPark API (and its hardcoded key) replaced with the public Hyperion history API, with Greymass as fallback
 * Restored payment verification for 6 more coins whose explorers had shut down: ADA (Koios), BSV (WhatsOnChain), DGB (digiexplorer.info), XTZ (TzKT), ZEC (Blockchair), BLK (explorer.blackcoin.nl)
 * BTX Privacy Mode balance checks restored via chainz.cryptoid.info; BTX Autopay remains unavailable (no free transaction API)

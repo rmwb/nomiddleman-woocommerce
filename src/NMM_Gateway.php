@@ -310,10 +310,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
         <h2>Additional Details</h2>
         <p>QR Code Payment: </p>
         <div style="margin-bottom:12px;">
-            <img  src=<?php echo $qrCode; ?> />
+            <img src="<?php echo esc_url($qrCode); ?>" />
         </div>
         <p>
-            Address: <?php echo $orderWalletAddress ?>
+            Address: <?php echo esc_html($orderWalletAddress) ?>
         </p>
         <p>
             Currency: <?php echo '<img src="' . $crypto->get_logo_file_path() . '" alt="" />' . $crypto->get_name(); ?>
@@ -376,28 +376,29 @@ class NMM_Gateway extends WC_Payment_Gateway {
         
         $customerMessage = apply_filters('nmm_customer_message', $nmmSettings->get_customer_payment_message($crypto), $crypto, $orderId, $formattedPrice, $orderWalletAddress);
 
-        $qrCode = $this->get_qr_code($crypto, $orderWalletAddress, $cryptoTotal, $orderId);       
-        
-        echo $customerMessage;
+        $qrCode = $this->get_qr_code($crypto, $orderWalletAddress, $cryptoTotal, $orderId);
+
+        // admin-entered HTML; allow post-safe markup but never scripts
+        echo wp_kses_post($customerMessage);
         ?>
         
         <h2>Cryptocurrency payment details</h2>
         <ul class="woocommerce-order-overview woocommerce-thankyou-order-details order_details">
             <li class="woocommerce-order-overview__qr-code">
                 <p style="word-wrap: break-word;">QR Code payment:</p>
-                <div class="qr-code-container">                
-                    <img style="margin-top:3px;" src=<?php echo $qrCode; ?> />
-                </div>                
-            </li>            
+                <div class="qr-code-container">
+                    <img style="margin-top:3px;" src="<?php echo esc_url($qrCode); ?>" />
+                </div>
+            </li>
             <li>
-                <p style="word-wrap: break-word;">Wallet Address: 
+                <p style="word-wrap: break-word;">Wallet Address:
                     <strong>
                         <span class="woocommerce-Price-amount amount">
-                            <?php echo '<span class="all-copy">' . $orderWalletAddress . '</span>' ?>
+                            <?php echo '<span class="all-copy">' . esc_html($orderWalletAddress) . '</span>' ?>
                         </span>
                     </strong>
                 </p>
-            </li>            
+            </li>
             <li>
                 <p>Currency: 
                     <strong>
