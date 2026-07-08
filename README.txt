@@ -105,6 +105,7 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 == Changelog ==
 
 = 2.6.0 =
+* EOS payment verification restored: dead EOSPark API (and its hardcoded key) replaced with the public Hyperion history API, with Greymass as fallback
 * Removed the bundled Redux Framework (outdated, known CVEs, PHP 8 first-load errors)
 * Settings page rebuilt with native WordPress admin UI at the same location; existing settings are preserved automatically (same option storage, no migration needed)
 * Privacy Mode sample address generation, wallet address validation, and all per-crypto options carried over

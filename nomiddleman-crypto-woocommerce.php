@@ -320,7 +320,9 @@ function NMM_Register_Extensions() {
         @include_once(plugin_basename('src/extensions/' . $extension . '/NMM_' . ucfirst($extension) . '.php'));
     }
 
-    update_option(NMM_EXTENSION_KEY, $extensionsToLoad);
+    if (get_option(NMM_EXTENSION_KEY) !== $extensionsToLoad) {
+        update_option(NMM_EXTENSION_KEY, $extensionsToLoad);
+    }
 }
 
 add_filter('woocommerce_payment_gateways', 'NMM_filter_gateways');

@@ -963,50 +963,118 @@ class NMM_Blockchain {
     }
 
 	public static function get_eos_address_transactions($address) {
-		
-		$request = 'https://api.eospark.com/api?module=account&action=get_account_related_trx_info&account=' . $address . '&apikey=a9564ebc3289b7a14551baf8ad5ec60a';
+
+		// Primary: public Hyperion history API (keyless)
+		$request = 'https://eos.hyperion.eosrio.io/v2/history/get_actions?account=' . rawurlencode($address) . '&filter=eosio.token%3Atransfer&limit=50&sort=desc';
 
 		$response = wp_remote_get($request);
 
-		if (is_wp_error($response) || $response['response']['code'] !== 200 || json_decode($response['body'])->errno == 429) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+		if (!is_wp_error($response) && $response['response']['code'] === 200) {
+			$body = json_decode($response['body']);
 
-			$result = array(
+			if (isset($body->actions) && is_array($body->actions)) {
+				$transactions = array();
+
+				foreach ($body->actions as $action) {
+					if (!isset($action->act->data->to, $action->act->data->quantity)) {
+						continue;
+					}
+
+					$data = $action->act->data;
+
+					if ($data->to !== $address) {
+						continue;
+					}
+
+					if (isset($data->symbol) && $data->symbol !== 'EOS') {
+						continue;
+					}
+
+					// quantity is "1.2345 EOS"; EOS has 4 decimal places
+					$transactions[] = new NMM_Transaction((float) $data->quantity * 10000,
+														  10000,
+														  strtotime($action->timestamp),
+														  $action->trx_id);
+				}
+
+				return array(
+					'result' => 'success',
+					'transactions' => $transactions,
+				);
+			}
+		}
+
+		NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+
+		// Fallback: Greymass v1 history (deprecated but maintained)
+		$request2 = 'https://eos.greymass.com/v1/history/get_actions';
+
+		$response2 = wp_remote_post($request2, array(
+			'headers' => array('Content-Type' => 'application/json'),
+			'body' => json_encode(array(
+				'account_name' => $address,
+				'pos' => -1,
+				'offset' => -100,
+			)),
+		));
+
+		if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request2 . ' ): ' . print_r($response2, true));
+
+			return array(
 				'result' => 'error',
 				'total_received' => '',
 			);
-
-			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body2 = json_decode($response2['body']);
 
-		$rawTransactions = $body->data->trace_list;
-		if (!is_array($rawTransactions)) {
-			$result = array(
+		if (!isset($body2->actions) || !is_array($body2->actions)) {
+			return array(
 				'result' => 'error',
 				'message' => 'No transactions found',
 			);
-
-			return $result;
 		}
+
 		$transactions = array();
-		foreach ($rawTransactions as $rawTransaction) {
-			if ($rawTransaction->receiver === $address) {
-				$transactions[] = new NMM_Transaction($rawTransaction->quantity * 10000,
-													  10000,
-													  strtotime($rawTransaction->timestamp),
-													  $rawTransaction->trx_id);
+		$seenTrxIds = array();
+
+		foreach ($body2->actions as $action) {
+			if (!isset($action->action_trace->act)) {
+				continue;
 			}
-			
+
+			$act = $action->action_trace->act;
+
+			if ($act->account !== 'eosio.token' || $act->name !== 'transfer') {
+				continue;
+			}
+
+			if (!isset($act->data->to, $act->data->quantity) || $act->data->to !== $address) {
+				continue;
+			}
+
+			if (strpos($act->data->quantity, ' EOS') === false) {
+				continue;
+			}
+
+			// the same transfer can appear once per notified account; dedupe by trx id
+			$trxId = $action->action_trace->trx_id;
+			if (isset($seenTrxIds[$trxId])) {
+				continue;
+			}
+			$seenTrxIds[$trxId] = true;
+
+			$transactions[] = new NMM_Transaction((float) $act->data->quantity * 10000,
+												  10000,
+												  strtotime($action->block_time),
+												  $trxId);
 		}
 
-		$result = array (
+		return array(
 			'result' => 'success',
 			'transactions' => $transactions,
 		);
-
-		return $result;
 	}
 
 	public static function get_etc_address_transactions($address) {
