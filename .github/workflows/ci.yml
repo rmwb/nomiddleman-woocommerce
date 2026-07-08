@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: php -l (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.2', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: bcmath, gmp, gd
+          coverage: none
+      - name: Lint all PHP files
+        run: |
+          set -e
+          find . -name '*.php' -not -path './.git/*' -print0 \
+            | xargs -0 -n1 -P4 php -l > /dev/null
+          echo "all files lint clean"
+
+  compat:
+    name: PHPCompatibility (7.4+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Install PHPCompatibility
+        run: |
+          composer init --quiet --name nomiddleman/compat-scan
+          composer config minimum-stability dev
+          composer config prefer-stable true
+          composer config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer require --quiet --dev squizlabs/php_codesniffer:^4 phpcompatibility/php-compatibility:10.x-dev
+      - name: Scan plugin code
+        run: vendor/bin/phpcs -p
+
+  hd-derivation:
+    name: HD address derivation (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, gmp
+          coverage: none
+      - name: Derive against known-good BIP32 addresses (GMP + BCMATH)
+        run: php tests/test-hd-derivation.php

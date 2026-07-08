@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<ruleset name="Nomiddleman PHP Compatibility">
+    <description>PHP 7.4+ compatibility scan for plugin code.</description>
+
+    <file>nomiddleman-crypto-woocommerce.php</file>
+    <file>src</file>
+
+    <!-- bundled third-party code is covered by the php -l matrix instead -->
+    <exclude-pattern>src/vendor/*</exclude-pattern>
+
+    <arg name="extensions" value="php"/>
+    <config name="testVersion" value="7.4-"/>
+
+    <rule ref="PHPCompatibility">
+        <!-- ERC-20 contract addresses are hex-shaped strings, never numerics -->
+        <exclude name="PHPCompatibility.Numbers.RemovedHexadecimalNumericStrings"/>
+    </rule>
+</ruleset>

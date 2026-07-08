@@ -1,0 +1,21 @@
+name: Explorer smoke (live APIs)
+
+# Probes every third-party explorer and rate API the plugin depends on.
+# These die from time to time - this catches it before merchants do.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, gmp, curl
+          coverage: none
+      - name: Probe all explorers and exchange-rate APIs
+        run: php tests/smoke-explorers.php

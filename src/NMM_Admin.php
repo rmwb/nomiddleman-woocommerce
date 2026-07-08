@@ -190,10 +190,35 @@ class NMM_Admin {
     private static function render_crypto_panel($crypto, $values) {
         $cid = $crypto->get_id();
         $mode = self::value($values, $cid . '_mode', '');
+
+        $autopayAvailable = NMM_Cryptocurrencies::autopay_verifiable($cid);
+        $hdAvailable = NMM_Cryptocurrencies::hd_verifiable($cid);
+
+        $storedModeUnavailable = ($mode === '1' && !$autopayAvailable) || ($mode === '2' && !$hdAvailable);
         ?>
         <div class="nmm-tab-panel nmm-crypto-panel" id="nmm-tab-crypto_<?php echo esc_attr($cid); ?>" data-crypto="<?php echo esc_attr($cid); ?>">
             <h2><img class="nmm-tab-icon" src="<?php echo esc_url($crypto->get_logo_file_path()); ?>" alt="" />
                 <?php echo esc_html($crypto->get_name() . ' (' . $cid . ')'); ?></h2>
+
+            <?php if ($storedModeUnavailable) : ?>
+                <div class="notice notice-error inline nmm-inline-notice">
+                    <p><strong>The mode previously configured for <?php echo esc_html($crypto->get_name()); ?> can no longer verify payments</strong> &mdash;
+                    every public API for it has shut down. Orders in this mode will never confirm automatically.
+                    Please switch to Classic Mode (manual confirmation) below and save.</p>
+                </div>
+            <?php endif; ?>
+
+            <?php if (!$autopayAvailable && $crypto->has_autopay() || !$hdAvailable && $crypto->has_hd()) : ?>
+                <p class="description">
+                    <?php if (!$autopayAvailable && $crypto->has_autopay()) : ?>
+                        Autopay Mode is unavailable for <?php echo esc_html($cid); ?>: no working transaction API exists anymore.
+                    <?php endif; ?>
+                    <?php if (!$hdAvailable && $crypto->has_hd()) : ?>
+                        Privacy Mode is unavailable for <?php echo esc_html($cid); ?>: no working balance API exists anymore.
+                    <?php endif; ?>
+                </p>
+            <?php endif; ?>
+
             <table class="form-table" role="presentation">
                 <tr>
                     <th scope="row">Markup/Markdown %</th>
@@ -209,17 +234,17 @@ class NMM_Admin {
                     <td>
                         <fieldset class="nmm-mode-select">
                             <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="0" <?php checked($mode, '0'); ?> /> Classic Mode</label><br />
-                            <?php if ($crypto->has_autopay()) : ?>
+                            <?php if ($autopayAvailable) : ?>
                                 <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="1" <?php checked($mode, '1'); ?> /> Autopay Mode <strong>(BETA)</strong></label><br />
                             <?php endif; ?>
-                            <?php if ($crypto->has_hd()) : ?>
+                            <?php if ($hdAvailable) : ?>
                                 <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="2" <?php checked($mode, '2'); ?> /> Privacy Mode</label>
                             <?php endif; ?>
                         </fieldset>
                     </td>
                 </tr>
 
-                <?php if ($crypto->has_autopay()) : ?>
+                <?php if ($autopayAvailable) : ?>
                 <tr class="nmm-requires-mode" data-modes="1">
                     <th scope="row">Autopay Disclaimer</th>
                     <td>
@@ -258,7 +283,7 @@ class NMM_Admin {
                     </td>
                 </tr>
 
-                <?php if ($crypto->has_hd()) : ?>
+                <?php if ($hdAvailable) : ?>
                 <tr class="nmm-requires-mode" data-modes="2">
                     <th scope="row">Privacy Mode MPK</th>
                     <td>
@@ -297,7 +322,7 @@ class NMM_Admin {
                     'Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)');
                 endif; ?>
 
-                <?php if ($crypto->has_autopay()) :
+                <?php if ($autopayAvailable) :
                 self::render_number_row($cid . '_autopayment_percent_to_process', 'Auto-Confirm Percentage',
                     self::value($values, $cid . '_autopayment_percent_to_process', '0.9999'),
                     '0.9850', '1.0000', '0.0001', '1',

@@ -3,6 +3,35 @@
 // Crypto Helper
 class NMM_Cryptocurrencies {
 
+	// Coins whose Autopay transaction-verification API no longer exists anywhere
+	// (chain sunset or every public explorer gone). Classic Mode still works.
+	private static $autopayUnverifiable = array('LSK', 'XEM', 'ONION', 'XMY', 'BTX');
+
+	// Coins whose Privacy Mode (HD) balance API no longer exists
+	private static $hdUnverifiable = array('XMY');
+
+	// The coin supports Autopay AND a working verification API exists for it
+	public static function autopay_verifiable($cryptoId) {
+		$cryptos = self::get();
+
+		if (!array_key_exists($cryptoId, $cryptos) || !$cryptos[$cryptoId]->has_autopay()) {
+			return false;
+		}
+
+		return !in_array($cryptoId, self::$autopayUnverifiable, true);
+	}
+
+	// The coin supports Privacy Mode AND a working balance API exists for it
+	public static function hd_verifiable($cryptoId) {
+		$cryptos = self::get();
+
+		if (!array_key_exists($cryptoId, $cryptos) || !$cryptos[$cryptoId]->has_hd()) {
+			return false;
+		}
+
+		return !in_array($cryptoId, self::$hdUnverifiable, true);
+	}
+
 	public static function get() {
         // id, name, round_precision, icon_filename, refresh_time, symbol, has_hd, has_autopay, needs_confirmations, erc20contract
 		$cryptoArray = array(

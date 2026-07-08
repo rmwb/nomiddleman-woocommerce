@@ -105,6 +105,7 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 == Changelog ==
 
 = 2.6.0 =
+* Settings page no longer offers Autopay/Privacy Mode for coins whose verification APIs no longer exist anywhere (LSK, XEM, ONION, XMY autopay; XMY privacy; BTX autopay), and warns loudly if a previously saved mode can no longer verify payments
 * Payment checks now run through Action Scheduler (bundled with WooCommerce) every 60 seconds instead of a 30-second WP-Cron loop, with automatic migration and WP-Cron fallback
 * Explorer API calls now use per-host exponential backoff when rate-limited or failing, and respect per-host request spacing (chainz)
 * New optional BlockCypher API token setting raises LTC/DOGE verification rate limits for busier stores
