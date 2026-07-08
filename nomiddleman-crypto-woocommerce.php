@@ -16,12 +16,25 @@ License URI: http://www.gnu.org/licenses/gpl-3.0.html
 
 add_action('plugins_loaded', 'NMM_init_gateways');
 add_action('before_woocommerce_init', 'NMM_declare_wc_feature_compatibility');
+add_action('woocommerce_blocks_loaded', 'NMM_register_blocks_support');
 
 function NMM_declare_wc_feature_compatibility() {
     if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
         \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true);
         \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('cart_checkout_blocks', __FILE__, true);
     }
+}
+
+function NMM_register_blocks_support() {
+    if (!class_exists('Automattic\WooCommerce\Blocks\Payments\Integrations\AbstractPaymentMethodType')) {
+        return;
+    }
+
+    require_once(plugin_basename('src/NMM_Blocks_Support.php'));
+
+    add_action('woocommerce_blocks_payment_method_type_registration', function($payment_method_registry) {
+        $payment_method_registry->register(new NMM_Blocks_Support());
+    });
 }
 register_activation_hook(__FILE__, 'NMM_activate');
 register_deactivation_hook(__FILE__, 'NMM_deactivate');

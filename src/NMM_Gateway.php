@@ -109,6 +109,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
     public function validate_fields() {
         // if the currently selected gateway is this gateway we set transients related to conversions and if something goes wrong we prevent the customer from hitting the thank you page  by throwing the WooCommerce Error Notice.
         if (WC()->session->get('chosen_payment_method') === $this->id) {
+            if (empty($_POST['nmm_currency_id'])) {
+                wc_add_notice('Please choose a cryptocurrency.', 'error');
+                return;
+            }
             try {
                 $chosenCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
                 $crypto = $this->cryptos[$chosenCryptoId];
@@ -127,7 +131,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
     // This is called when the user clicks Place Order, after validate_fields
     public function process_payment($order_id) {
-        $order = new WC_Order($order_id);
+        $order = wc_get_order($order_id);
+
+        // Classic checkout posts nmm_currency_id directly; the Blocks checkout
+        // delivers it via the Store API's paymentMethodData, which WooCommerce
+        // also surfaces through $_POST for legacy gateways.
+        if (empty($_POST['nmm_currency_id']) || !array_key_exists(sanitize_text_field($_POST['nmm_currency_id']), $this->cryptos)) {
+            wc_add_notice('Please choose a cryptocurrency.', 'error');
+            return array('result' => 'failure');
+        }
 
         $selectedCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
         WC()->session->set('chosen_crypto_id', $selectedCryptoId);
