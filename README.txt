@@ -1,5 +1,5 @@
 ﻿=== Nomiddleman Bitcoin and Crypto Payments for WooCommerce ===
-Contributors: nomiddleman
+Contributors: nomiddleman, rmwb, claude
 Tags: bitcoin, cryptocurrency, woocommerce, bitcoin payment, crypto, btc, payments, ethereum, ether, ethereum token, token, gas, e-commerce, ecommerce, monero, dogecoin, pay with crypto, pay with bitcoin, bitcoin payments, bitcoin payment gateway, crypto woo, accept, dash, litecoin, cash, gateway, payment gateway, woocommerce gateway, wordpress, electrum, mpk, master public key, hd wallet, address, zcash, bitcore, bitcoin cash, bitcoin gold, blackcoin, dash, deeponion, ethereum classic, ripple, vericoin, eos, bitcoin sv, vechain, tron, stellar, rep, bch, btg, blk, dash, onion, doge, eth, etc, ltc, xmr, xrp, vrc, zec, eos, bsv, vet, trx, xlm, no fees, no middleman, freedom, nomiddleman, no fees, free, for free, free crypto plugin, plugin, plug-in, no middleman, binance coin, bnb, iota, miota, maker, mkr, nem, xem, waves, ontology, ont, omisego, omg, holo, hot, chainlink, link, decred, dcr, basic attention token, bat, 0x, zrx, lisk, lsk, bytecoin, bcn, bitcoin diamond, bcd, digibyte, dgb, gemini dollar, gusd, potcoin, pot, risk, high-risk, coin, mineable, erc20 token, erc20, KYC, No KYC, No registration, No login, processing, processor, groestlcoin, bitcore
 Requires at least: 5.0
 Tested up to: 7.0
