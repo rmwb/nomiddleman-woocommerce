@@ -53,6 +53,9 @@ class NMM_Exchange {
         'POT' => 'potcoin',
         'ONT' => 'ontology',
         'MIOTA' => 'iota',
+        'USDT' => 'tether',
+        'USDTTRX' => 'tether',
+        'SOL' => 'solana',
     );
 
 	// this function converts other WooCommerce currencies to USD because the crypto exchanges only have prices in USD

@@ -234,6 +234,15 @@ class NMM_Payment {
         if ($cryptoId === 'USDC') {
 			$result = NMM_Blockchain::get_erc20_address_transactions('USDC', $address);
 		}
+		if ($cryptoId === 'USDT') {
+			$result = NMM_Blockchain::get_erc20_address_transactions('USDT', $address);
+		}
+		if ($cryptoId === 'USDTTRX') {
+			$result = NMM_Blockchain::get_trc20_usdt_address_transactions($address);
+		}
+		if ($cryptoId === 'SOL') {
+			$result = NMM_Blockchain::get_sol_address_transactions($address);
+		}
 		
 		if ($result['result'] === 'error') {			
 			NMM_Util::log(__FILE__, __LINE__, 'BAD API CALL');

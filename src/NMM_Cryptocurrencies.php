@@ -54,6 +54,8 @@ class NMM_Cryptocurrencies {
             'XTZ' => new NMM_Cryptocurrency('XTZ', 'Tezos', 6, 'tezos_logo_small.png', 60, '', false, true, false, ''),
             'TRX' => new NMM_Cryptocurrency('TRX', 'Tron', 6, 'tron_logo_small.png', 60, '', false, true, false, ''),
             'XLM' => new NMM_Cryptocurrency('XLM', 'Stellar', 7, 'stellar_logo_small.png', 60, '', false, true, false, ''),
+            'USDTTRX' => new NMM_Cryptocurrency('USDTTRX', 'Tether (TRC-20)', 6, 'tether_logo_small.png', 60, '', false, true, false, ''),
+            'SOL' => new NMM_Cryptocurrency('SOL', 'Solana', 9, 'solana_logo_small.png', 60, '◎', false, true, false, ''),
             'BCH' => new NMM_Cryptocurrency('BCH', 'Bitcoin Cash', 8, 'bitcoincash_logo_small.png', 60, '', false, true, true, ''),
             'EOS' => new NMM_Cryptocurrency('EOS', 'EOS', 4, 'eos_logo_small.png', 60, '', false, true, false, ''),
             'BSV' => new NMM_Cryptocurrency('BSV', 'Bitcoin SV', 8, 'bitcoinsv_logo_small.png', 60, '', false, true, false, ''),            
@@ -78,6 +80,7 @@ class NMM_Cryptocurrencies {
             'MLN' => new NMM_Cryptocurrency('MLN', 'Melon', 18, 'melon_logo_small.png', 60, '', false, true, true, '0xbeb9ef514a379b997e0798fdcc901ee474b6d9a1'),
             'ZRX' => new NMM_Cryptocurrency('ZRX', '0x', 18, '0x_logo_small.png', 60, '', false, true, true, '0xe41d2489571d322189246dafa5ebde1f4699f498'),
             'USDC' => new NMM_Cryptocurrency('USDC', 'USDC', 6, 'usdc_logo_small.png', 60, '', false, true, true, '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'),
+            'USDT' => new NMM_Cryptocurrency('USDT', 'Tether', 6, 'tether_logo_small.png', 60, '', false, true, true, '0xdAC17F958D2ee523a2206206994597C13D831ec7'),
 
             // no support
             'XMR' => new NMM_Cryptocurrency('XMR', 'Monero', 12, 'monero_logo_small.png', 60, 'ɱ', false, false, true, ''),
@@ -261,7 +264,7 @@ class NMM_Cryptocurrencies {
         if ($cryptoId === 'VET') {
             return preg_match('/^0x[a-fA-F0-9]{40,42}/', $address);
         }
-        if ($cryptoId === 'TRX') {
+        if ($cryptoId === 'TRX' || $cryptoId === 'USDTTRX') {
             return preg_match('/^T[a-km-zA-HJ-NP-Z0-9]{26,42}/', $address);
         }
         if ($cryptoId === 'XLM') {
@@ -290,6 +293,12 @@ class NMM_Cryptocurrencies {
         }
         if ($cryptoId === 'BAT') {
             return preg_match('/^0x[a-fA-F0-9]{40,42}/', $address);
+        }
+        if ($cryptoId === 'USDT') {
+            return preg_match('/^0x[a-fA-F0-9]{40,42}/', $address);
+        }
+        if ($cryptoId === 'SOL') {
+            return preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,44}$/', $address);
         }
         if ($cryptoId === 'BCD') {
             return preg_match('/^1[0-9a-zA-Z]{31,35}/', $address);

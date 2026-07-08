@@ -96,6 +96,9 @@ if ($run('DGB')) check('DGB digiexplorer', NMM_Blockchain::get_dgb_address_trans
 if ($run('XTZ')) check('XTZ tzkt', NMM_Blockchain::get_xtz_address_transactions('tz3RDC3Jdn4j15J7bBHZd29EUee9gVB1CxD9'));
 if ($run('ZEC')) { sleep(2); check('ZEC blockchair', NMM_Blockchain::get_zec_address_transactions(harvest_zec_address())); }
 if ($run('BLK')) check('BLK iquidus', NMM_Blockchain::get_blk_address_transactions('tblk1pxfzy6gvcajtuqrn4ax9mjpv9kywalwe40nd84xyy7tc2sugjx8ms85w7t8'));
+if ($run('USDT')) check('USDT erc20 blockscout', NMM_Blockchain::get_erc20_address_transactions('USDT', '0x28C6c06298d514Db089934071355E5743bf21d60'));
+if ($run('USDTTRX')) check('USDTTRX tronscan', NMM_Blockchain::get_trc20_usdt_address_transactions('TV6MuMXfmLbBqPZvBHdwFsDnQeVfnmiuSi'));
+if ($run('SOL')) check('SOL mainnet rpc', NMM_Blockchain::get_sol_address_transactions('9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM'));
 
 // --- HD (privacy mode) balance checks ---
 if ($run('BTC')) check('BTC hd blockchain.info', NMM_Blockchain::get_blockchaininfo_total_received_for_btc_address('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', 2));

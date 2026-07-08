@@ -363,6 +363,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
     }
 
     private function get_qr_prefix($crypto) {
+        // ids whose derived name would make a broken URI scheme; SOL's
+        // 'solana:' prefix is the real Solana Pay scheme and needs no override
+        $overrides = array('USDTTRX' => 'tether');
+
+        if (array_key_exists($crypto->get_id(), $overrides)) {
+            return $overrides[$crypto->get_id()];
+        }
+
         return strtolower(str_replace(' ', '', $crypto->get_name()));
     }
 

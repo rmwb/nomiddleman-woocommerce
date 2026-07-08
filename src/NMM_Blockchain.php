@@ -2039,7 +2039,7 @@ class NMM_Blockchain {
 	}
 
 	public static function get_erc20_address_transactions($cryptoId, $address) {
-		$request = 'https://eth.blockscout.com/api?module=account&action=tokentx&address=' . $address . '&startblock=0&endblock=999999999&sort=asc';
+		$request = 'https://eth.blockscout.com/api?module=account&action=tokentx&address=' . $address . '&page=1&offset=100&sort=desc';
 
 		$response = self::api_get($request);
 
@@ -2085,6 +2085,146 @@ class NMM_Blockchain {
 		);
 
 		return $result;
+	}
+
+	public static function get_trc20_usdt_address_transactions($address) {
+
+		// official USDT contract on Tron; tronscan is keyless (already used for TRX)
+		$contract = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+
+		$request = 'https://apilist.tronscan.org/api/token_trc20/transfers?relatedAddress=' . rawurlencode($address) . '&contract_address=' . $contract . '&limit=50&start=0';
+
+		$response = self::api_get($request);
+
+		if (is_wp_error($response) || $response['response']['code'] !== 200) {
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+
+			return array(
+				'result' => 'error',
+				'total_received' => '',
+			);
+		}
+
+		$body = json_decode($response['body']);
+
+		if (!isset($body->token_transfers) || !is_array($body->token_transfers)) {
+			return array(
+				'result' => 'error',
+				'message' => 'No transactions found',
+			);
+		}
+
+		$transactions = array();
+
+		foreach ($body->token_transfers as $transfer) {
+			// relatedAddress returns both directions; keep confirmed incoming only
+			if (!isset($transfer->to_address, $transfer->quant) || $transfer->to_address !== $address) {
+				continue;
+			}
+
+			if (empty($transfer->confirmed) || (isset($transfer->finalResult) && $transfer->finalResult !== 'SUCCESS')) {
+				continue;
+			}
+
+			// quant is already in 1e-6 USDT units; Tron finality is fast, so
+			// confirmed transfers get the no-confirmation-tracking sentinel
+			$transactions[] = new NMM_Transaction($transfer->quant,
+												  10000,
+												  (int) ($transfer->block_ts / 1000),
+												  $transfer->transaction_id);
+		}
+
+		return array(
+			'result' => 'success',
+			'transactions' => $transactions,
+		);
+	}
+
+	public static function get_sol_address_transactions($address) {
+
+		// public mainnet RPC, keyless; only finalized transactions are listed
+		$rpc = 'https://api.mainnet-beta.solana.com';
+
+		$response = self::api_post($rpc, array(
+			'headers' => array('Content-Type' => 'application/json'),
+			'body' => json_encode(array(
+				'jsonrpc' => '2.0',
+				'id' => 1,
+				'method' => 'getSignaturesForAddress',
+				'params' => array($address, array('limit' => 12, 'commitment' => 'finalized')),
+			)),
+		));
+
+		if (is_wp_error($response) || $response['response']['code'] !== 200) {
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . print_r($response, true));
+
+			return array(
+				'result' => 'error',
+				'total_received' => '',
+			);
+		}
+
+		$body = json_decode($response['body']);
+
+		if (!isset($body->result) || !is_array($body->result)) {
+			return array(
+				'result' => 'error',
+				'message' => 'No transactions found',
+			);
+		}
+
+		$transactions = array();
+
+		foreach ($body->result as $entry) {
+			if (!isset($entry->signature) || $entry->err !== null) {
+				continue;
+			}
+
+			$txResponse = self::api_post($rpc, array(
+				'headers' => array('Content-Type' => 'application/json'),
+				'body' => json_encode(array(
+					'jsonrpc' => '2.0',
+					'id' => 1,
+					'method' => 'getTransaction',
+					'params' => array($entry->signature, array(
+						'encoding' => 'jsonParsed',
+						'maxSupportedTransactionVersion' => 0,
+						'commitment' => 'finalized',
+					)),
+				)),
+			));
+
+			if (is_wp_error($txResponse) || $txResponse['response']['code'] !== 200) {
+				continue;
+			}
+
+			$tx = json_decode($txResponse['body']);
+
+			if (!isset($tx->result->transaction->message->accountKeys) || !isset($tx->result->meta->preBalances)) {
+				continue;
+			}
+
+			// lamports received = balance delta of our address in this transaction
+			foreach ($tx->result->transaction->message->accountKeys as $index => $accountKey) {
+				if (isset($accountKey->pubkey) && $accountKey->pubkey === $address) {
+					$delta = $tx->result->meta->postBalances[$index] - $tx->result->meta->preBalances[$index];
+
+					if ($delta > 0) {
+						$transactions[] = new NMM_Transaction($delta,
+															  10000,
+															  isset($tx->result->blockTime) ? $tx->result->blockTime : time(),
+															  $entry->signature);
+					}
+
+					break;
+				}
+			}
+		}
+
+		return array(
+			'result' => 'success',
+			'transactions' => $transactions,
+		);
 	}
 
 	private static function get_user_agent_string() {
