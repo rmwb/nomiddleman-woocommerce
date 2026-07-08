@@ -1,11 +1,11 @@
 ﻿=== Nomiddleman Bitcoin and Crypto Payments for WooCommerce ===
 Contributors: nomiddleman
 Tags: bitcoin, cryptocurrency, woocommerce, bitcoin payment, crypto, btc, payments, ethereum, ether, ethereum token, token, gas, e-commerce, ecommerce, monero, dogecoin, pay with crypto, pay with bitcoin, bitcoin payments, bitcoin payment gateway, crypto woo, accept, dash, litecoin, cash, gateway, payment gateway, woocommerce gateway, wordpress, electrum, mpk, master public key, hd wallet, address, zcash, bitcore, bitcoin cash, bitcoin gold, blackcoin, dash, deeponion, ethereum classic, ripple, vericoin, eos, bitcoin sv, vechain, tron, stellar, rep, bch, btg, blk, dash, onion, doge, eth, etc, ltc, xmr, xrp, vrc, zec, eos, bsv, vet, trx, xlm, no fees, no middleman, freedom, nomiddleman, no fees, free, for free, free crypto plugin, plugin, plug-in, no middleman, binance coin, bnb, iota, miota, maker, mkr, nem, xem, waves, ontology, ont, omisego, omg, holo, hot, chainlink, link, decred, dcr, basic attention token, bat, 0x, zrx, lisk, lsk, bytecoin, bcn, bitcoin diamond, bcd, digibyte, dgb, gemini dollar, gusd, potcoin, pot, risk, high-risk, coin, mineable, erc20 token, erc20, KYC, No KYC, No registration, No login, processing, processor, groestlcoin, bitcore
-Requires at least: 3.0.1
-Tested up to: 5.5.3
-Requires PHP: 5.2.4
+Requires at least: 5.0
+Tested up to: 7.0
+Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.4.8
+Stable Tag: 2.5.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -103,6 +103,14 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 3. Customer Thank-You Page
 
 == Changelog ==
+
+= 2.5.0 =
+* PHP 8 compatibility (fixed fatal parse error on modern PHP)
+* Declared WooCommerce High-Performance Order Storage (HPOS) compatibility; order metadata now uses the WooCommerce CRUD API
+* Added WooCommerce Blocks (block-based) checkout support
+* Replaced dead exchange-rate services: CoinGecko replaces CryptoCompare, Frankfurter/open.er-api replace currconv and fixer.io (removed embedded API keys)
+* Updated Poloniex pricing to the current api.poloniex.com endpoint
+* Replaced defunct blockchain explorers for payment verification: mempool.space and blockstream.info (BTC), litecoinspace.org (LTC), BlockCypher (DOGE), Blockscout (ETH and ERC-20 tokens), XRPSCAN (XRP), blockchain.info haskoin store (BCH), insight.dash.org (DASH)
 
 = 2.4.8 =
 * Fixed settings bug
