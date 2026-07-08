@@ -32,10 +32,10 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_blockexplorer_total_received_for_btc_address($address) {
+	public static function get_mempoolspace_total_received_for_btc_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
-		$request = 'https://blockexplorer.com/api/addr/' . $address . '/totalReceived';
+
+		$request = 'https://mempool.space/api/address/' . $address;
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -52,7 +52,18 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedSatoshi = (float) json_decode($response['body']);
+		$body = json_decode($response['body']);
+
+		if (!isset($body->chain_stats->funded_txo_sum)) {
+			$result = array (
+				'result' => 'error',
+				'total_received' => '',
+			);
+
+			return $result;
+		}
+
+		$totalReceivedSatoshi = (float) $body->chain_stats->funded_txo_sum;
 
 		$result = array (
 			'result' => 'success',
@@ -62,10 +73,10 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_chainso_total_received_for_btc_address($address) {
+	public static function get_blockstream_total_received_for_btc_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
-		$request = 'https://chain.so/api/v2/get_address_received/BTC/' . $address;
+
+		$request = 'https://blockstream.info/api/address/' . $address;
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -82,11 +93,22 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedSatoshi = (float) json_decode($response['body'])->data->confirmed_received_value;
+		$body = json_decode($response['body']);
+
+		if (!isset($body->chain_stats->funded_txo_sum)) {
+			$result = array (
+				'result' => 'error',
+				'total_received' => '',
+			);
+
+			return $result;
+		}
+
+		$totalReceivedSatoshi = (float) $body->chain_stats->funded_txo_sum;
 
 		$result = array (
 			'result' => 'success',
-			'total_received' => $totalReceivedSatoshi,
+			'total_received' => $totalReceivedSatoshi / 100000000,
 		);
 
 		return $result;
@@ -123,10 +145,10 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_chainso_total_received_for_ltc_address($address) {
+	public static function get_litecoinspace_total_received_for_ltc_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
-		$request = 'https://chain.so/api/v2/get_address_received/LTC/' . $address;
+
+		$request = 'https://litecoinspace.org/api/address/' . $address;
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -143,8 +165,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
-		
-		$totalReceived = (float) json_decode($response['body'])->data->confirmed_received_value;		
+
+		$body = json_decode($response['body']);
+
+		if (!isset($body->chain_stats->funded_txo_sum)) {
+			$result = array (
+				'result' => 'error',
+				'total_received' => '',
+			);
+
+			return $result;
+		}
+
+		$totalReceived = (float) $body->chain_stats->funded_txo_sum / 100000000;
 
 		$result = array (
 			'result' => 'success',
@@ -188,7 +221,7 @@ class NMM_Blockchain {
 	public static function get_dashblockexplorer_total_received_for_dash_address($address) {
 		$userAgentString = self::get_user_agent_string();
 		
-		$request = 'https://dashblockexplorer.com/api/addr/' . $address . '/totalReceived';
+		$request = 'https://insight.dash.org/insight-api/addr/' . $address . '/totalReceived';
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -216,10 +249,10 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_chainso_total_received_for_doge_address($address) {		
+	public static function get_blockcypher_total_received_for_doge_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
-		$request = 'https://chain.so/api/v2/get_address_received/DOGE/' . $address;
+
+		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address . '/balance';
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -236,11 +269,20 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedSatoshi = (float) json_decode($response['body'])->data->confirmed_received_value;
+		$body = json_decode($response['body']);
+
+		if (!isset($body->total_received)) {
+			$result = array (
+				'result' => 'error',
+				'total_received' => '',
+			);
+
+			return $result;
+		}
 
 		$result = array (
 			'result' => 'success',
-			'total_received' => $totalReceivedSatoshi,
+			'total_received' => (float) $body->total_received / 100000000,
 		);
 
 		return $result;
@@ -358,7 +400,21 @@ class NMM_Blockchain {
 	}
 
 	public static function get_bch_address_transactions($address) {
-		$request = 'https://blockdozer.com/api/txs?address=' . $address;
+		// Normalize to a prefixed cashaddr, which is what the API returns
+		if (strpos($address, 'bitcoincash:') === 0) {
+			$addressToMatch = $address;
+		}
+		elseif ($address[0] === 'p' || $address[0] === 'q') {
+			$addressToMatch = 'bitcoincash:' . $address;
+		}
+		else {
+			$addressToMatch = \CashAddress\CashAddress::old2new($address);
+			if (strpos($addressToMatch, 'bitcoincash:') !== 0) {
+				$addressToMatch = 'bitcoincash:' . $addressToMatch;
+			}
+		}
+
+		$request = 'https://api.blockchain.info/haskoin-store/bch/address/' . rawurlencode($addressToMatch) . '/transactions/full?limit=50';
 		$response = wp_remote_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
@@ -372,9 +428,8 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$rawTransactions = json_decode($response['body']);
 
-		$rawTransactions = $body->txs;
 		if (!is_array($rawTransactions)) {
 			$result = array(
 				'result' => 'error',
@@ -384,30 +439,36 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		if ($address[0] === 'p' || $address[0] === 'q') {
-			$addressToMatch = \CashAddress\CashAddress::new2old($address, false);
-		}
-		else {
-			$addressToMatch = $address;
+		// confirmations are not included, so fetch the current best block height
+		$tipHeight = 0;
+		$tipResponse = wp_remote_get('https://api.blockchain.info/haskoin-store/bch/block/best?notx=true');
+		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
+			$tipBody = json_decode($tipResponse['body']);
+			if (isset($tipBody->height)) {
+				$tipHeight = (int) $tipBody->height;
+			}
 		}
 
 		$transactions = array();
 
 		foreach ($rawTransactions as $rawTransaction) {
-			$outputs = $rawTransaction->vout;
+			$confirmations = 0;
 
-			foreach ($outputs as $output) {
-				if (!isset($output->scriptPubKey->addresses)) {					
+			if (isset($rawTransaction->block->height) && $tipHeight > 0) {
+				$confirmations = $tipHeight - (int) $rawTransaction->block->height + 1;
+			}
+
+			foreach ($rawTransaction->outputs as $output) {
+				if (!isset($output->address)) {
 					continue;
 				}
 
-				if (in_array($addressToMatch, $output->scriptPubKey->addresses)) {
-					$hash = $rawTransaction->txid;
-					$timeStamp = $rawTransaction->time;
-					$amount = $output->value * 100000000;
-					$confirmations = $rawTransaction->confirmations;
-
-					$transactions[] = new NMM_Transaction($amount, $confirmations, $timeStamp, $hash);
+				if ($output->address === $addressToMatch) {
+					$transactions[] = new NMM_Transaction(
+						$output->value,
+						$confirmations,
+						$rawTransaction->time,
+						$rawTransaction->txid);
 				}
 			}
 		}
@@ -547,7 +608,7 @@ class NMM_Blockchain {
 	public static function get_btc_address_transactions($address) {
 		$userAgentString = self::get_user_agent_string();
 
-        $request = 'https://blockexplorer.com/api/txs/?address=' . $address;
+        $request = 'https://mempool.space/api/address/' . $address . '/txs';
 
         $args = array(
 			'user-agent' => $userAgentString
@@ -597,9 +658,8 @@ class NMM_Blockchain {
             return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$rawTransactions = json_decode($response['body']);
 
-		$rawTransactions = $body->txs;
 		if (!is_array($rawTransactions)) {
 			$result = array(
 				'result' => 'error',
@@ -608,18 +668,32 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// mempool.space does not include confirmation counts, so fetch the tip height
+		$tipHeight = 0;
+		$tipResponse = wp_remote_get('https://mempool.space/api/blocks/tip/height', $args);
+		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
+			$tipHeight = (int) $tipResponse['body'];
+		}
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
+			$confirmations = 0;
+			$time = time();
+
+			if (!empty($rawTransaction->status->confirmed) && $tipHeight > 0) {
+				$confirmations = $tipHeight - (int) $rawTransaction->status->block_height + 1;
+				$time = $rawTransaction->status->block_time;
+			}
+
 			foreach ($rawTransaction->vout as $vout) {
-				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000,
-														  $rawTransaction->confirmations,
-														  $rawTransaction->time,
+				if (isset($vout->scriptpubkey_address) && $vout->scriptpubkey_address === $address) {
+					$transactions[] = new NMM_Transaction($vout->value,
+														  $confirmations,
+														  $time,
 														  $rawTransaction->txid);
 				}
 			}
-
-
 		}
 
 		$result = array (
@@ -694,7 +768,7 @@ class NMM_Blockchain {
 	
 	public static function get_dash_address_transactions($address) {		
 		
-		$request = 'https://dashblockexplorer.com/api/txs/?address=' . $address;
+		$request = 'https://insight.dash.org/insight-api/txs/?address=' . $address;
 		$response = wp_remote_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
@@ -792,8 +866,8 @@ class NMM_Blockchain {
 	}
 
 	public static function get_doge_address_transactions($address) {
-		
-		$request = 'https://chain.so/api/v2/get_tx_received/DOGE/' . $address;
+
+		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address;
 
 		$response = wp_remote_get($request);
 
@@ -810,7 +884,7 @@ class NMM_Blockchain {
 
 		$body = json_decode($response['body']);
 
-		$rawTransactions = $body->data->txs;
+		$rawTransactions = isset($body->txrefs) ? $body->txrefs : null;
 		if (!is_array($rawTransactions)) {
 			$result = array(
 				'result' => 'error',
@@ -820,13 +894,13 @@ class NMM_Blockchain {
 			return $result;
 		}
 		$transactions = array();
-		foreach ($rawTransactions as $rawTransaction) {			
-				
-			$transactions[] = new NMM_Transaction($rawTransaction->value * 100000000,
-												  $rawTransaction->confirmations,
-												  $rawTransaction->time,
-												  $rawTransaction->txid);
-			
+		foreach ($rawTransactions as $rawTransaction) {
+			if ($rawTransaction->tx_input_n == -1) {
+				$transactions[] = new NMM_Transaction($rawTransaction->value,
+													  $rawTransaction->confirmations,
+													  $rawTransaction->confirmed,
+													  $rawTransaction->tx_hash);
+			}
 		}
 
 		$result = array (
@@ -987,7 +1061,7 @@ class NMM_Blockchain {
 
 	public static function get_eth_address_transactions($address) {
 		
-		$request = 'http://api.etherscan.io/api?module=account&action=txlist&address=' . $address . '&startblock=0&endblock=99999999&sort=desc';
+		$request = 'https://eth.blockscout.com/api?module=account&action=txlist&address=' . $address . '&startblock=0&endblock=99999999&sort=desc';
 
 		$response = wp_remote_get($request);
 
@@ -1518,7 +1592,7 @@ class NMM_Blockchain {
 
 	public static function get_xrp_address_transactions($address) {
 		
-		$request = 'https://data.ripple.com/v2/accounts/' . $address . '/transactions';
+		$request = 'https://api.xrpscan.com/api/v1/account/' . $address . '/transactions';
 
 		$response = wp_remote_get($request);
 
@@ -1535,7 +1609,7 @@ class NMM_Blockchain {
 
 		$body = json_decode($response['body']);
 
-		$rawTransactions = $body->transactions;
+		$rawTransactions = isset($body->transactions) ? $body->transactions : null;
 		if (!is_array($rawTransactions)) {
 			$result = array(
 				'result' => 'error',
@@ -1546,13 +1620,23 @@ class NMM_Blockchain {
 		}
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
-			if ($rawTransaction->tx->Destination === $address) {
-				
-				$transactions[] = new NMM_Transaction($rawTransaction->tx->Amount,
-												  10000, 
+			if (!isset($rawTransaction->TransactionType) || $rawTransaction->TransactionType !== 'Payment') {
+				continue;
+			}
+
+			// Amount is an object for XRP payments; value is in drops
+			if (!isset($rawTransaction->Destination, $rawTransaction->Amount->currency, $rawTransaction->Amount->value)
+				|| $rawTransaction->Amount->currency !== 'XRP') {
+				continue;
+			}
+
+			if ($rawTransaction->Destination === $address) {
+
+				$transactions[] = new NMM_Transaction($rawTransaction->Amount->value,
+												  10000,
 												  strtotime($rawTransaction->date),
 												  $rawTransaction->hash);
-			}			
+			}
 		}
 
 		$result = array (
@@ -1658,7 +1742,7 @@ class NMM_Blockchain {
 	}
 
 	public static function get_erc20_address_transactions($cryptoId, $address) {
-		$request = 'http://api.etherscan.io/api?module=account&action=tokentx&address=' . $address . '&startblock=0&endblock=999999999&sort=asc';
+		$request = 'https://eth.blockscout.com/api?module=account&action=tokentx&address=' . $address . '&startblock=0&endblock=999999999&sort=asc';
 
 		$response = wp_remote_get($request);
 

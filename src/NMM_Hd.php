@@ -143,13 +143,13 @@ class NMM_Hd {
 			return $primaryResult['total_received'];
 		}
 
-		$secondaryResult = NMM_Blockchain::get_blockexplorer_total_received_for_btc_address($address);
+		$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 		if ($secondaryResult['result'] === 'success') {			
 			return $secondaryResult['total_received'];
 		}
 
-		$fallbackResult = NMM_Blockchain::get_chainso_total_received_for_btc_address($address);
+		$fallbackResult = NMM_Blockchain::get_blockstream_total_received_for_btc_address($address);
 
 		if ($fallbackResult['result'] === 'success') {
 			return $fallbackResult['total_received'];
@@ -165,7 +165,7 @@ class NMM_Hd {
 			return $primaryResult['total_received'];
 		}
 
-		$secondaryResult = NMM_Blockchain::get_chainso_total_received_for_ltc_address($address);
+		$secondaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
 
 		if ($secondaryResult['result'] === 'success') {
 			return $secondaryResult['total_received'];
@@ -195,7 +195,7 @@ class NMM_Hd {
 	}
 
 	private static function get_total_received_for_doge_address($address) {
-		$result = NMM_Blockchain::get_chainso_total_received_for_doge_address($address);
+		$result = NMM_Blockchain::get_blockcypher_total_received_for_doge_address($address);
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];
@@ -294,7 +294,7 @@ class NMM_Hd {
 				return true;
 			}
 			else {
-				$secondaryResult = NMM_Blockchain::get_blockexplorer_total_received_for_btc_address($address);
+				$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 				// we have a primary resource saying address is clean and backup source failed, so return clean
 				if ($secondaryResult['result'] === 'error') {					
@@ -314,14 +314,14 @@ class NMM_Hd {
 			}
 		}
 		else {
-			$secondaryResult = NMM_Blockchain::get_blockexplorer_total_received_for_btc_address($address);
+			$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 			if ($secondaryResult['result'] === 'success') {
 				return $secondaryResult['total_received'] >= 0.00000001;
 			}
 		}
 
-		$fallbackResult = NMM_Blockchain::get_chainso_total_received_for_btc_address($address);
+		$fallbackResult = NMM_Blockchain::get_blockstream_total_received_for_btc_address($address);
 		if ($fallbackResult['result'] === 'success') {
 				return $fallbackResult['total_received'] >= 0.00000001;
 			}
@@ -329,7 +329,7 @@ class NMM_Hd {
 	}
 
 	private static function is_dirty_ltc_address($address) {
-		$primaryResult = NMM_Blockchain::get_chainso_total_received_for_ltc_address($address);		
+		$primaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);		
 
 		if ($primaryResult['result'] === 'success') {
 			// if we get a non zero balance from first source then address is dirty
