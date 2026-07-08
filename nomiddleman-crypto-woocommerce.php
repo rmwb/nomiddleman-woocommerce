@@ -112,6 +112,7 @@ function NMM_init_gateways(){
     require_once(plugin_basename('src/NMM_Payment.php'));
 
     // Misc
+    require_once(plugin_basename('src/NMM_Qr.php'));
     require_once(plugin_basename('src/NMM_Util.php'));
     require_once(plugin_basename('src/NMM_Hooks.php'));
     require_once(plugin_basename('src/NMM_Cron.php'));
@@ -138,6 +139,26 @@ function NMM_init_gateways(){
     NMM_update_hd_table();
 
     add_action('init', 'NMM_schedule_payment_checks');
+    add_action('admin_init', 'NMM_cleanup_legacy_qr_files');
+}
+
+// QR codes used to be written to the plugin dir as tmp{orderId}_qrcode.png -
+// world-readable at guessable URLs, one per order, never deleted. They are
+// now rendered in memory; sweep any leftovers from older versions once.
+function NMM_cleanup_legacy_qr_files() {
+    if (get_option('nmm_legacy_qr_files_cleaned')) {
+        return;
+    }
+
+    $files = glob(NMM_ABS_PATH . '/assets/img/tmp*_qrcode.png');
+
+    if (is_array($files)) {
+        foreach ($files as $file) {
+            @unlink($file);
+        }
+    }
+
+    update_option('nmm_legacy_qr_files_cleaned', 1);
 }
 
 // Prefer Action Scheduler (bundled with WooCommerce) over WP-Cron: it runs

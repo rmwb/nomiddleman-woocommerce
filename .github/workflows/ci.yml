@@ -57,3 +57,18 @@ jobs:
           coverage: none
       - name: Derive against known-good BIP32 addresses (GMP + BCMATH)
         run: php tests/test-hd-derivation.php
+
+  qr-rendering:
+    name: QR rendering (offline + decode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: gd
+          coverage: none
+      - name: Install QR decoder
+        run: sudo apt-get update -q && sudo apt-get install -y -q zbar-tools
+      - name: Generate and decode payment QR codes
+        run: php tests/test-qr.php

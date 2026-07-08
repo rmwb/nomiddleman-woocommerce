@@ -105,6 +105,9 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 == Changelog ==
 
 = 2.6.0 =
+* QR codes are now rendered in memory: inline SVG on the thank-you page, and embedded directly inside emails as inline (CID) attachments. No QR file is ever written to disk, and the third-party qrserver.com fallback is gone
+* Fixes a privacy issue: previous versions wrote one world-readable QR image per order (payment address and amount, guessable filename) into the plugin folder and never deleted them; existing files are swept automatically on upgrade
+* Plain-text order emails now contain proper plain-text payment details instead of raw HTML
 * Settings page no longer offers Autopay/Privacy Mode for coins whose verification APIs no longer exist anywhere (LSK, XEM, ONION, XMY autopay; XMY privacy; BTX autopay), and warns loudly if a previously saved mode can no longer verify payments
 * Payment checks now run through Action Scheduler (bundled with WooCommerce) every 60 seconds instead of a 30-second WP-Cron loop, with automatic migration and WP-Cron fallback
 * Explorer API calls now use per-host exponential backoff when rate-limited or failing, and respect per-host request spacing (chainz)

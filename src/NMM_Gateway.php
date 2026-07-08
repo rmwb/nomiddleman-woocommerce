@@ -303,31 +303,46 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $orderCryptoTotal = WC()->session->get($crypto->get_id() . '_amount');
         $orderWalletAddress = $order->get_meta('wallet_address');
         $orderId = $order->get_id();
-        
-        $qrCode = $this->get_qr_code($crypto, $orderWalletAddress, $orderCryptoTotal, $orderId);
+
+        $formattedTotal = NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $orderCryptoTotal);
+        $totalLine = ($crypto->get_symbol() === '')
+            ? $formattedTotal . ' ' . $crypto->get_id()
+            : $crypto->get_symbol() . $formattedTotal;
+
+        if ($plain_text) {
+            echo "\nPAYMENT DETAILS\n\n";
+            echo 'Address: ' . $orderWalletAddress . "\n";
+            echo 'Currency: ' . $crypto->get_name() . "\n";
+            echo 'Total: ' . $totalLine . "\n";
+            echo 'Scan a QR code for this payment on your order page: ' . $order->get_checkout_order_received_url() . "\n\n";
+            return;
+        }
+
+        $qrData = $this->get_qr_prefix($crypto) . ':' . $orderWalletAddress . '?amount=' . $orderCryptoTotal;
+
+        // embedded as an inline (CID) attachment when PHPMailer sends this
+        // email; mailers that bypass PHPMailer simply show the text details
+        $cid = NMM_Qr::stash_email_image($orderId, $qrData);
 
         ?>
         <h2>Additional Details</h2>
+        <?php if ($cid !== '') : ?>
         <p>QR Code Payment: </p>
         <div style="margin-bottom:12px;">
-            <img src="<?php echo esc_url($qrCode); ?>" />
+            <img src="cid:<?php echo esc_attr($cid); ?>" width="196" height="196" alt="Payment QR code" />
         </div>
+        <?php endif; ?>
         <p>
             Address: <?php echo esc_html($orderWalletAddress) ?>
         </p>
         <p>
-            Currency: <?php echo '<img src="' . $crypto->get_logo_file_path() . '" alt="" />' . $crypto->get_name(); ?>
+            Currency: <?php echo '<img src="' . esc_url($crypto->get_logo_file_path()) . '" alt="" />' . esc_html($crypto->get_name()); ?>
         </p>
         <p>
-            Total:
-            <?php 
-                if ($crypto->get_symbol() === '') {
-                    echo NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $orderCryptoTotal) . ' ' . $crypto->get_id();
-                }
-                else {
-                    echo $crypto->get_symbol() . NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $orderCryptoTotal);
-                }
-            ?>     
+            Total: <?php echo esc_html($totalLine); ?>
+        </p>
+        <p>
+            <a href="<?php echo esc_url($order->get_checkout_order_received_url()); ?>">View payment details and QR code on your order page</a>
         </p>
         <?php
     }
@@ -351,43 +366,24 @@ class NMM_Gateway extends WC_Payment_Gateway {
         return strtolower(str_replace(' ', '', $crypto->get_name()));
     }
 
-    private function get_qr_code($crypto, $orderWalletAddress, $cryptoTotal, $orderId) {  
-        $dirWrite = NMM_ABS_PATH . '/assets/img/';
-
-        $formattedName = $this->get_qr_prefix($crypto);
-
-        $qrData = $formattedName . ':' . $orderWalletAddress . '?amount=' . $cryptoTotal;
-
-        try {
-            QRcode::png($qrData, $dirWrite . 'tmp' . $orderId . '_qrcode.png', QR_ECLEVEL_H);         
-        }
-        catch (\Exception $e) {
-            NMM_Util::log(__FILE__, __LINE__, 'QR code generation failed, falling back...');
-            $endpoint = 'https://api.qrserver.com/v1/create-qr-code/?data=';
-            return $endpoint . $qrData;
-        }
-        $dirRead = NMM_PLUGIN_DIR . '/assets/img/';
-        return $dirRead . 'tmp' . $orderId . '_qrcode.png';
-    }
-
-    private function output_thank_you_html($crypto, $orderWalletAddress, $cryptoTotal, $orderId) {        
+    private function output_thank_you_html($crypto, $orderWalletAddress, $cryptoTotal, $orderId) {
         $formattedPrice = NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $cryptoTotal);
         $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
-        
+
         $customerMessage = apply_filters('nmm_customer_message', $nmmSettings->get_customer_payment_message($crypto), $crypto, $orderId, $formattedPrice, $orderWalletAddress);
 
-        $qrCode = $this->get_qr_code($crypto, $orderWalletAddress, $cryptoTotal, $orderId);
+        $qrData = $this->get_qr_prefix($crypto) . ':' . $orderWalletAddress . '?amount=' . $cryptoTotal;
 
         // admin-entered HTML; allow post-safe markup but never scripts
         echo wp_kses_post($customerMessage);
         ?>
-        
+
         <h2>Cryptocurrency payment details</h2>
         <ul class="woocommerce-order-overview woocommerce-thankyou-order-details order_details">
             <li class="woocommerce-order-overview__qr-code">
                 <p style="word-wrap: break-word;">QR Code payment:</p>
                 <div class="qr-code-container">
-                    <img style="margin-top:3px;" src="<?php echo esc_url($qrCode); ?>" />
+                    <?php echo NMM_Qr::svg($qrData, 200); // built in memory, no file written ?>
                 </div>
             </li>
             <li>
