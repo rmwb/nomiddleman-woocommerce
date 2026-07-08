@@ -6,10 +6,10 @@ Plugin Name: Nomiddleman Bitcoin and Crypto Payments for WooCommerce
 Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-woocommerce/
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
-Author URI: https://nomiddlemancrypto.io
+Author URI: https://github.com/rmwb/nomiddleman-woocommerce
 Version: 2.7.0
 Requires PHP: 7.4
-Copyright: © 2020 Nomiddleman Crypto (email : support@nomiddlemancrypto.io)
+Copyright: © 2020 Nomiddleman Crypto
 License: GNU General Public License v3.0
 License URI: http://www.gnu.org/licenses/gpl-3.0.html
 

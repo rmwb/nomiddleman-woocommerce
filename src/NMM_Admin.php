@@ -249,7 +249,7 @@ class NMM_Admin {
                     <th scope="row">Autopay Disclaimer</th>
                     <td>
                         <div class="notice notice-warning inline nmm-inline-notice">
-                            <p>Please note Autopay Mode is still in <strong>beta</strong>. There is no guarantee every order will be processed correctly. If you have any questions contact us at support@nomiddlemancrypto.io.</p>
+                            <p>Please note Autopay Mode is still in <strong>beta</strong>. There is no guarantee every order will be processed correctly.</p>
                             <p><strong>Adjusting the following settings can improve Autopay accuracy:</strong></p>
                             <ul>
                                 <li><strong>Wallet Addresses:</strong> Adding more addresses greatly increases autopay reliability while increasing privacy. <em>We suggest having as many addresses as orders you get an hour in that cryptocurrency.</em></li>
@@ -326,7 +326,7 @@ class NMM_Admin {
                 self::render_number_row($cid . '_autopayment_percent_to_process', 'Auto-Confirm Percentage',
                     self::value($values, $cid . '_autopayment_percent_to_process', '0.9999'),
                     '0.9850', '1.0000', '0.0001', '1',
-                    'Auto-Payment will automatically confirm payments within this percentage of the total requested. Contact support@nomiddlemancrypto.io before changing this value.');
+                    'Auto-Payment will automatically confirm payments within this percentage of the total requested. Lowering it increases the risk of matching the wrong payment - change with care.');
                 if ($crypto->needs_confirmations()) {
                     self::render_number_row($cid . '_autopayment_required_confirmations', 'Required Confirmations',
                         self::value($values, $cid . '_autopayment_required_confirmations', '2'),

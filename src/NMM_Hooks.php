@@ -233,7 +233,7 @@ function NMM_first_mpk_address_ajax() {
 		
 		if (!NMM_Util::p_enabled() && (NMM_Hd::is_valid_ypub($mpk) || NMM_Hd::is_valid_zpub($mpk))) {
 			$message = 'You have entered a valid Segwit MPK.';
-			$message2 = '<a href="https://nomiddlemancrypto.io/extensions/segwit" target="_blank">Segwit MPKs are coming soon!</a>';
+			$message2 = 'Segwit MPKs (ypub/zpub) are not supported - please use an xpub.';
 
 			echo json_encode([$message, $message2, '']);
 			wp_die();

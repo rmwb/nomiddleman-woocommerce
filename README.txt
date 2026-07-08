@@ -10,14 +10,9 @@ Stable Tag: 2.7.0
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
 == Description ==
-Utilizing the power of blockchain, we provide the only WooCommerce Cryptocurrency Gateway that truly takes out the middleman. Empowering you to accept all major cryptocurrencies directly to your own wallets for free. No middleman fees and open source on <a target="_blank" href="https://github.com/nomiddleman/nomiddleman-woocommerce" alt="Wordpress Cryptocurrency Payment Gateway">Nomiddleman Crypto's Github</a>.
+Utilizing the power of blockchain, we provide the only WooCommerce Cryptocurrency Gateway that truly takes out the middleman. Empowering you to accept all major cryptocurrencies directly to your own wallets for free. No middleman fees and open source on <a target="_blank" href="https://github.com/rmwb/nomiddleman-woocommerce" alt="WordPress Cryptocurrency Payment Gateway">GitHub</a>.
 
 Accept customer payments in Bitcoin, Ethereum, Tether (USDT on Ethereum or Tron), Solana, Litecoin, XRP and 44 other cryptocurrencies. Tested with WordPress 7.0 and WooCommerce 10.8 on PHP 7.4-8.4.
-
-<blockquote>
-= Information =
-<a target="_blank" href="https://nomiddlemancrypto.io/" alt="Wordpress Cryptocurrency Payment Gateway">Accept Bitcoin Payments on Wordpress</a>
-</blockquote>
 
 == Supported Cryptocurrencies ==
 
