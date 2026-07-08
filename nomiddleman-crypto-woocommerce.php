@@ -137,9 +137,28 @@ function NMM_init_gateways(){
     NMM_Register_Extensions();
     NMM_update_hd_table();
 
+    add_action('init', 'NMM_schedule_payment_checks');
+}
+
+// Prefer Action Scheduler (bundled with WooCommerce) over WP-Cron: it runs
+// reliably in the background, survives object caches, and has an admin UI.
+function NMM_schedule_payment_checks() {
+    if (function_exists('as_schedule_recurring_action') && function_exists('as_next_scheduled_action')) {
+        // migrate any legacy WP-Cron schedule
+        if (wp_next_scheduled('NMM_cron_hook')) {
+            wp_clear_scheduled_hook('NMM_cron_hook');
+        }
+
+        if (false === as_next_scheduled_action('NMM_cron_hook', array(), 'nomiddleman')) {
+            as_schedule_recurring_action(time() + MINUTE_IN_SECONDS, MINUTE_IN_SECONDS, 'NMM_cron_hook', array(), 'nomiddleman');
+        }
+
+        return;
+    }
+
     if (!wp_next_scheduled('NMM_cron_hook')) {
-        wp_schedule_event(time(), 'seconds_30', 'NMM_cron_hook');
-    }    
+        wp_schedule_event(time(), 'minutes_1', 'NMM_cron_hook');
+    }
 }
 
 function NMM_add_interval ($schedules)
@@ -153,17 +172,18 @@ function NMM_add_interval ($schedules)
 }
 
 function NMM_activate() {
-    if (!wp_next_scheduled('NMM_cron_hook')) {
-        wp_schedule_event(time(), 'seconds_30', 'NMM_cron_hook');
-    }
-    
+    // scheduling happens on init via NMM_schedule_payment_checks
     NMM_create_hd_mpk_address_table();
     NMM_create_payment_table();
-    NMM_create_carousel_table();    
+    NMM_create_carousel_table();
 }
 
 function NMM_deactivate() {
-    wp_clear_scheduled_hook('NMM_cron_hook');    
+    wp_clear_scheduled_hook('NMM_cron_hook');
+
+    if (function_exists('as_unschedule_all_actions')) {
+        as_unschedule_all_actions('NMM_cron_hook', array(), 'nomiddleman');
+    }
 }
 
 function NMM_uninstall() {

@@ -202,6 +202,18 @@ class NMM_Settings {
 		return '24';
 	}
 	
+	public function get_blockcypher_token() {
+		$tokenKey = 'blockcypher_token';
+
+		if (is_array($this->settings)) {
+			if (array_key_exists($tokenKey, $this->settings)) {
+				return trim((string) $this->settings[$tokenKey]);
+			}
+		}
+
+		return '';
+	}
+
 	public function price_api_selected() {
 		$priceApiKey = 'selected_price_apis';
 		

@@ -168,6 +168,15 @@ class NMM_Admin {
                                     </label>
                                 <?php endforeach; ?>
                             </div>
+
+                            <h2>API Keys (optional)</h2>
+                            <table class="form-table" role="presentation">
+                                <?php
+                                self::render_text_row('blockcypher_token', 'BlockCypher API Token',
+                                    self::value($values, 'blockcypher_token', ''),
+                                    'Optional. LTC and DOGE payment verification uses BlockCypher, whose keyless tier allows roughly 100 requests per hour. A free token from blockcypher.com raises that substantially for busier stores.');
+                                ?>
+                            </table>
                         </div>
                     </div>
                 </div>

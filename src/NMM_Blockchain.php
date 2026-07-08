@@ -1,7 +1,99 @@
 <?php
 
 // Class that communicates with various blockchains via HTTP
-class NMM_Blockchain {	
+class NMM_Blockchain {
+
+	// Hosts that ask for a minimum spacing between requests (seconds)
+	private static $hostCooldowns = array(
+		'chainz.cryptoid.info' => 10,
+	);
+
+	// Rate-limit-aware wrapper around wp_remote_get: skips hosts that are in
+	// backoff (from earlier 429/5xx responses) and records failures so a
+	// misbehaving or throttling API is left alone with exponential backoff.
+	private static function api_get($request, $args = array()) {
+		$host = (string) parse_url($request, PHP_URL_HOST);
+
+		if (self::host_unavailable($host)) {
+			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
+		}
+
+		$response = wp_remote_get($request, $args);
+
+		self::record_api_result($host, $response);
+
+		return $response;
+	}
+
+	private static function api_post($request, $args = array()) {
+		$host = (string) parse_url($request, PHP_URL_HOST);
+
+		if (self::host_unavailable($host)) {
+			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
+		}
+
+		$response = wp_remote_post($request, $args);
+
+		self::record_api_result($host, $response);
+
+		return $response;
+	}
+
+	private static function host_unavailable($host) {
+		if ($host === '') {
+			return false;
+		}
+
+		if (get_transient('nmm_backoff_' . md5($host)) !== false) {
+			return true;
+		}
+
+		if (isset(self::$hostCooldowns[$host]) && get_transient('nmm_cooldown_' . md5($host)) !== false) {
+			return true;
+		}
+
+		return false;
+	}
+
+	private static function record_api_result($host, $response) {
+		if ($host === '') {
+			return;
+		}
+
+		if (isset(self::$hostCooldowns[$host])) {
+			set_transient('nmm_cooldown_' . md5($host), 1, self::$hostCooldowns[$host]);
+		}
+
+		$code = (!is_wp_error($response) && isset($response['response']['code'])) ? (int) $response['response']['code'] : 0;
+
+		$isFailure = is_wp_error($response) || $code === 429 || $code === 402 || $code >= 500;
+
+		if ($isFailure) {
+			$failures = (int) get_transient('nmm_apifail_' . md5($host)) + 1;
+			set_transient('nmm_apifail_' . md5($host), $failures, HOUR_IN_SECONDS);
+
+			// 60s, 120s, 240s ... capped at 30 minutes
+			$backoff = min(60 * pow(2, $failures - 1), 30 * MINUTE_IN_SECONDS);
+			set_transient('nmm_backoff_' . md5($host), 1, $backoff);
+			NMM_Util::log(__FILE__, __LINE__, 'API host ' . $host . ' failing (http ' . $code . '), backing off ' . $backoff . 's');
+		}
+		elseif ($code === 200) {
+			delete_transient('nmm_apifail_' . md5($host));
+		}
+	}
+
+	// Optional BlockCypher token raises their keyless rate limits substantially
+	private static function blockcypher_token_query($urlHasQuery) {
+		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$token = $nmmSettings->get_blockcypher_token();
+
+		if ($token === '') {
+			return '';
+		}
+
+		return ($urlHasQuery ? '&' : '?') . 'token=' . rawurlencode($token);
+	}
+
 
 	public static function get_blockchaininfo_total_received_for_btc_address($address, $requiredConfirmations) {
 		$userAgentString = self::get_user_agent_string();
@@ -11,7 +103,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -41,7 +133,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
@@ -82,7 +174,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
@@ -117,13 +209,13 @@ class NMM_Blockchain {
 	public static function get_blockcypher_total_received_for_ltc_address($address, $requiredConfirmations) {
 		$userAgentString = self::get_user_agent_string();
 		
-		$request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . $address . '?confirmations=' . $requiredConfirmations;
+		$request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . $address . '?confirmations=' . $requiredConfirmations . self::blockcypher_token_query(true);
 
 		$args = array(
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
@@ -154,7 +246,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 
@@ -196,7 +288,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 
@@ -227,7 +319,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 
@@ -252,13 +344,13 @@ class NMM_Blockchain {
 	public static function get_blockcypher_total_received_for_doge_address($address) {
 		$userAgentString = self::get_user_agent_string();
 
-		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address . '/balance';
+		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address . '/balance' . self::blockcypher_token_query(false);
 
 		$args = array(
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
@@ -297,7 +389,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
@@ -329,7 +421,7 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body']))) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
 			$result = array (
@@ -355,7 +447,7 @@ class NMM_Blockchain {
 		// Koios public tier: list txs for the address, then fetch each tx's outputs
 		$request = 'https://api.koios.rest/api/v1/address_txs';
 
-		$response = wp_remote_post($request, array(
+		$response = self::api_post($request, array(
 			'headers' => array('Content-Type' => 'application/json'),
 			'body' => json_encode(array('_addresses' => array($address))),
 		));
@@ -398,7 +490,7 @@ class NMM_Blockchain {
 		$transactions = array();
 
 		if (count($txHashes) > 0) {
-			$response2 = wp_remote_post('https://api.koios.rest/api/v1/tx_utxos', array(
+			$response2 = self::api_post('https://api.koios.rest/api/v1/tx_utxos', array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => json_encode(array('_tx_hashes' => $txHashes)),
 			));
@@ -460,7 +552,7 @@ class NMM_Blockchain {
 		}
 
 		$request = 'https://api.blockchain.info/haskoin-store/bch/address/' . rawurlencode($addressToMatch) . '/transactions/full?limit=50';
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -486,7 +578,7 @@ class NMM_Blockchain {
 
 		// confirmations are not included, so fetch the current best block height
 		$tipHeight = 0;
-		$tipResponse = wp_remote_get('https://api.blockchain.info/haskoin-store/bch/block/best?notx=true');
+		$tipResponse = self::api_get('https://api.blockchain.info/haskoin-store/bch/block/best?notx=true');
 		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
 			$tipBody = json_decode($tipResponse['body']);
 			if (isset($tipBody->height)) {
@@ -530,7 +622,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://explorer.blackcoin.nl/ext/getaddress/' . $address;
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -576,7 +668,7 @@ class NMM_Blockchain {
 
 				$request2 = 'https://explorer.blackcoin.nl/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
 				
-				$response2 = wp_remote_get($request2);
+				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
 					continue;
@@ -622,7 +714,7 @@ class NMM_Blockchain {
 		// WhatsOnChain: tx-hash history first, then a bulk lookup for amounts
 		$request = 'https://api.whatsonchain.com/v1/bsv/main/address/' . rawurlencode($address) . '/history';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -650,7 +742,7 @@ class NMM_Blockchain {
 		$history = array_slice($history, -20);
 
 		$tipHeight = 0;
-		$tipResponse = wp_remote_get('https://api.whatsonchain.com/v1/bsv/main/chain/info');
+		$tipResponse = self::api_get('https://api.whatsonchain.com/v1/bsv/main/chain/info');
 		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
 			$tipBody = json_decode($tipResponse['body']);
 			if (isset($tipBody->blocks)) {
@@ -670,7 +762,7 @@ class NMM_Blockchain {
 		$transactions = array();
 
 		if (count($txHashes) > 0) {
-			$response2 = wp_remote_post('https://api.whatsonchain.com/v1/bsv/main/txs', array(
+			$response2 = self::api_post('https://api.whatsonchain.com/v1/bsv/main/txs', array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => json_encode(array('txids' => $txHashes)),
 			));
@@ -720,12 +812,12 @@ class NMM_Blockchain {
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
-            $request2 = 'https://api.blockcypher.com/v1/btc/main/addrs/' . $address;
-            $response2 = wp_remote_get($request2, $args);
+            $request2 = 'https://api.blockcypher.com/v1/btc/main/addrs/' . $address . self::blockcypher_token_query(false);
+            $response2 = self::api_get($request2, $args);
             if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
                 $result = array(
                     'result' => 'error',
@@ -777,7 +869,7 @@ class NMM_Blockchain {
 
 		// mempool.space does not include confirmation counts, so fetch the tip height
 		$tipHeight = 0;
-		$tipResponse = wp_remote_get('https://mempool.space/api/blocks/tip/height', $args);
+		$tipResponse = self::api_get('https://mempool.space/api/blocks/tip/height', $args);
 		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
 			$tipHeight = (int) $tipResponse['body'];
 		}
@@ -814,7 +906,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://insight.bitcore.cc/api/addr/' . $address;
 		
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -844,7 +936,7 @@ class NMM_Blockchain {
 
 				$request2 = 'https://insight.bitcore.cc/api/tx/' . $transactionId;
 				
-				$response2 = wp_remote_get($request2);
+				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
 					continue;
@@ -875,7 +967,7 @@ class NMM_Blockchain {
 	public static function get_dash_address_transactions($address) {		
 		
 		$request = 'https://insight.dash.org/insight-api/txs/?address=' . $address;
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -925,7 +1017,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://explorer.dcrdata.org/insight/api/txs/?address=' . $address;
 		
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -973,9 +1065,9 @@ class NMM_Blockchain {
 
 	public static function get_doge_address_transactions($address) {
 
-		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address;
+		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address . self::blockcypher_token_query(false);
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1021,7 +1113,7 @@ class NMM_Blockchain {
         // digiexplorer.info runs an Esplora API (same interface as mempool.space)
         $request = 'https://digiexplorer.info/api/address/' . rawurlencode($address) . '/txs';
 
-        $response = wp_remote_get($request);
+        $response = self::api_get($request);
 
         if (is_wp_error($response) || $response['response']['code'] !== 200) {
             NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1047,7 +1139,7 @@ class NMM_Blockchain {
 
         // Esplora omits confirmation counts, so fetch the tip height
         $tipHeight = 0;
-        $tipResponse = wp_remote_get('https://digiexplorer.info/api/blocks/tip/height');
+        $tipResponse = self::api_get('https://digiexplorer.info/api/blocks/tip/height');
         if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
             $tipHeight = (int) $tipResponse['body'];
         }
@@ -1085,7 +1177,7 @@ class NMM_Blockchain {
 		// Primary: public Hyperion history API (keyless)
 		$request = 'https://eos.hyperion.eosrio.io/v2/history/get_actions?account=' . rawurlencode($address) . '&filter=eosio.token%3Atransfer&limit=50&sort=desc';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (!is_wp_error($response) && $response['response']['code'] === 200) {
 			$body = json_decode($response['body']);
@@ -1127,7 +1219,7 @@ class NMM_Blockchain {
 		// Fallback: Greymass v1 history (deprecated but maintained)
 		$request2 = 'https://eos.greymass.com/v1/history/get_actions';
 
-		$response2 = wp_remote_post($request2, array(
+		$response2 = self::api_post($request2, array(
 			'headers' => array('Content-Type' => 'application/json'),
 			'body' => json_encode(array(
 				'account_name' => $address,
@@ -1199,7 +1291,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://blockscout.com/etc/mainnet/api?module=account&action=txlist&address=' . $address;
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1249,7 +1341,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://eth.blockscout.com/api?module=account&action=txlist&address=' . $address . '&startblock=0&endblock=99999999&sort=desc';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1299,7 +1391,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://groestlsight.groestlcoin.org/api/txs?address=' . $address;
 		
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1349,7 +1441,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://node08.lisk.io/api/transactions?recipientId=' . $address . '&limit=10&offset=0&sort=amount%3Aasc';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1393,13 +1485,13 @@ class NMM_Blockchain {
 	public static function get_ltc_address_transactions($address) {
 		$userAgentString = self::get_user_agent_string();
 
-        $request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . $address;
+        $request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . $address . self::blockcypher_token_query(false);
 
         $args = array(
 			'user-agent' => $userAgentString
 		);
 
-		$response = wp_remote_get($request, $args);
+		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
             $result = array(
@@ -1444,7 +1536,7 @@ class NMM_Blockchain {
 		//$request = 'https://explorer.deeponion.org/ext/getaddress/' . $address;
 		$request = 'http://onionexplorer.youngwebsolutions.com:3001/ext/getaddress/' . $address;
 		
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1490,7 +1582,7 @@ class NMM_Blockchain {
 
 				$request2 = 'https://explorer.deeponion.org/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
 				
-				$response2 = wp_remote_get($request2);
+				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
 					continue;
@@ -1535,7 +1627,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://apilist.tronscan.org/api/transaction?address=' . $address;
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1583,7 +1675,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://nodes.wavesnodes.com/transactions/address/' . $address . '/limit/100';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1629,7 +1721,7 @@ class NMM_Blockchain {
 		
 		$request = 'http://108.61.168.86:7890/account/transfers/incoming?address=' . $address;
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1673,7 +1765,7 @@ class NMM_Blockchain {
 	public static function get_xlm_address_transactions($address) {
 		$request = 'https://horizon.stellar.org/accounts/' . $address . '/payments?order=desc';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1731,7 +1823,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://blockbook.myralicious.com/api/address/' . $address;
 		
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1761,7 +1853,7 @@ class NMM_Blockchain {
 
 				$request2 = 'https://blockbook.myralicious.com/api/tx/' . $transactionId;
 				
-				$response2 = wp_remote_get($request2);
+				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
 					continue;
@@ -1793,7 +1885,7 @@ class NMM_Blockchain {
 		
 		$request = 'https://api.xrpscan.com/api/v1/account/' . $address . '/transactions';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1851,7 +1943,7 @@ class NMM_Blockchain {
 		// TzKT: applied incoming transactions; amount is in mutez (1e-6 XTZ)
 		$request = 'https://api.tzkt.io/v1/operations/transactions?target=' . rawurlencode($address) . '&status=applied&limit=50&sort.desc=id';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1900,7 +1992,7 @@ class NMM_Blockchain {
 		// Blockchair outputs filtered by recipient; values are in zatoshi (1e-8 ZEC)
 		$request = 'https://api.blockchair.com/zcash/outputs?q=recipient(' . rawurlencode($address) . ')&limit=50&s=block_id(desc)';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
@@ -1949,7 +2041,7 @@ class NMM_Blockchain {
 	public static function get_erc20_address_transactions($cryptoId, $address) {
 		$request = 'https://eth.blockscout.com/api?module=account&action=tokentx&address=' . $address . '&startblock=0&endblock=999999999&sort=asc';
 
-		$response = wp_remote_get($request);
+		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));

@@ -105,6 +105,9 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 == Changelog ==
 
 = 2.6.0 =
+* Payment checks now run through Action Scheduler (bundled with WooCommerce) every 60 seconds instead of a 30-second WP-Cron loop, with automatic migration and WP-Cron fallback
+* Explorer API calls now use per-host exponential backoff when rate-limited or failing, and respect per-host request spacing (chainz)
+* New optional BlockCypher API token setting raises LTC/DOGE verification rate limits for busier stores
 * Security hardening: all plugin database queries now use $wpdb->prepare(); the MPK preview AJAX endpoint requires a nonce and admin capability; stored address buffers are unserialized with object instantiation disabled; customer-facing output (payment message, addresses, QR URLs) is escaped
 * EOS payment verification restored: dead EOSPark API (and its hardcoded key) replaced with the public Hyperion history API, with Greymass as fallback
 * Restored payment verification for 6 more coins whose explorers had shut down: ADA (Koios), BSV (WhatsOnChain), DGB (digiexplorer.info), XTZ (TzKT), ZEC (Blockchair), BLK (explorer.blackcoin.nl)
