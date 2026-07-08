@@ -34,8 +34,13 @@ class bcmath_Utils
 {
     public static function bchexdec($hex) {
         if (extension_loaded('bcmath') && USE_EXT=='BCMATH') {
+            // strip a leading 0x/0X; hexdec() deprecates non-hex characters on PHP 8
+            if (strpos($hex, '0x') === 0 || strpos($hex, '0X') === 0) {
+                $hex = substr($hex, 2);
+            }
+
             $len = strlen($hex);
-            $dec = '';
+            $dec = '0';
             for ($i = 1; $i <= $len; $i++)
                 $dec = bcadd($dec, bcmul(strval(hexdec($hex[$i - 1])), bcpow('16', strval($len - $i))));
 

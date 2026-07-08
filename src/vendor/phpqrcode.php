@@ -955,7 +955,7 @@
                 }
             }
             
-            ImageDestroy($image);
+            unset($image);
         }
     
         //----------------------------------------------------------------------
@@ -970,7 +970,7 @@
                 ImageJpeg($image, $filename, $q);            
             }
             
-            ImageDestroy($image);
+            unset($image);
         }
     
         //----------------------------------------------------------------------
@@ -999,7 +999,7 @@
             
             $target_image =ImageCreate($imgW * $pixelPerPoint, $imgH * $pixelPerPoint);
             ImageCopyResized($target_image, $base_image, 0, 0, 0, 0, $imgW * $pixelPerPoint, $imgH * $pixelPerPoint, $imgW, $imgH);
-            ImageDestroy($base_image);
+            unset($base_image);
             
             return $target_image;
         }
@@ -2941,14 +2941,14 @@
 
             if($this->count < $this->dataLength) {
                 $row = $this->count % $this->blocks;
-                $col = $this->count / $this->blocks;
+                $col = (int)($this->count / $this->blocks);
                 if($col >= $this->rsblocks[0]->dataLength) {
                     $row += $this->b1;
                 }
                 $ret = $this->rsblocks[$row]->data[$col];
             } else if($this->count < $this->dataLength + $this->eccLength) {
                 $row = ($this->count - $this->dataLength) % $this->blocks;
-                $col = ($this->count - $this->dataLength) / $this->blocks;
+                $col = (int)(($this->count - $this->dataLength) / $this->blocks);
                 $ret = $this->rsblocks[$row]->ecc[$col];
             } else {
                 return 0;
