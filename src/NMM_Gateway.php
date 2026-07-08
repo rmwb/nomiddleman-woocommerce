@@ -448,10 +448,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $selectedPriceApis = $reduxSettings['selected_price_apis'];
 
         if (in_array('0', $selectedPriceApis)) {
-            $ccPrice = NMM_Exchange::get_cryptocompare_price($cryptoId, $updateInterval);        
+            $coingeckoPrice = NMM_Exchange::get_coingecko_price($cryptoId, $updateInterval);
 
-            if ($ccPrice > 0) {
-                $prices[] = $ccPrice;
+            if ($coingeckoPrice > 0) {
+                $prices[] = $coingeckoPrice;
             }
         }
 
