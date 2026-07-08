@@ -144,29 +144,28 @@ class NMM_Gateway extends WC_Payment_Gateway {
         wp_enqueue_style('nmm-styles', $cssPath);
         
         try {
-            $orderAddressExists = get_post_meta($order_id, 'wallet_address');
-            
+            $order = wc_get_order($order_id);
+            $existingWalletAddress = $order->get_meta('wallet_address');
+
             // if we already set this then we are on a page refresh, so handle refresh
-            if (count($orderAddressExists) > 0) {
+            if (!empty($existingWalletAddress)) {
 
                 $this->handle_thank_you_refresh(
-                    get_post_meta($order_id, 'crypto_type_id', true),
-                    get_post_meta($order_id, 'wallet_address', true),
-                    get_post_meta($order_id, 'crypto_amount', true),
+                    $order->get_meta('crypto_type_id'),
+                    $existingWalletAddress,
+                    $order->get_meta('crypto_amount'),
                     $order_id);
-                
+
                 return;
             }
 
-            $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));            
-            
-            $order = new WC_Order($order_id);
+            $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
             $chosenCryptoId = WC()->session->get('chosen_crypto_id');
             $crypto = $this->cryptos[$chosenCryptoId];
             $cryptoId = $crypto->get_id();
 
-            update_post_meta($order_id, 'crypto_type_id', $cryptoId);
+            $order->update_meta_data('crypto_type_id', $cryptoId);
             // get current price of crypto
 
             $cryptoPerUsd = $this->get_crypto_value_in_usd($cryptoId, $crypto->get_update_interval());
@@ -196,7 +195,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // format the crypto amount based on crypto
             $formattedCryptoTotal = NMM_Cryptocurrencies::get_price_string($cryptoId, $cryptoTotal);
 
-            update_post_meta($order_id, 'crypto_amount', $formattedCryptoTotal);
+            $order->update_meta_data('crypto_amount', $formattedCryptoTotal);
 
             NMM_Util::log(__FILE__, __LINE__, 'Crypto total: ' . $cryptoTotal . ' Formatted Total: ' . $formattedCryptoTotal);
 
@@ -257,9 +256,9 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // For email
             WC()->session->set($cryptoId . '_amount', $formattedCryptoTotal);
 
-            // For customer reference and to handle refresh of thank you page            
-            update_post_meta($order_id, 'wallet_address', $orderWalletAddress);
-            
+            // For customer reference and to handle refresh of thank you page
+            $order->update_meta_data('wallet_address', $orderWalletAddress);
+
 
             // Emails are fired once we update status to on-hold, so hook additional email details here
             add_action('woocommerce_email_order_details', array( $this, 'additional_email_details' ), 10, 4);
@@ -270,7 +269,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             $this->output_thank_you_html($crypto, $orderWalletAddress, $formattedCryptoTotal, $order_id);
         }
         catch ( \Exception $e ) {
-            $order = new WC_Order($order_id);
+            $order = wc_get_order($order_id);
 
             // cancel order if something went wrong
             $order->update_status('wc-failed', 'Error Message: ' . $e->getMessage());
@@ -290,7 +289,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $chosenCrypto = WC()->session->get('chosen_crypto_id');
         $crypto =  $this->cryptos[$chosenCrypto];
         $orderCryptoTotal = WC()->session->get($crypto->get_id() . '_amount');
-        $orderWalletAddress = get_post_meta($order->get_id(), 'wallet_address', true);
+        $orderWalletAddress = $order->get_meta('wallet_address');
         $orderId = $order->get_id();
         
         $qrCode = $this->get_qr_code($crypto, $orderWalletAddress, $orderCryptoTotal, $orderId);

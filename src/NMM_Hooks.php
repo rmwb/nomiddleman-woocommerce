@@ -28,8 +28,14 @@ function NMM_change_partial_email_heading($heading, $order) {
 function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrderStatus, $newOrderStatus ) {	
   
 	$paymentAmount = 0.0;
-	
-	$paymentAmount = get_post_meta($orderId, 'crypto_amount', true);
+
+	$order = wc_get_order($orderId);
+
+	if (!$order) {
+		return;
+	}
+
+	$paymentAmount = $order->get_meta('crypto_amount');
 
 	// this order was not made by us
 	if ($paymentAmount === 0.0 || !$paymentAmount) {

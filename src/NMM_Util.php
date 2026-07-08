@@ -51,7 +51,7 @@ class NMM_Util {
 	   $targetString='';
 	   for ($offset=0; $offset<$len; $offset++)
 	   {
-	     switch($c=$str{$offset})
+	     switch($c=$str[$offset])
 	     {
 	         case "'":
 	         // Escapes this quote only if its not preceded by an unescaped backslash

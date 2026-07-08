@@ -15,6 +15,14 @@ License URI: http://www.gnu.org/licenses/gpl-3.0.html
 */
 
 add_action('plugins_loaded', 'NMM_init_gateways');
+add_action('before_woocommerce_init', 'NMM_declare_wc_feature_compatibility');
+
+function NMM_declare_wc_feature_compatibility() {
+    if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true);
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('cart_checkout_blocks', __FILE__, true);
+    }
+}
 register_activation_hook(__FILE__, 'NMM_activate');
 register_deactivation_hook(__FILE__, 'NMM_deactivate');
 register_uninstall_hook(__FILE__, 'NMM_uninstall');

@@ -108,18 +108,17 @@ class NMM_Payment {
 				$paymentRepo->set_status($orderId, $orderAmount, 'paid');
 				$paymentRepo->set_hash($orderId, $orderAmount, $txHash);
 
-				$order = new WC_Order($orderId);
+				$order = wc_get_order($orderId);
 				$orderNote = sprintf(
 						'Order payment of %s %s verified at %s. Transaction Hash: %s',
 						NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $transactionAmount / (10**$crypto->get_round_precision())),
 						$cryptoId,
 						date('Y-m-d H:i:s', time()),
 						apply_filters('nmm_order_txhash', $txHash, $cryptoId));
-				
-				$order->payment_complete();
-				$order->add_order_note($orderNote);				
 
-				update_post_meta($orderId, 'transaction_hash', $txHash);
+				$order->update_meta_data('transaction_hash', $txHash);
+				$order->payment_complete();
+				$order->add_order_note($orderNote);
 
 				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 			}		
