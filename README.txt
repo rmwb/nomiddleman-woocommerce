@@ -12,7 +12,7 @@ Absolutely the easiest setup in the industry. No registration. No API keys. No m
 == Description ==
 Utilizing the power of blockchain, we provide the only WooCommerce Cryptocurrency Gateway that truly takes out the middleman. Empowering you to accept all major cryptocurrencies directly to your own wallets for free. No middleman fees and open source on <a target="_blank" href="https://github.com/nomiddleman/nomiddleman-woocommerce" alt="Wordpress Cryptocurrency Payment Gateway">Nomiddleman Crypto's Github</a>.
 
-Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 41 other top cryptocurrencies.
+Accept customer payments in Bitcoin, Ethereum, Tether (USDT on Ethereum or Tron), Solana, Litecoin, XRP and 44 other cryptocurrencies. Tested with WordPress 7.0 and WooCommerce 10.8 on PHP 7.4-8.4.
 
 <blockquote>
 = Information =
@@ -21,52 +21,68 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 
 == Supported Cryptocurrencies ==
 
-* Bitcoin - BTC
-* Ethereum - ETH
-* XRP - XRP
-* Monero - XMR
-* Litecoin - LTC
-* Bitcoin Cash - BCH
-* Dash - DASH
-* Dogecoin - DOGE
+51 cryptocurrencies. Every coin can be accepted in Classic Mode (the customer pays, you confirm receipt in your own wallet). Coins listed under automatic verification also support Autopay Mode, which watches the blockchain and completes orders on its own.
+
+Privacy Mode (a fresh HD-wallet address generated from your master public key for every order) is available for: Bitcoin, Bitcore, Dash, Dogecoin, Litecoin, Qtum.
+
+= Automatic payment verification =
+
 * Cardano - ADA
 * Basic Attention Token - BAT
-* Bitcoin Diamond - BCD
-* Bytecoin - BCN
-* Blackcoin - BLK
-* Binance Coin - BNB
+* Bitcoin Cash - BCH
+* BlackCoin - BLK
 * Bitcoin SV - BSV
-* Bitcoin Gold - BTG
-* Bitcore - BTX
+* Bitcoin - BTC
+* Dash - DASH
 * Decred - DCR
 * Digibyte - DGB
-* Eos - EOS
+* Dogecoin - DOGE
+* EOS - EOS
 * Ethereum Classic - ETC
+* Ethereum - ETH
 * Gnosis - GNO
 * Groestlcoin - GRS
-* Gemini Dollar - GUSD
 * Holochain - HOT
 * Chainlink - LINK
-* Lisk - LSK
-* Iota - MIOTA
+* Litecoin - LTC
 * Maker - MKR
 * Melon - MLN
 * OmiseGO - OMG
+* Augur - REP
+* Solana - SOL
+* Tron - TRX
+* USDC - USDC
+* Tether - USDT
+* Tether (TRC-20) - USDTTRX
+* Waves - WAVES
+* Stellar - XLM
+* XRP - XRP
+* Tezos - XTZ
+* Zcash - ZEC
+* 0x - ZRX
+
+= Classic Mode only (manual confirmation) =
+
+Public verification APIs for these coins no longer exist or were never available; you confirm payments in your own wallet.
+
+* Apollo Currency - APL
+* Bitcoin Diamond - BCD
+* Bytecoin - BCN
+* Binance Coin - BNB
+* Bitcoin Gold - BTG
+* Bitcore - BTX
+* Gemini Dollar - GUSD
+* Lisk - LSK
+* Iota - MIOTA
 * DeepOnion - ONION
 * Ontology - ONT
 * Potcoin - POT
 * Qtum - QTUM
-* Augur - REP
-* Tron - TRX
 * VeChain - VET
 * Vericoin - VRC
-* Waves - WAVES
 * NEM - XEM
-* Stellar - XLM
-* MyriadCoin - XMY
-* Tezos - XTZ
-* Zcash - ZEC
-* 0x - ZRX
+* Monero - XMR
+* Myriad - XMY
 
 == Installation ==
 
@@ -79,7 +95,7 @@ Accept customer payments in bitcoin, ethereum, litecoin, XRP, bitcoin cash and 4
 
 == Features ==
 
-* 46 supported cryptocurrencies (Accept BTC, ETH, LTC, XRP, BCH and more)
+* 51 supported cryptocurrencies (BTC, ETH, USDT, SOL, LTC, XRP, BCH and more)
 * Absolute easiest and quickest setup in the industry
 * You control your wallets, you control your keys, you control your crypto
 * No third party punchouts
