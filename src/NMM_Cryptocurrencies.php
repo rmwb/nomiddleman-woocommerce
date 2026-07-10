@@ -104,7 +104,7 @@ class NMM_Cryptocurrencies {
             'USDCBAS' => new NMM_Cryptocurrency('USDCBAS', 'USDC (Base)', 6, 'usdc_logo_small.png', 60, '', false, true, true, '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
 
             // no support
-            'XMR' => new NMM_Cryptocurrency('XMR', 'Monero', 12, 'monero_logo_small.png', 60, 'ɱ', false, false, true, ''),
+            'XMR' => new NMM_Cryptocurrency('XMR', 'Monero', 12, 'monero_logo_small.png', 60, 'ɱ', false, true, true, ''),
             'VRC' => new NMM_Cryptocurrency('VRC', 'Vericoin', 8, 'vericoin_logo_small.png', 60, '', false, false, true, ''),
             'BTG' => new NMM_Cryptocurrency('BTG', 'Bitcoin Gold', 8, 'bitcoingold_logo_small.png', 60, '', false, false, true, ''),
             'VET' => new NMM_Cryptocurrency('VET', 'VeChain', 18, 'vechain_logo_small.png', 60, '', false, false, true, ''),

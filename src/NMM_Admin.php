@@ -261,7 +261,30 @@ class NMM_Admin {
                 </tr>
                 <?php endif; ?>
 
-                <tr class="nmm-requires-mode" data-modes="0,1">
+                <?php if ($cid === 'XMR') : ?>
+                <tr class="nmm-requires-mode" data-modes="1">
+                    <th scope="row">Wallet RPC URL</th>
+                    <td>
+                        <input type="text" class="regular-text" placeholder="http://127.0.0.1:18083/json_rpc"
+                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_url]"
+                               value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_url', '')); ?>" />
+                        <p class="description">Your own monero-wallet-rpc endpoint (a view-only wallet is enough). Each order gets a fresh subaddress and payments are verified through this RPC - your view key never leaves your server. If the RPC runs on another host, protect it with --rpc-login and fill in the credentials below.</p>
+                    </td>
+                </tr>
+                <tr class="nmm-requires-mode" data-modes="1">
+                    <th scope="row">Wallet RPC Login (optional)</th>
+                    <td>
+                        <input type="text" placeholder="username"
+                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_user]"
+                               value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_user', '')); ?>" />
+                        <input type="password" placeholder="password" autocomplete="new-password"
+                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_password]"
+                               value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_password', '')); ?>" />
+                    </td>
+                </tr>
+                <?php endif; ?>
+
+                <tr class="nmm-requires-mode" data-modes="<?php echo ($cid === 'XMR') ? '0' : '0,1'; ?>">
                     <th scope="row">Wallet Addresses</th>
                     <td>
                         <div class="nmm-multi-text" data-field="<?php echo esc_attr($cid); ?>_addresses">

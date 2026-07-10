@@ -51,7 +51,16 @@ class NMM_Validation {
 			// Only enforce mode requirements for cryptos the merchant enabled
 			$cryptoSelected = $newSettings->crypto_selected($cryptoId);
 
-			if ($cryptoSelected && ($newSettings->basic_enabled($cryptoId) || $newSettings->autopay_enabled($cryptoId))) {
+			if ($cryptoId === 'XMR' && $cryptoSelected && $newSettings->autopay_enabled('XMR')) {
+				$rpcUrl = $newSettings->get_xmr_rpc_url();
+
+				if (filter_var($rpcUrl, FILTER_VALIDATE_URL) === false) {
+					$invalidCryptoSettings = true;
+					$atLeastOneInvalidCrypto = true;
+					$errorMessages[] = 'Monero Autopay needs a valid monero-wallet-rpc URL. Disabling Monero.';
+				}
+			}
+			else if ($cryptoSelected && ($newSettings->basic_enabled($cryptoId) || $newSettings->autopay_enabled($cryptoId))) {
 				$carouselAddresses = [];
 				$hasValidWalletAddress = false;
 				$addresses = $newSettings->get_addresses($cryptoId);

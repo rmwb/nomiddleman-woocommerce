@@ -113,6 +113,7 @@ function NMM_init_gateways(){
 
     // Misc
     require_once(plugin_basename('src/NMM_Qr.php'));
+    require_once(plugin_basename('src/NMM_Monero.php'));
     require_once(plugin_basename('src/NMM_Util.php'));
     require_once(plugin_basename('src/NMM_Hooks.php'));
     require_once(plugin_basename('src/NMM_Cron.php'));

@@ -202,6 +202,30 @@ class NMM_Settings {
 		return '24';
 	}
 	
+	public function get_xmr_rpc_url() {
+		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_url', $this->settings)) {
+			return trim((string) $this->settings['XMR_wallet_rpc_url']);
+		}
+
+		return '';
+	}
+
+	public function get_xmr_rpc_user() {
+		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_user', $this->settings)) {
+			return trim((string) $this->settings['XMR_wallet_rpc_user']);
+		}
+
+		return '';
+	}
+
+	public function get_xmr_rpc_password() {
+		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_password', $this->settings)) {
+			return (string) $this->settings['XMR_wallet_rpc_password'];
+		}
+
+		return '';
+	}
+
 	public function get_blockcypher_token() {
 		$tokenKey = 'blockcypher_token';
 

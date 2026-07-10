@@ -255,8 +255,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
             }
             // HD is not enabled, just handle static wallet or carousel mode
             else {
-                $orderWalletAddress = $nmmSettings->get_next_carousel_address($cryptoId);
-                
+                if ($cryptoId === 'XMR' && $nmmSettings->autopay_enabled('XMR')) {
+                    // fresh subaddress per order from the merchant's wallet RPC
+                    $orderWalletAddress = NMM_Monero::create_subaddress($order_id);
+                }
+                else {
+                    $orderWalletAddress = $nmmSettings->get_next_carousel_address($cryptoId);
+                }
+
                 // handle payment verification feature
                 if ($nmmSettings->autopay_enabled($cryptoId)) {
                     $paymentRepo = new NMM_Payment_Repo();

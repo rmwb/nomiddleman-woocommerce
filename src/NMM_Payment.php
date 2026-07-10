@@ -244,6 +244,9 @@ class NMM_Payment {
 			$result = NMM_Blockchain::get_sol_address_transactions($address);
 		}
 		
+		if ($cryptoId === 'XMR') {
+			$result = NMM_Monero::get_address_transactions($address);
+		}
 		// any registered ERC-20 token without an explicit branch above
 		if (!isset($result)) {
 			$cryptos = NMM_Cryptocurrencies::get();
