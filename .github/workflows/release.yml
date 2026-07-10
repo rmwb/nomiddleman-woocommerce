@@ -1,0 +1,53 @@
+name: Release
+
+# Tag a version (git tag v2.7.0 && git push --tags) and this builds an
+# installable plugin zip and publishes a GitHub Release with the matching
+# changelog section from README.txt.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify tag matches plugin version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          header=$(grep -oE '^Version: [0-9.]+' nomiddleman-crypto-woocommerce.php | awk '{print $2}')
+          stable=$(grep -oE '^Stable Tag: [0-9.]+' README.txt | awk '{print $3}')
+          echo "tag=$tag header=$header stable=$stable"
+          [ "$tag" = "$header" ] && [ "$tag" = "$stable" ]
+
+      - name: Build plugin zip
+        run: |
+          # top-level folder must match the installed plugin directory name
+          git archive HEAD \
+            --prefix="nomiddleman-crypto-payments-for-woocommerce/" \
+            -o "nomiddleman-crypto-payments-for-woocommerce-${GITHUB_REF_NAME}.zip"
+          unzip -l "nomiddleman-crypto-payments-for-woocommerce-${GITHUB_REF_NAME}.zip" | tail -3
+
+      - name: Extract changelog section
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v ver="= $tag =" '
+            $0 == ver {found=1; next}
+            found && /^= [0-9]/ {exit}
+            found {print}
+          ' README.txt > release-notes.md
+          echo "---"; cat release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            "nomiddleman-crypto-payments-for-woocommerce-${GITHUB_REF_NAME}.zip"
