@@ -8,10 +8,21 @@ class NMM_Blockchain {
 		'chainz.cryptoid.info' => 10,
 	);
 
+	// Blockscout instance per token; anything unlisted lives on Ethereum mainnet
+	private static $blockscoutHosts = array(
+		'USDTPOL' => 'polygon.blockscout.com',
+		'USDCPOL' => 'polygon.blockscout.com',
+		'USDTARB' => 'arbitrum.blockscout.com',
+		'USDCARB' => 'arbitrum.blockscout.com',
+		'USDCBAS' => 'base.blockscout.com',
+	);
+
 	// Rate-limit-aware wrapper around wp_remote_get: skips hosts that are in
 	// backoff (from earlier 429/5xx responses) and records failures so a
 	// misbehaving or throttling API is left alone with exponential backoff.
 	private static function api_get($request, $args = array()) {
+		// lets merchants point a coin at their own node or explorer instance
+		$request = apply_filters('nmm_api_url', $request);
 		$host = (string) parse_url($request, PHP_URL_HOST);
 
 		if (self::host_unavailable($host)) {
@@ -26,6 +37,7 @@ class NMM_Blockchain {
 	}
 
 	private static function api_post($request, $args = array()) {
+		$request = apply_filters('nmm_api_url', $request);
 		$host = (string) parse_url($request, PHP_URL_HOST);
 
 		if (self::host_unavailable($host)) {
@@ -2039,7 +2051,19 @@ class NMM_Blockchain {
 	}
 
 	public static function get_erc20_address_transactions($cryptoId, $address) {
-		$request = 'https://eth.blockscout.com/api?module=account&action=tokentx&address=' . $address . '&page=1&offset=100&sort=desc';
+		$cryptos = NMM_Cryptocurrencies::get();
+		$contract = isset($cryptos[$cryptoId]) ? (string) $cryptos[$cryptoId]->get_erc20_contract() : '';
+
+		if ($contract === '') {
+			return array(
+				'result' => 'error',
+				'message' => 'Unknown token',
+			);
+		}
+
+		$host = isset(self::$blockscoutHosts[$cryptoId]) ? self::$blockscoutHosts[$cryptoId] : 'eth.blockscout.com';
+
+		$request = 'https://' . $host . '/api?module=account&action=tokentx&address=' . $address . '&contractaddress=' . $contract . '&page=1&offset=100&sort=desc';
 
 		$response = self::api_get($request);
 
@@ -2070,7 +2094,9 @@ class NMM_Blockchain {
 		foreach($rawTransactions as $rawTransaction) {
 			
 			
-			if (strtolower($rawTransaction->to) === strtolower($address) && $rawTransaction->tokenSymbol === $cryptoId) {
+			if (strtolower($rawTransaction->to) === strtolower($address)
+				&& isset($rawTransaction->contractAddress)
+				&& strtolower($rawTransaction->contractAddress) === strtolower($contract)) {
 
 				$transactions[] = new NMM_Transaction($rawTransaction->value,
 												  $rawTransaction->confirmations,

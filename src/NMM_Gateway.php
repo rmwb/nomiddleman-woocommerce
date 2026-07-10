@@ -154,6 +154,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
     public function thank_you_page($order_id) {
         $cssPath = NMM_PLUGIN_DIR . '/assets/css/nmm-thank-you-page.css';
         wp_enqueue_style('nmm-styles', $cssPath);
+        wp_enqueue_script('nmm-pay', NMM_PLUGIN_DIR . '/assets/js/nmm-pay.js', array(), NMM_VERSION, true);
         
         try {
             $order = wc_get_order($order_id);
@@ -161,6 +162,11 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
             // if we already set this then we are on a page refresh, so handle refresh
             if (!empty($existingWalletAddress)) {
+
+                if ($order->is_paid()) {
+                    echo '<p class="nmm-status-paid">Payment received - thank you! Your order is being processed.</p>';
+                    return;
+                }
 
                 $this->handle_thank_you_refresh(
                     $order->get_meta('crypto_type_id'),
@@ -318,7 +324,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             return;
         }
 
-        $qrData = $this->get_qr_prefix($crypto) . ':' . $orderWalletAddress . '?amount=' . $orderCryptoTotal;
+        $qrData = NMM_Qr::payment_uri($crypto, $orderWalletAddress, $orderCryptoTotal);
 
         // embedded as an inline (CID) attachment when PHPMailer sends this
         // email; mailers that bypass PHPMailer simply show the text details
@@ -362,25 +368,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
         return $selectOptionArray;
     }
 
-    private function get_qr_prefix($crypto) {
-        // ids whose derived name would make a broken URI scheme; SOL's
-        // 'solana:' prefix is the real Solana Pay scheme and needs no override
-        $overrides = array('USDTTRX' => 'tether');
-
-        if (array_key_exists($crypto->get_id(), $overrides)) {
-            return $overrides[$crypto->get_id()];
-        }
-
-        return strtolower(str_replace(' ', '', $crypto->get_name()));
-    }
-
     private function output_thank_you_html($crypto, $orderWalletAddress, $cryptoTotal, $orderId) {
         $formattedPrice = NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $cryptoTotal);
         $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
         $customerMessage = apply_filters('nmm_customer_message', $nmmSettings->get_customer_payment_message($crypto), $crypto, $orderId, $formattedPrice, $orderWalletAddress);
 
-        $qrData = $this->get_qr_prefix($crypto) . ':' . $orderWalletAddress . '?amount=' . $cryptoTotal;
+        $qrData = NMM_Qr::payment_uri($crypto, $orderWalletAddress, $cryptoTotal);
 
         // admin-entered HTML; allow post-safe markup but never scripts
         echo wp_kses_post($customerMessage);
@@ -433,8 +427,35 @@ class NMM_Gateway extends WC_Payment_Gateway {
             </li>
         </ul>
         
-        <?php        
-    }    
+        <?php
+        $order = wc_get_order($orderId);
+        $orderKey = $order ? $order->get_order_key() : '';
+
+        $isEvm = ($crypto->get_id() === 'ETH') || ($crypto->is_erc20_token() && $crypto->get_id() !== 'USDTTRX');
+        ?>
+        <div class="nmm-pay-actions">
+            <?php if ($isEvm) : ?>
+                <button type="button" id="nmm-wallet-pay" class="button alt" style="display:none;"
+                        data-to="<?php echo esc_attr($orderWalletAddress); ?>"
+                        data-contract="<?php echo esc_attr($crypto->is_erc20_token() ? $crypto->get_erc20_contract() : ''); ?>"
+                        data-chain="<?php echo esc_attr(NMM_Cryptocurrencies::evm_chain_id($crypto->get_id())); ?>"
+                        data-units="<?php echo esc_attr(NMM_Qr::to_base_units($cryptoTotal, $crypto->get_round_precision())); ?>">
+                    Pay in browser wallet
+                </button>
+                <p id="nmm-wallet-msg" aria-live="polite"></p>
+            <?php elseif ($crypto->get_id() === 'SOL') : ?>
+                <p><a class="button alt" href="<?php echo esc_url($qrData); ?>">Open in Solana wallet</a></p>
+            <?php endif; ?>
+
+            <p id="nmm-payment-status" class="nmm-payment-status"
+               data-order="<?php echo esc_attr($orderId); ?>"
+               data-key="<?php echo esc_attr($orderKey); ?>"
+               data-ajax="<?php echo esc_url(admin_url('admin-ajax.php')); ?>">
+                Waiting for payment&hellip; this page updates automatically.
+            </p>
+        </div>
+        <?php
+    }
 
     private function handle_thank_you_refresh($chosenCrypto, $orderWalletAddress, $cryptoTotal, $orderId) {
         $this->output_thank_you_html($this->cryptos[$chosenCrypto], $orderWalletAddress, $cryptoTotal, $orderId);

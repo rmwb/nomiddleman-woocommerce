@@ -211,6 +211,47 @@ function NMM_display_flash_notices() {
     }
 }
 
+// Order-key-authenticated payment status for the thank-you page poller.
+// The key is only known to the customer who placed the order.
+function NMM_order_status_ajax() {
+	$orderId = isset($_GET['order_id']) ? absint($_GET['order_id']) : 0;
+	$key = isset($_GET['key']) ? sanitize_text_field(wp_unslash($_GET['key'])) : '';
+
+	$order = wc_get_order($orderId);
+
+	if (!$order || $key === '' || !hash_equals($order->get_order_key(), $key)) {
+		wp_send_json_error(null, 403);
+	}
+
+	$paid = $order->is_paid();
+	$underpaid = false;
+	$received = '';
+	$expected = '';
+
+	if (!$paid) {
+		global $wpdb;
+		$tableName = $wpdb->prefix . NMM_HD_TABLE;
+
+		$row = $wpdb->get_row($wpdb->prepare(
+			"SELECT `status`, `total_received`, `order_amount` FROM `$tableName` WHERE `order_id` = %d ORDER BY `id` DESC LIMIT 1",
+			$orderId
+		), ARRAY_A);
+
+		if ($row && $row['status'] === 'underpaid') {
+			$underpaid = true;
+			$received = $row['total_received'];
+			$expected = $row['order_amount'];
+		}
+	}
+
+	wp_send_json_success(array(
+		'paid' => $paid,
+		'underpaid' => $underpaid,
+		'received' => $received,
+		'expected' => $expected,
+	));
+}
+
 function NMM_first_mpk_address_ajax() {
 
 		check_ajax_referer('nmm_first_mpk_address');

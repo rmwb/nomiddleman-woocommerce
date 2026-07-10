@@ -10,6 +10,20 @@ class NMM_Cryptocurrencies {
 	// Coins whose Privacy Mode (HD) balance API no longer exists
 	private static $hdUnverifiable = array('XMY');
 
+	// EVM chain ids for coins that live on a chain other than Ethereum mainnet
+	private static $evmChainIds = array(
+		'USDTPOL' => 137,
+		'USDCPOL' => 137,
+		'USDTARB' => 42161,
+		'USDCARB' => 42161,
+		'USDCBAS' => 8453,
+	);
+
+	// chain id for EVM-native coins and tokens (1 = Ethereum mainnet)
+	public static function evm_chain_id($cryptoId) {
+		return isset(self::$evmChainIds[$cryptoId]) ? self::$evmChainIds[$cryptoId] : 1;
+	}
+
 	// The coin supports Autopay AND a working verification API exists for it
 	public static function autopay_verifiable($cryptoId) {
 		$cryptos = self::get();
@@ -81,6 +95,13 @@ class NMM_Cryptocurrencies {
             'ZRX' => new NMM_Cryptocurrency('ZRX', '0x', 18, '0x_logo_small.png', 60, '', false, true, true, '0xe41d2489571d322189246dafa5ebde1f4699f498'),
             'USDC' => new NMM_Cryptocurrency('USDC', 'USDC', 6, 'usdc_logo_small.png', 60, '', false, true, true, '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'),
             'USDT' => new NMM_Cryptocurrency('USDT', 'Tether', 6, 'tether_logo_small.png', 60, '', false, true, true, '0xdAC17F958D2ee523a2206206994597C13D831ec7'),
+            'DAI' => new NMM_Cryptocurrency('DAI', 'Dai', 18, 'dai_logo_small.png', 60, '', false, true, true, '0x6B175474E89094C44Da98b954EedeAC495271d0F'),
+            'PYUSD' => new NMM_Cryptocurrency('PYUSD', 'PayPal USD', 6, 'pyusd_logo_small.png', 60, '', false, true, true, '0x6c3ea9036406852006290770BEdFcAbA0e23A0e8'),
+            'USDTPOL' => new NMM_Cryptocurrency('USDTPOL', 'Tether (Polygon)', 6, 'tether_logo_small.png', 60, '', false, true, true, '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'),
+            'USDCPOL' => new NMM_Cryptocurrency('USDCPOL', 'USDC (Polygon)', 6, 'usdc_logo_small.png', 60, '', false, true, true, '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'),
+            'USDTARB' => new NMM_Cryptocurrency('USDTARB', 'Tether (Arbitrum)', 6, 'tether_logo_small.png', 60, '', false, true, true, '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'),
+            'USDCARB' => new NMM_Cryptocurrency('USDCARB', 'USDC (Arbitrum)', 6, 'usdc_logo_small.png', 60, '', false, true, true, '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'),
+            'USDCBAS' => new NMM_Cryptocurrency('USDCBAS', 'USDC (Base)', 6, 'usdc_logo_small.png', 60, '', false, true, true, '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
 
             // no support
             'XMR' => new NMM_Cryptocurrency('XMR', 'Monero', 12, 'monero_logo_small.png', 60, 'ɱ', false, false, true, ''),
@@ -199,7 +220,13 @@ class NMM_Cryptocurrencies {
     }
 
 	public static function is_valid_wallet_address($cryptoId, $address) {
-            
+
+        // every ERC-20 style token shares the 0x address form
+        $cryptos = self::get();
+        if (array_key_exists($cryptoId, $cryptos) && $cryptos[$cryptoId]->is_erc20_token()) {
+            return preg_match('/^0x[a-fA-F0-9]{40}$/', $address);
+        }
+
         if ($cryptoId === 'BTC') {            
             return preg_match('/^[13][a-km-zA-HJ-NP-Z0-9]{24,42}|bc[a-z0-9]{8,87}/', $address);
         }

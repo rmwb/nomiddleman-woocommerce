@@ -244,6 +244,17 @@ class NMM_Payment {
 			$result = NMM_Blockchain::get_sol_address_transactions($address);
 		}
 		
+		// any registered ERC-20 token without an explicit branch above
+		if (!isset($result)) {
+			$cryptos = NMM_Cryptocurrencies::get();
+			if (isset($cryptos[$cryptoId]) && $cryptos[$cryptoId]->is_erc20_token()) {
+				$result = NMM_Blockchain::get_erc20_address_transactions($cryptoId, $address);
+			}
+			else {
+				$result = array('result' => 'error', 'message' => 'No verification available');
+			}
+		}
+
 		if ($result['result'] === 'error') {			
 			NMM_Util::log(__FILE__, __LINE__, 'BAD API CALL');
 			throw new \Exception('Could not reach external service to do auto payment processing.');

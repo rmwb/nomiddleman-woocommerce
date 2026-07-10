@@ -11,6 +11,60 @@ class NMM_Qr {
 	private static $emailImages = array();
 	private static $mailerHooked = false;
 
+	// decimal coin amount -> integer base units as a string (no float rounding)
+	public static function to_base_units($amountDecimal, $precision) {
+		$amount = trim((string) $amountDecimal);
+
+		if (!is_numeric($amount)) {
+			return '0';
+		}
+
+		$units = bcmul($amount, bcpow('10', (string) (int) $precision, 0), 0);
+
+		return ltrim($units, '+');
+	}
+
+	/**
+	 * Wallet-scannable payment URI for a coin:
+	 * - EVM native (ETH):   EIP-681  ethereum:<to>@<chain>?value=<wei>
+	 * - EVM tokens:         EIP-681  ethereum:<contract>@<chain>/transfer?address=<to>&uint256=<units>
+	 * - SOL:                Solana Pay  solana:<to>?amount=<decimal>
+	 * - XMR:                monero:<to>?tx_amount=<decimal>
+	 * - everything else:    BIP-21 style  <name>:<to>?amount=<decimal>
+	 */
+	public static function payment_uri($crypto, $address, $amountDecimal) {
+		$cryptoId = $crypto->get_id();
+
+		if ($cryptoId === 'ETH') {
+			return 'ethereum:' . $address . '@1?value=' . self::to_base_units($amountDecimal, $crypto->get_round_precision());
+		}
+
+		$contract = $crypto->get_erc20_contract();
+		if (is_string($contract) && $contract !== '') {
+			$chainId = NMM_Cryptocurrencies::evm_chain_id($cryptoId);
+
+			return 'ethereum:' . $contract . '@' . $chainId . '/transfer?address=' . $address
+				. '&uint256=' . self::to_base_units($amountDecimal, $crypto->get_round_precision());
+		}
+
+		if ($cryptoId === 'SOL') {
+			return 'solana:' . $address . '?amount=' . $amountDecimal;
+		}
+
+		if ($cryptoId === 'XMR') {
+			return 'monero:' . $address . '?tx_amount=' . $amountDecimal;
+		}
+
+		if ($cryptoId === 'USDTTRX') {
+			// no cross-wallet URI standard on Tron; neutral scheme, address is copyable text
+			return 'tether:' . $address . '?amount=' . $amountDecimal;
+		}
+
+		$prefix = strtolower(str_replace(' ', '', $crypto->get_name()));
+
+		return $prefix . ':' . $address . '?amount=' . $amountDecimal;
+	}
+
 	// matrix of '1'/'0' strings from the bundled encoder, highest error correction
 	private static function matrix($data) {
 		return QRcode::text($data, false, QR_ECLEVEL_H);

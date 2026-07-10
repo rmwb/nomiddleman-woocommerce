@@ -55,6 +55,13 @@ class NMM_Exchange {
         'MIOTA' => 'iota',
         'USDT' => 'tether',
         'USDTTRX' => 'tether',
+        'USDTPOL' => 'tether',
+        'USDTARB' => 'tether',
+        'USDCPOL' => 'usd-coin',
+        'USDCARB' => 'usd-coin',
+        'USDCBAS' => 'usd-coin',
+        'DAI' => 'dai',
+        'PYUSD' => 'paypal-usd',
         'SOL' => 'solana',
     );
 

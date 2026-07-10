@@ -135,6 +135,10 @@ function NMM_init_gateways(){
         add_action('wp_ajax_firstmpkaddress', 'NMM_first_mpk_address_ajax');
     }
 
+    // thank-you page payment status poller (guests included)
+    add_action('wp_ajax_nmm_order_status', 'NMM_order_status_ajax');
+    add_action('wp_ajax_nopriv_nmm_order_status', 'NMM_order_status_ajax');
+
     NMM_Register_Extensions();
     NMM_update_hd_table();
 
