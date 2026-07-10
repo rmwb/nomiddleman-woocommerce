@@ -10,6 +10,10 @@ if (!defined('MINUTE_IN_SECONDS')) define('MINUTE_IN_SECONDS', 60);
 if (!defined('HOUR_IN_SECONDS')) define('HOUR_IN_SECONDS', 3600);
 if (!defined('NMM_REDUX_ID')) define('NMM_REDUX_ID', 'nmmpro_redux_options');
 
+if (!function_exists('apply_filters')) {
+	function apply_filters($tag, $value) { return $value; }
+}
+
 class WP_Error_Stub {}
 
 function is_wp_error($thing) {

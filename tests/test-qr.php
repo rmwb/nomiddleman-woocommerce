@@ -14,6 +14,8 @@ function add_action($hook, $cb) { $GLOBALS['nmm_test_hooks'][$hook][] = $cb; }
 
 $root = dirname(__DIR__);
 require $root . '/src/vendor/phpqrcode.php';
+require $root . '/src/NMM_Cryptocurrency.php';
+require $root . '/src/NMM_Cryptocurrencies.php';
 require $root . '/src/NMM_Qr.php';
 
 $uri = 'bitcoin:1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa?amount=0.5';
@@ -56,6 +58,19 @@ foreach ($GLOBALS['nmm_test_hooks']['phpmailer_init'] as $cb) {
 	call_user_func($cb, $stub2);
 }
 ok('stash cleared after attach', count($stub2->attached) === 0);
+
+// --- payment URI construction ---
+$cryptos = NMM_Cryptocurrencies::get();
+ok('uri: BTC bip21', NMM_Qr::payment_uri($cryptos['BTC'], '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', '0.5')
+	=== 'bitcoin:1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa?amount=0.5');
+ok('uri: ETH eip681 wei', NMM_Qr::payment_uri($cryptos['ETH'], '0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B', '0.05')
+	=== 'ethereum:0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B@1?value=50000000000000000');
+ok('uri: USDT token transfer', NMM_Qr::payment_uri($cryptos['USDT'], '0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B', '12.5')
+	=== 'ethereum:0xdAC17F958D2ee523a2206206994597C13D831ec7@1/transfer?address=0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B&uint256=12500000');
+ok('uri: USDCBAS chain 8453', strpos(NMM_Qr::payment_uri($cryptos['USDCBAS'], '0xAb', '1'), '@8453/transfer?') !== false);
+ok('uri: SOL solana pay', NMM_Qr::payment_uri($cryptos['SOL'], 'So11111111111111111111111111111111111111112', '0.25')
+	=== 'solana:So11111111111111111111111111111111111111112?amount=0.25');
+ok('uri: XMR tx_amount', NMM_Qr::payment_uri($cryptos['XMR'], '44AFFq', '1.5') === 'monero:44AFFq?tx_amount=1.5');
 
 // --- content round-trip (when a decoder is available) ---
 exec('command -v zbarimg 2>/dev/null', $out, $noZbar);

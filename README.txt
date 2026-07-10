@@ -5,18 +5,18 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.7.0
+Stable Tag: 2.8.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
 == Description ==
 Utilizing the power of blockchain, we provide the only WooCommerce Cryptocurrency Gateway that truly takes out the middleman. Empowering you to accept all major cryptocurrencies directly to your own wallets for free. No middleman fees and open source on <a target="_blank" href="https://github.com/rmwb/nomiddleman-woocommerce" alt="WordPress Cryptocurrency Payment Gateway">GitHub</a>.
 
-Accept customer payments in Bitcoin, Ethereum, Tether (USDT on Ethereum or Tron), Solana, Litecoin, XRP and 44 other cryptocurrencies. Tested with WordPress 7.0 and WooCommerce 10.8 on PHP 7.4-8.4.
+Accept customer payments in Bitcoin, Ethereum, Tether (USDT on Ethereum or Tron), Solana, Litecoin, XRP and 51 other cryptocurrencies. Tested with WordPress 7.0 and WooCommerce 10.8 on PHP 7.4-8.4.
 
 == Supported Cryptocurrencies ==
 
-51 cryptocurrencies. Every coin can be accepted in Classic Mode (the customer pays, you confirm receipt in your own wallet). Coins listed under automatic verification also support Autopay Mode, which watches the blockchain and completes orders on its own.
+58 cryptocurrencies. Every coin can be accepted in Classic Mode (the customer pays, you confirm receipt in your own wallet). Coins listed under automatic verification also support Autopay Mode, which watches the blockchain and completes orders on its own. Monero Autopay verifies through your own monero-wallet-rpc (view-only wallet), so each order gets a fresh subaddress and your view key never leaves your server.
 
 Privacy Mode (a fresh HD-wallet address generated from your master public key for every order) is available for: Bitcoin, Bitcore, Dash, Dogecoin, Litecoin, Qtum.
 
@@ -28,6 +28,7 @@ Privacy Mode (a fresh HD-wallet address generated from your master public key fo
 * BlackCoin - BLK
 * Bitcoin SV - BSV
 * Bitcoin - BTC
+* Dai - DAI
 * Dash - DASH
 * Decred - DCR
 * Digibyte - DGB
@@ -43,22 +44,29 @@ Privacy Mode (a fresh HD-wallet address generated from your master public key fo
 * Maker - MKR
 * Melon - MLN
 * OmiseGO - OMG
+* PayPal USD - PYUSD
 * Augur - REP
 * Solana - SOL
 * Tron - TRX
 * USDC - USDC
+* USDC (Arbitrum) - USDCARB
+* USDC (Base) - USDCBAS
+* USDC (Polygon) - USDCPOL
 * Tether - USDT
+* Tether (Arbitrum) - USDTARB
+* Tether (Polygon) - USDTPOL
 * Tether (TRC-20) - USDTTRX
 * Waves - WAVES
 * Stellar - XLM
+* Monero - XMR
 * XRP - XRP
 * Tezos - XTZ
 * Zcash - ZEC
 * 0x - ZRX
 
-= Classic Mode only (manual confirmation) =
+= No Autopay (manual confirmation) =
 
-Public verification APIs for these coins no longer exist or were never available; you confirm payments in your own wallet.
+Public transaction APIs for these coins no longer exist or were never available, so you confirm payments in your own wallet. Bitcore and Qtum still support Privacy Mode balance checks.
 
 * Apollo Currency - APL
 * Bitcoin Diamond - BCD
@@ -76,7 +84,6 @@ Public verification APIs for these coins no longer exist or were never available
 * VeChain - VET
 * Vericoin - VRC
 * NEM - XEM
-* Monero - XMR
 * Myriad - XMY
 
 == Installation ==
@@ -90,7 +97,7 @@ Public verification APIs for these coins no longer exist or were never available
 
 == Features ==
 
-* 51 supported cryptocurrencies (BTC, ETH, USDT, SOL, LTC, XRP, BCH and more)
+* 58 supported cryptocurrencies and stablecoins across Ethereum, Tron, Polygon, Arbitrum, Base and more (BTC, ETH, USDT, USDC, SOL, XMR...)
 * Absolute easiest and quickest setup in the industry
 * You control your wallets, you control your keys, you control your crypto
 * No third party punchouts
@@ -114,6 +121,15 @@ Public verification APIs for these coins no longer exist or were never available
 3. Customer Thank-You Page
 
 == Changelog ==
+
+= 2.8.0 =
+* Pay in browser wallet: one-click MetaMask/injected-wallet payments for ETH and all ERC-20 tokens on the thank-you page, with automatic network switching; Solana Pay link for SOL
+* Live payment status: the thank-you page now updates itself when payment arrives (and shows partial-payment progress for Privacy Mode orders) - no more manual refreshing
+* Monero Autopay: point the plugin at your own monero-wallet-rpc (view-only wallet is enough) and every order gets a fresh subaddress with automatic verification; your view key never leaves your server
+* New stablecoins and networks: Dai and PayPal USD on Ethereum, USDT and USDC on Polygon and Arbitrum, USDC on Base
+* Correct wallet-scannable QR codes: EIP-681 URIs for ETH and tokens (previous ethereum: QRs used a nonstandard amount parameter wallets ignored), Solana Pay for SOL, monero: for XMR
+* Security: ERC-20 payments are now verified by token contract address instead of token symbol - fake tokens sharing a symbol can no longer be mistaken for payment
+* New nmm_api_url filter lets you point any coin's verification at your own node or explorer instance
 
 = 2.7.0 =
 * New coins: Tether on Ethereum (USDT), Tether on Tron (TRC-20 USDT, the most-used crypto payment rail), and Solana (SOL) - all with Autopay verification via keyless public APIs (Blockscout, Tronscan, Solana mainnet RPC). SOL checkout QR codes use the Solana Pay URI scheme
