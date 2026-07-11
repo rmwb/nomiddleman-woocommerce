@@ -7,12 +7,19 @@ replies before sending adoption-email.md.
 
 ## Checklist
 
-- [ ] Support-forum post (template below) — record date + link
-- [ ] GitHub issue on the original upstream repo (template below) — record date + link
-- [ ] Email, if an address can be found (old plugin readmes, WHOIS history
-      for nomiddlemancrypto.io, the `rgostic` wordpress.org profile page)
-- [ ] Screenshot each attempt
+Contact attempts made **2026-07-11** (add links/screenshots below as records):
+
+- [x] Contact attempts made 2026-07-11, including a direct Slack DM to
+      rgostic on WordPress Slack — paste links / screenshot refs here:
+      -
+- [ ] Screenshot each attempt and keep copies outside Slack (Slack history
+      can expire on the free plan)
 - [ ] Create/verify your wordpress.org account (needed to receive commit access)
+
+**Waiting period:** if no reply, send adoption-email.md on or after
+**~2026-08-01** (2–4 weeks from contact). Before sending: tag v2.9.2 so the
+release zip includes the README "External services" section, and fill in the
+two placeholders in the email (wordpress.org username, contact links/dates).
 
 ## Support-forum post
 
