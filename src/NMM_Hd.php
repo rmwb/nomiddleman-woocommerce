@@ -403,13 +403,26 @@ class NMM_Hd {
 
 		$address = self::create_hd_address($cryptoId, $mpk, $startIndex, $hdMode);
 
+		// Skip past already-used ("dirty") addresses, but never loop unbounded:
+		// each check makes a block-explorer request, so an explorer that is
+		// rate-limiting us or wrongly reports every address as used would spin
+		// forever - previously set_time_limit() was reset on every iteration, so
+		// PHP could never kill it, which pinned the CPU. Cap at a BIP44-style
+		// gap limit and abort this buffer-fill cycle if it is exceeded.
+		$maxDirtySkips = 20;
+
 		try {
+			$skips = 0;
 			while (self::is_dirty_address($cryptoId, $address)) {
-				
+
+				if ($skips >= $maxDirtySkips) {
+					throw new \Exception('Exceeded the dirty-address gap limit for ' . $cryptoId . ' (explorer may be unavailable); aborting this buffer-fill cycle.');
+				}
+
 				$hdRepo->insert($address, $startIndex, 'dirty');
 				$startIndex = $startIndex + 1;
 				$address = self::create_hd_address($cryptoId, $mpk, $startIndex, $hdMode);
-				set_time_limit(30);
+				$skips++;
 			}
 		}
 		catch ( \Exception $e ) {
