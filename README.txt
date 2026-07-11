@@ -161,6 +161,18 @@ All requests below are made server-side by the store. The only data ever transmi
 
 **QR codes** are generated locally in memory. No QR or image service is contacted.
 
+== Frequently Asked Questions ==
+
+= Can I run payment verification against my own node instead of a public explorer? =
+
+Yes. The `nmm_api_url` filter lets you redirect any verification request to your own self-hosted instance (for example your own mempool, Blockscout, or Insight server), as long as it runs the same software the plugin expects. See the developer hooks documentation for examples: https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
+
+Note that this filter currently covers blockchain verification requests only, not exchange-rate lookups.
+
+= Does the plugin provide developer hooks? =
+
+Yes. Filters are available for redirecting verification requests, customizing the customer payment message, adjusting Autopay matching tolerances, changing the checkout icon, and white-labeling the settings page. The full reference with code examples is at https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
+
 == Changelog ==
 
 = 2.9.1 =
