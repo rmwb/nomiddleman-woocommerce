@@ -140,19 +140,6 @@ class NMM_Cryptocurrencies {
         return $memo = $cryptoArray;
 	}
 
-    public static function get_hd() {
-        $cryptos = self::get();
-        $privacyCryptos = [];
-
-        foreach ($cryptos as $crypto) {
-            if ($crypto->has_hd()) {
-                $privacyCryptos[] = $crypto;
-            }
-        }
-
-        return $privacyCryptos;
-    }
-
     public static function get_erc20_tokens() {
         $cryptos = self::get();
         $erc20Tokens = [];
@@ -164,19 +151,6 @@ class NMM_Cryptocurrencies {
         }
 
         return $erc20Tokens;
-    }
-
-    public static function get_non_erc20_tokens() {
-        $cryptos = self::get();
-        $nonErc20Tokens = [];
-
-        foreach ($cryptos as $crypto) {
-            if (!$crypto->is_erc20_token()) {
-                $nonErc20Tokens[$crypto->get_id()] = $crypto;
-            }
-        }
-
-        return $nonErc20Tokens;
     }
 
     public static function is_erc20_token($cryptoId) {

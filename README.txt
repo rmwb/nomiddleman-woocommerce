@@ -128,7 +128,8 @@ Public transaction APIs for these coins no longer exist or were never available,
 * Performance: consumed-transaction lists are capped at the 200 most recent hashes per address so they can no longer grow without bound
 * Monero: transfer lookups now ask the wallet RPC for just the order's subaddress (subaddr_indices) instead of every transfer in the account
 * The checkout payment method now shows an icon (filterable via nmm_gateway_icon)
-* Admin flash notices moved from the generic my_flash_notices option to nmm_flash_notices (existing queued notices are migrated)
+* Removed the orphaned admin flash-notice queue (a Redux-era leftover with no remaining callers; settings feedback uses the WordPress Settings API) - stale my_flash_notices options are cleaned up on activation
+* Removed other dead code found in an orphan sweep: two never-called registry helpers dating back to v2.4.8, an unused Monero helper, an unused extension-registry lookup, three unused constants, and an orphaned logo file
 
 = 2.9.0 =
 * Internationalization: every customer- and merchant-facing string is now translatable (text domain: nomiddleman-crypto-payments-for-woocommerce), including checkout, the thank-you page, emails, order notes, admin settings, validation errors, and the JavaScript wallet/status messages

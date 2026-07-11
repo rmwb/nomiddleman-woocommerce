@@ -31,18 +31,6 @@ class NMM_Util {
 		return function_exists('NMMP_init');
 	}
 
-	public static function extension_registered($extensionName) {
-		$loadedExtensions = get_option(NMM_EXTENSION_KEY, array());
-		
-		if (!empty($loadedExtensions)) {
-			if (in_array($extensionName, $loadedExtensions)) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-	
 }
 
 ?>

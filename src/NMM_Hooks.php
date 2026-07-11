@@ -175,53 +175,6 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
   }
 }
 
-function NMM_add_flash_notice($notice = "", $type = "error", $dismissible = true) {
-    // Here we return the notices saved on our option, if there are not notices, then an empty array is returned
-    $notices = get_option( "nmm_flash_notices", array() );
- 
-    $dismissible_text = ( $dismissible ) ? "is-dismissible" : "";
- 
-    // We add our new notice.
-    array_push( $notices, array( 
-            "notice" => $notice, 
-            "type" => $type, 
-            "dismissible" => $dismissible_text
-        ) );
- 
-    // Then we update the option with our notices array
-    update_option("nmm_flash_notices", $notices, false );
-}
- 
-/**
- * Function executed when the 'admin_notices' action is called, here we check if there are notices on
- * our database and display them, after that, we remove the option to prevent notices being displayed forever.
- * @return void
- */ 
-function NMM_display_flash_notices() {
-    $notices = get_option( "nmm_flash_notices", array() );
-
-    // migrate anything still queued under the old, collision-prone option name
-    $legacyNotices = get_option( "my_flash_notices", array() );
-    if ( ! empty( $legacyNotices ) ) {
-        $notices = array_merge( (array) $legacyNotices, (array) $notices );
-        delete_option( "my_flash_notices" );
-    }
-
-    // Iterate through our notices to be displayed and print them.
-    foreach ( $notices as $notice ) {
-        printf('<div class="notice notice-%1$s %2$s"><p>%3$s</p></div>',
-            esc_attr($notice['type']),
-            esc_attr($notice['dismissible']),
-            wp_kses_post($notice['notice'])
-        );
-    }
- 
-    // Now we reset our options to prevent notices being displayed forever.
-    if( ! empty( $notices ) ) {
-        delete_option( "nmm_flash_notices" );
-    }
-}
-
 // Order-key-authenticated payment status for the thank-you page poller.
 // The key is only known to the customer who placed the order.
 function NMM_order_status_ajax() {

@@ -54,7 +54,6 @@ register_uninstall_hook(__FILE__, 'NMM_uninstall');
 define('NMM_HD_TABLE', 'nmmpro_hd_addresses');
 define('NMM_PAYMENT_TABLE', 'nmmpro_payments');  
 define('NMM_CAROUSEL_TABLE', 'nmmpro_carousel');
-define('NMM_HD_TABLE_VERSION', '1.1');
 define('NMM_LOGFILE_NAME', 'nmm.log');
 define('NMM_REDUX_ID', 'nmmpro_redux_options');
 define('NMM_EXTENSION_KEY', 'nmm_registered_extensions');
@@ -70,9 +69,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_DIR', plugins_url(basename(plugin_dir_path(__FILE__)), basename(__FILE__)));    
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
-    define('NMM_PLUGIN_BASENAME', plugin_basename(NMM_PLUGIN_FILE));
 
-    define('NMM_CRON_JOB_URL', plugins_url('', __FILE__) . '/src/NMM_Cron.php');
     define('NMM_VERSION', '2.9.1');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
@@ -141,8 +138,6 @@ function NMM_init_gateways(){
     add_action('NMM_cron_hook', 'NMM_do_cron_job');
     add_action('woocommerce_order_status_changed', 'NMM_update_database_when_admin_changes_order_status', 10, 3);
     
-    add_action('admin_notices', 'NMM_display_flash_notices', 12);
-
     if (is_admin()) {
         add_action('wp_ajax_firstmpkaddress', 'NMM_first_mpk_address_ajax');
     }
@@ -211,6 +206,9 @@ function NMM_add_interval ($schedules)
 function NMM_activate() {
     // scheduling happens on init via NMM_schedule_payment_checks
     NMM_create_hd_mpk_address_table();
+    // remove leftovers from the retired flash-notice queue
+    delete_option('my_flash_notices');
+    delete_option('nmm_flash_notices');
     NMM_create_payment_table();
     NMM_create_carousel_table();
 }

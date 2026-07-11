@@ -19,10 +19,6 @@ class NMM_Monero {
 		return new NMM_Settings(get_option(NMM_REDUX_ID));
 	}
 
-	public static function rpc_configured() {
-		return self::settings()->get_xmr_rpc_url() !== '';
-	}
-
 	public static function rpc($method, $params = array()) {
 		$settings = self::settings();
 		$url = $settings->get_xmr_rpc_url();
