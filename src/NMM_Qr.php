@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 /**
  * Renders payment QR codes entirely in memory: inline SVG for pages, PNG
  * bytes embedded as CID attachments for emails. No QR file is ever written

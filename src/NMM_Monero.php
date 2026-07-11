@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 /**
  * Monero Autopay via the merchant's own monero-wallet-rpc (a view-only
  * wallet is sufficient). Each order gets a fresh subaddress, and incoming

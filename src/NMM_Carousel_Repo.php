@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class NMM_Carousel_Repo {
 	private $tableName;
 	public function __construct() {

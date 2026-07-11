@@ -32,6 +32,8 @@ if (!isset($argv[1])) {
 
 define('USE_EXT', $argv[1]);
 
+if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/');
+
 class NMM_Util {
 	public static function p_enabled() { return false; }
 	public static function log($f, $l, $m) {}

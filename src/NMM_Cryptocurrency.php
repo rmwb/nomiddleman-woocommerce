@@ -1,4 +1,8 @@
 <?php
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
 // Dummy plain object
 class NMM_Cryptocurrency {
 

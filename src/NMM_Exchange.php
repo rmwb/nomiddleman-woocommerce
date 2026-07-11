@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 // Class that communicates with various exchanges via HTTP
 class NMM_Exchange {
 
@@ -103,7 +107,7 @@ class NMM_Exchange {
         $body = json_decode($response['body']);
 
         if (!isset($body->rates->USD) || $body->rates->USD <= 0) {
-            throw new \Exception( 'Could not convert ' . $fromCurr . ' to USD. Please try again.' );
+            throw new \Exception( 'Could not convert ' . esc_html($fromCurr) . ' to USD. Please try again.' );
         }
 
         $conversionRate = (float) $body->rates->USD;

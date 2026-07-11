@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 function NMM_do_cron_job() {
 	global $wpdb;	
 	

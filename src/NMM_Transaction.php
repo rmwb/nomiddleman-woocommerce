@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class NMM_Transaction {
 	private $amount;
 	private $confirmations;

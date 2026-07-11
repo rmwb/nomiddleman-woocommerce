@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 // Repository for hd mpk storage in WP Database
 class NMM_Hd_Repo {
 

@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 /**
  * Native WordPress settings page for Nomiddleman Crypto Payments.
  *
@@ -323,7 +327,7 @@ class NMM_Admin {
                         <div class="nmm-sample-addresses" data-crypto="<?php echo esc_attr($cid); ?>">
                             <?php for ($i = 0; $i < 3; $i++) : ?>
                                 <input type="text" class="regular-text" readonly="readonly"
-                                       id="<?php echo esc_attr($cid); ?>_hd_mpk_sample_addresses-<?php echo $i; ?>"
+                                       id="<?php echo esc_attr($cid); ?>_hd_mpk_sample_addresses-<?php echo (int) $i; ?>"
                                        value="" placeholder="Addresses will be generated when a valid MPK is entered" />
                             <?php endfor; ?>
                         </div>

@@ -9,6 +9,8 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED);
 
+if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/');
+
 $GLOBALS['nmm_test_hooks'] = array();
 function add_action($hook, $cb) { $GLOBALS['nmm_test_hooks'][$hook][] = $cb; }
 

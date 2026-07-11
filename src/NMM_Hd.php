@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class NMM_Hd {
 
 	public static function buffer_ready_addresses($cryptoId, $mpk, $amount, $hdMode) {
@@ -406,7 +410,7 @@ class NMM_Hd {
 		}
 		catch ( \Exception $e ) {
 			NMM_Util::log(__FILE__, __LINE__, 'Could not create new addresses: ' . $e->getMessage());
-			throw new \Exception($e);
+			throw new \Exception(esc_html($e->getMessage()));
 		}
 
 		$hdRepo->insert($address, $startIndex, 'ready');
@@ -427,7 +431,7 @@ class NMM_Hd {
 			}
 		}
 		catch (\Exception $e) {
-			throw new \Exception('Invalid MPK for ' . $cryptoId . '. ' . $e->getTraceAsString());
+			throw new \Exception('Invalid MPK for ' . esc_html($cryptoId) . '. ' . esc_html($e->getTraceAsString()));
 		}
 	}
 

@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 // Crypto Helper
 class NMM_Cryptocurrencies {
 
@@ -47,6 +51,14 @@ class NMM_Cryptocurrencies {
 	}
 
 	public static function get() {
+		// built once per request: callers hit this dozens of times and the
+		// 58 immutable value objects never change after construction
+		static $memo = null;
+
+		if ($memo !== null) {
+			return $memo;
+		}
+
         // id, name, round_precision, icon_filename, refresh_time, symbol, has_hd, has_autopay, needs_confirmations, erc20contract
 		$cryptoArray = array(
             
@@ -125,7 +137,7 @@ class NMM_Cryptocurrencies {
             'MIOTA' => new NMM_Cryptocurrency('MIOTA', 'Iota', 18, 'iota_logo_small.png', 60, '', false, false, true, ''),
         );
 
-        return $cryptoArray;
+        return $memo = $cryptoArray;
 	}
 
     public static function get_hd() {
@@ -190,13 +202,20 @@ class NMM_Cryptocurrencies {
 
 
     public static function get_alpha() {
+        static $memo = null;
+
+        if ($memo !== null) {
+            return $memo;
+        }
+
         $cryptoArray = NMM_Cryptocurrencies::get();
-        
+
         $keys = array_map(function($val) {
                 return $val->get_id();
             }, $cryptoArray);
         array_multisort($keys, $cryptoArray);
-        return $cryptoArray;
+
+        return $memo = $cryptoArray;
     }
 
     // Php likes to convert numbers to scientific notation, so this handles displaying small amounts correctly

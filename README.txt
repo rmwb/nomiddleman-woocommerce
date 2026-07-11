@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.8.0
+Stable Tag: 2.8.1
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -121,6 +121,12 @@ Public transaction APIs for these coins no longer exist or were never available,
 3. Customer Thank-You Page
 
 == Changelog ==
+
+= 2.8.1 =
+* Hardening: every PHP file now blocks direct web access (ABSPATH guard)
+* Hardening: all templated output is escaped with WordPress escaping functions; admin flash notices are sanitized before display
+* Performance: the cryptocurrency registry is built once per request instead of on every call (previously rebuilt ~27 times per page load)
+* Removed leftover debug logging from order-status hooks
 
 = 2.8.0 =
 * Pay in browser wallet: one-click MetaMask/injected-wallet payments for ETH and all ERC-20 tokens on the thank-you page, with automatic network switching; Solana Pay link for SOL

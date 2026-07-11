@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class NMM_Util {
 
 	public static function log($fileName, $lineNumber, $message) {

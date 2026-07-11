@@ -2,6 +2,10 @@
 
 namespace CashAddress;
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 // (c) uMCCCS
 // with some minor additions from Har01d @ blockchair.com
 

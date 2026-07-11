@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class NMM_Gateway extends WC_Payment_Gateway {
     private $cryptos;
     private $gapLimit;
@@ -109,6 +113,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
     public function validate_fields() {
         // if the currently selected gateway is this gateway we set transients related to conversions and if something goes wrong we prevent the customer from hitting the thank you page  by throwing the WooCommerce Error Notice.
         if (WC()->session->get('chosen_payment_method') === $this->id) {
+            // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce verifies its checkout nonce before invoking gateway hooks.
             if (empty($_POST['nmm_currency_id'])) {
                 wc_add_notice('Please choose a cryptocurrency.', 'error');
                 return;
@@ -126,6 +131,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 NMM_Util::log(__FILE__, __LINE__, $e->getMessage());
                 wc_add_notice($e->getMessage(), 'error');
             }
+            // phpcs:enable
         }
     }
 
@@ -136,12 +142,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // Classic checkout posts nmm_currency_id directly; the Blocks checkout
         // delivers it via the Store API's paymentMethodData, which WooCommerce
         // also surfaces through $_POST for legacy gateways.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce/Store API verify their own nonces before process_payment runs.
         if (empty($_POST['nmm_currency_id']) || !array_key_exists(sanitize_text_field($_POST['nmm_currency_id']), $this->cryptos)) {
             wc_add_notice('Please choose a cryptocurrency.', 'error');
             return array('result' => 'failure');
         }
 
         $selectedCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
+        // phpcs:enable
         WC()->session->set('chosen_crypto_id', $selectedCryptoId);
 
         return array(
@@ -302,7 +310,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             echo '<ul class="woocommerce-error">';
             echo '<li>';
             echo 'Something went wrong.<br>';
-            echo $e->getMessage();
+            echo esc_html($e->getMessage());
             echo '</li>';
             echo '</ul>';
             echo '</div>';
@@ -323,10 +331,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
         if ($plain_text) {
             echo "\nPAYMENT DETAILS\n\n";
-            echo 'Address: ' . $orderWalletAddress . "\n";
-            echo 'Currency: ' . $crypto->get_name() . "\n";
-            echo 'Total: ' . $totalLine . "\n";
-            echo 'Scan a QR code for this payment on your order page: ' . $order->get_checkout_order_received_url() . "\n\n";
+            echo 'Address: ' . esc_html($orderWalletAddress) . "\n";
+            echo 'Currency: ' . esc_html($crypto->get_name()) . "\n";
+            echo 'Total: ' . esc_html($totalLine) . "\n";
+            echo 'Scan a QR code for this payment on your order page: ' . esc_url($order->get_checkout_order_received_url()) . "\n\n";
             return;
         }
 
@@ -391,7 +399,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             <li class="woocommerce-order-overview__qr-code">
                 <p style="word-wrap: break-word;">QR Code payment:</p>
                 <div class="qr-code-container">
-                    <?php echo NMM_Qr::svg($qrData, 200); // built in memory, no file written ?>
+                    <?php echo NMM_Qr::svg($qrData, 200); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- trusted SVG markup generated in memory by this plugin. ?>
                 </div>
             </li>
             <li>
@@ -407,10 +415,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 <p>Currency: 
                     <strong>
                         <?php
-                            echo '<img style="display:inline;height:23px;width:23px;vertical-align:middle;" src="' . $crypto->get_logo_file_path() . '" />';
+                            echo '<img style="display:inline;height:23px;width:23px;vertical-align:middle;" src="' . esc_url($crypto->get_logo_file_path()) . '" />';
                         ?>
                         <span style="padding-left: 4px; vertical-align: middle;" class="woocommerce-Price-amount amount" style="vertical-align: middle;">
-                            <?php echo $crypto->get_name() ?>
+                            <?php echo esc_html($crypto->get_name()) ?>
                         </span>
                     </strong>
                 </p>
@@ -421,10 +429,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
                         <span class="woocommerce-Price-amount amount">
                             <?php 
                                 if ($crypto->get_symbol() === '') {
-                                    echo '<span class="all-copy">' . $formattedPrice . '</span><span class="no-copy">&nbsp' . $crypto->get_id() . '</span>';
+                                    echo '<span class="all-copy">' . esc_html($formattedPrice) . '</span><span class="no-copy">&nbsp;' . esc_html($crypto->get_id()) . '</span>';
                                 }
                                 else {
-                                    echo '<span class="no-copy">' . $crypto->get_symbol() . '</span>' . '<span class="all-copy">' . $formattedPrice . '</span>';
+                                    echo '<span class="no-copy">' . esc_html($crypto->get_symbol()) . '</span>' . '<span class="all-copy">' . esc_html($formattedPrice) . '</span>';
                                 }
                             ?>
                         </span>

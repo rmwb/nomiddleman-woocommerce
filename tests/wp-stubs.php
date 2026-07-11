@@ -6,6 +6,8 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED);
 
+if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/');
+
 if (!defined('MINUTE_IN_SECONDS')) define('MINUTE_IN_SECONDS', 60);
 if (!defined('HOUR_IN_SECONDS')) define('HOUR_IN_SECONDS', 3600);
 if (!defined('NMM_REDUX_ID')) define('NMM_REDUX_ID', 'nmmpro_redux_options');

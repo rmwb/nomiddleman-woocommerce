@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 // Class that communicates with various blockchains via HTTP
 class NMM_Blockchain {
 

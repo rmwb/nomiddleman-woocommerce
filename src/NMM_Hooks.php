@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 function NMM_change_cancelled_email_note_subject_line($subject, $order) {
 	$subject = 'Order ' . $order->get_id() . ' has been cancelled due to non-payment';
 
@@ -39,9 +43,8 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 
 	// this order was not made by us
 	if ($paymentAmount === 0.0 || !$paymentAmount) {
-    error_log('ending early');
 		return;
-  }
+	}
 	
 
 	$paymentRepo = new NMM_Payment_Repo();
@@ -54,7 +57,6 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 		$paymentRepo->set_status($orderId, $paymentAmount, 'paid');
 	}
 	if ($oldOrderStatus === 'on-hold' && $newOrderStatus === 'processing') {
-    error_log('updating order '. $orderId . ' to paid');
 		$paymentRepo->set_status($orderId, $paymentAmount, 'paid');
 	}
 	if ($oldOrderStatus === 'on-hold' && $newOrderStatus === 'completed') {
@@ -116,7 +118,6 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
     $paymentRepo->set_status($orderId, $paymentAmount, 'paid');
   }
   if ($oldOrderStatus === 'wc-on-hold' && $newOrderStatus === 'wc-processing') {
-    error_log('updating order '. $orderId . ' to paid');
     $paymentRepo->set_status($orderId, $paymentAmount, 'paid');
   }
   if ($oldOrderStatus === 'wc-on-hold' && $newOrderStatus === 'wc-completed') {
@@ -199,9 +200,9 @@ function NMM_display_flash_notices() {
     // Iterate through our notices to be displayed and print them.
     foreach ( $notices as $notice ) {
         printf('<div class="notice notice-%1$s %2$s"><p>%3$s</p></div>',
-            $notice['type'],
-            $notice['dismissible'],
-            $notice['notice']
+            esc_attr($notice['type']),
+            esc_attr($notice['dismissible']),
+            wp_kses_post($notice['notice'])
         );
     }
  
@@ -214,8 +215,10 @@ function NMM_display_flash_notices() {
 // Order-key-authenticated payment status for the thank-you page poller.
 // The key is only known to the customer who placed the order.
 function NMM_order_status_ajax() {
+	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- authenticated by the WooCommerce order key below, which only the purchaser has.
 	$orderId = isset($_GET['order_id']) ? absint($_GET['order_id']) : 0;
 	$key = isset($_GET['key']) ? sanitize_text_field(wp_unslash($_GET['key'])) : '';
+	// phpcs:enable
 
 	$order = wc_get_order($orderId);
 
@@ -254,7 +257,7 @@ function NMM_order_status_ajax() {
 
 function NMM_first_mpk_address_ajax() {
 
-		check_ajax_referer('nmm_first_mpk_address');
+		check_ajax_referer('nmm_first_mpk_address'); // phpcs:ignore -- the referer check IS the nonce verification for the $_POST reads below.
 
 		if (!current_user_can('manage_options')) {
 			wp_die('', '', 403);

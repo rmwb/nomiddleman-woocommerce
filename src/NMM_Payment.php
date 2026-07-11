@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class NMM_Payment {
 
 	public static function check_all_addresses_for_matching_payment($transactionLifetime) {		
