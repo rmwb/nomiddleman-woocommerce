@@ -220,6 +220,12 @@ class NMM_Exchange {
         }
 
         $responseBody = json_decode( $response['body']);
+
+        // symbols HitBTC doesn't list get a 200 with an error object
+        if (!isset($responseBody->{'last'})) {
+            return 0;
+        }
+
         $hitbtcPrice = (float) $responseBody->{'last'};
 
         set_transient($transientKey, $hitbtcPrice, $updateInterval);
@@ -242,6 +248,12 @@ class NMM_Exchange {
         }
 
         $responseBody = json_decode( $response['body'] );
+
+        // pairs Gate.io doesn't list get a 200 with an error object
+        if (!isset($responseBody->{'last'})) {
+            return 0;
+        }
+
         $gateioPrice = (float) $responseBody->{'last'};
 
         set_transient($transientKey, $gateioPrice, $updateInterval);
@@ -265,6 +277,11 @@ class NMM_Exchange {
         }
 
         $responseBody = json_decode( $response['body']);
+        // symbols Binance doesn't list get an error object without lastPrice
+        if (!isset($responseBody->{'lastPrice'})) {
+            return 0;
+        }
+
         $binancePrice = (float) $responseBody->{'lastPrice'};
 
         set_transient($transientKey, $binancePrice, $updateInterval);

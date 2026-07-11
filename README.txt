@@ -180,6 +180,7 @@ Yes. Filters are available for redirecting verification requests, customizing th
 == Changelog ==
 
 = 2.9.2 =
+* Fixed repeated PHP warnings ("Undefined property: stdClass::$last") when HitBTC, Gate.io, or Binance doesn't list a selected coin: those APIs answer HTTP 200 with an error object, which is now handled silently (prices were never affected - the empty result was already discarded before averaging)
 * Reliability: fixed a runaway in Privacy Mode HD address buffering that could pin CPU and exhaust memory. The address-uniqueness loop no longer resets PHP's execution timer on every iteration and is now capped at a 20-address gap limit, and the background job takes a lock so cycles can no longer overlap and stack up when a block explorer is slow or rate-limiting.
 * Privacy Mode now fails clearly when the server lacks the required PHP math extension: a Tools > Site Health check and a settings-page notice explain that gmp (or bcmath) must be enabled, instead of the misleading "check your MPK" error
 * Documented developer hooks (docs/HOOKS.md) and the External Services the plugin contacts; added a Frequently Asked Questions section
