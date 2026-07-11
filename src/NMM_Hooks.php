@@ -177,7 +177,7 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 
 function NMM_add_flash_notice($notice = "", $type = "error", $dismissible = true) {
     // Here we return the notices saved on our option, if there are not notices, then an empty array is returned
-    $notices = get_option( "my_flash_notices", array() );
+    $notices = get_option( "nmm_flash_notices", array() );
  
     $dismissible_text = ( $dismissible ) ? "is-dismissible" : "";
  
@@ -189,7 +189,7 @@ function NMM_add_flash_notice($notice = "", $type = "error", $dismissible = true
         ) );
  
     // Then we update the option with our notices array
-    update_option("my_flash_notices", $notices );
+    update_option("nmm_flash_notices", $notices, false );
 }
  
 /**
@@ -198,8 +198,15 @@ function NMM_add_flash_notice($notice = "", $type = "error", $dismissible = true
  * @return void
  */ 
 function NMM_display_flash_notices() {
-    $notices = get_option( "my_flash_notices", array() );
-     
+    $notices = get_option( "nmm_flash_notices", array() );
+
+    // migrate anything still queued under the old, collision-prone option name
+    $legacyNotices = get_option( "my_flash_notices", array() );
+    if ( ! empty( $legacyNotices ) ) {
+        $notices = array_merge( (array) $legacyNotices, (array) $notices );
+        delete_option( "my_flash_notices" );
+    }
+
     // Iterate through our notices to be displayed and print them.
     foreach ( $notices as $notice ) {
         printf('<div class="notice notice-%1$s %2$s"><p>%3$s</p></div>',
@@ -211,7 +218,7 @@ function NMM_display_flash_notices() {
  
     // Now we reset our options to prevent notices being displayed forever.
     if( ! empty( $notices ) ) {
-        delete_option( "my_flash_notices", array() );
+        delete_option( "nmm_flash_notices" );
     }
 }
 

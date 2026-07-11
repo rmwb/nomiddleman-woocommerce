@@ -18,7 +18,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $this->cryptos = $cryptoArray;
         $this->gapLimit = 2;
 
-        $this->id = 'nmmpro_gateway';        
+        $this->id = 'nmmpro_gateway';
+        $this->icon = apply_filters('nmm_gateway_icon', NMM_PLUGIN_DIR . '/assets/img/bitcoin_logo_small.png');        
         $this->title = $nmmSettings->get_customer_gateway_message();
         $this->has_fields = true;
         $this->method_title = __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce');
@@ -492,71 +493,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
     // this function hits all the crypto exchange APIs that the user selected, then averages them and returns a conversion rate for USD
     // if the user has selected no exchanges to fetch data from it instead takes the average from all of them
     private function get_crypto_value_in_usd($cryptoId, $updateInterval) {
-
-        $prices = array();
         $reduxSettings = get_option(NMM_REDUX_ID);
         if (!array_key_exists('selected_price_apis', $reduxSettings)) {
             throw new \Exception(esc_html__('No price API selected. Please contact plug-in support.', 'nomiddleman-crypto-payments-for-woocommerce'));
         }
 
-        $selectedPriceApis = $reduxSettings['selected_price_apis'];
-
-        if (in_array('0', $selectedPriceApis)) {
-            $coingeckoPrice = NMM_Exchange::get_coingecko_price($cryptoId, $updateInterval);
-
-            if ($coingeckoPrice > 0) {
-                $prices[] = $coingeckoPrice;
-            }
-        }
-
-        if (in_array('1', $selectedPriceApis)) {
-            $hitbtcPrice = NMM_Exchange::get_hitbtc_price($cryptoId, $updateInterval);
-
-            if ($hitbtcPrice > 0) {
-                $prices[] = $hitbtcPrice;
-            }        
-        }
-
-        if (in_array('2', $selectedPriceApis)) {
-            $gateioPrice = NMM_Exchange::get_gateio_price($cryptoId, $updateInterval);
-
-            if ($gateioPrice > 0) {
-                $prices[] = $gateioPrice;
-            }        
-        }
-
-        if (in_array('3', $selectedPriceApis)) {
-            $binancePrice = NMM_Exchange::get_binance_price($cryptoId, $updateInterval);
-
-            if ($binancePrice > 0) {
-                $prices[] = $binancePrice;  
-            }        
-        }
-
-        if (in_array('4', $selectedPriceApis)) {
-            $poloniexPrice = NMM_Exchange::get_poloniex_price($cryptoId, $updateInterval);
-
-            // if there were no trades do not use this pricing method
-            if ($poloniexPrice > 0) {
-                $prices[] = $poloniexPrice;
-            }        
-        }
-
-        $sum = 0;
-        $count = count($prices);
-
-        if ($count === 0) {        
-            throw new \Exception(esc_html__('No cryptocurrency exchanges could be reached, please try again.', 'nomiddleman-crypto-payments-for-woocommerce'));
-        }
-
-        foreach ($prices as $price) {
-            $sum += $price;        
-        }
-
-        $average_price = $sum / $count;
-
-        return $average_price;
-    }    
+        return NMM_Exchange::get_average_usd_price($cryptoId, $updateInterval, $reduxSettings['selected_price_apis']);
+    }
 }
 
 ?>

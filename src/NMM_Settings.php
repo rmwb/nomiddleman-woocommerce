@@ -242,6 +242,16 @@ class NMM_Settings {
 		return '';
 	}
 
+	public function get_selected_price_apis() {
+		$priceApiKey = 'selected_price_apis';
+
+		if (is_array($this->settings) && array_key_exists($priceApiKey, $this->settings) && is_array($this->settings[$priceApiKey])) {
+			return $this->settings[$priceApiKey];
+		}
+
+		return array();
+	}
+
 	public function price_api_selected() {
 		$priceApiKey = 'selected_price_apis';
 		
@@ -275,7 +285,14 @@ class NMM_Settings {
 
 		$consumedTxs = get_option($settingsKey, array());
 		$consumedTxs[] = $txHash;
-		
+
+		// the matcher ignores transactions older than the 3-hour lifetime, so
+		// hashes beyond the most recent ones can never be re-matched; cap the
+		// list so these options don't grow forever on busy stores
+		if (count($consumedTxs) > 200) {
+			$consumedTxs = array_slice($consumedTxs, -200);
+		}
+
 		update_option($settingsKey, $consumedTxs, false);
 	}
 

@@ -118,6 +118,52 @@ class NMM_Exchange {
         return $total * $conversionRate;
     }
 
+    /**
+     * Average USD price across the merchant's selected exchange APIs.
+     * Each fetcher caches its result in a transient for $updateInterval, so
+     * repeat calls inside that window cost no HTTP requests.
+     */
+    public static function get_average_usd_price($cryptoId, $updateInterval, $selectedPriceApis) {
+        $prices = array();
+
+        if (in_array('0', $selectedPriceApis)) {
+            $price = self::get_coingecko_price($cryptoId, $updateInterval);
+            if ($price > 0) {
+                $prices[] = $price;
+            }
+        }
+        if (in_array('1', $selectedPriceApis)) {
+            $price = self::get_hitbtc_price($cryptoId, $updateInterval);
+            if ($price > 0) {
+                $prices[] = $price;
+            }
+        }
+        if (in_array('2', $selectedPriceApis)) {
+            $price = self::get_gateio_price($cryptoId, $updateInterval);
+            if ($price > 0) {
+                $prices[] = $price;
+            }
+        }
+        if (in_array('3', $selectedPriceApis)) {
+            $price = self::get_binance_price($cryptoId, $updateInterval);
+            if ($price > 0) {
+                $prices[] = $price;
+            }
+        }
+        if (in_array('4', $selectedPriceApis)) {
+            $price = self::get_poloniex_price($cryptoId, $updateInterval);
+            if ($price > 0) {
+                $prices[] = $price;
+            }
+        }
+
+        if (count($prices) === 0) {
+            throw new \Exception(esc_html__('No cryptocurrency exchanges could be reached, please try again.', 'nomiddleman-crypto-payments-for-woocommerce'));
+        }
+
+        return array_sum($prices) / count($prices);
+    }
+
     // gets crypto to USD conversion from an API
     public static function get_coingecko_price($cryptoId, $updateInterval) {
         $transientKey = 'coingecko_' . $cryptoId . '_price';

@@ -16,7 +16,9 @@ function NMM_do_cron_job() {
 
 	$startTime = time();	
 	NMM_Util::log(__FILE__, __LINE__, 'Starting Cron Job...');
-	
+
+	NMM_warm_price_caches($nmmSettings);
+
 	NMM_Carousel_Repo::init();
 	foreach (NMM_Cryptocurrencies::get() as $crypto) {
 		$cryptoId = $crypto->get_id();
@@ -45,6 +47,47 @@ function NMM_do_cron_job() {
 
 function NMM_get_time_passed($startTime) {
 	return time() - $startTime;
+}
+
+/**
+ * Refresh expired exchange-rate transients from the background job so the
+ * thank-you page is a cache hit for (almost) every customer. Every fetcher
+ * short-circuits on a warm transient, so this costs nothing when rates are
+ * fresh; the lock keeps a 60-second scheduler from re-checking too often.
+ */
+function NMM_warm_price_caches($nmmSettings) {
+	if (get_transient('nmm_rates_warm_lock') !== false) {
+		return;
+	}
+	set_transient('nmm_rates_warm_lock', 1, 240);
+
+	try {
+		NMM_Exchange::get_order_total_in_usd(1.0, get_woocommerce_currency());
+	}
+	catch (\Exception $e) {
+		NMM_Util::log(__FILE__, __LINE__, 'Fiat rate warm-up failed: ' . $e->getMessage());
+	}
+
+	$selectedApis = $nmmSettings->get_selected_price_apis();
+
+	if (count($selectedApis) === 0) {
+		return;
+	}
+
+	foreach (NMM_Cryptocurrencies::get() as $crypto) {
+		$cryptoId = $crypto->get_id();
+
+		if (!$nmmSettings->crypto_selected_and_valid($cryptoId)) {
+			continue;
+		}
+
+		try {
+			NMM_Exchange::get_average_usd_price($cryptoId, $crypto->get_update_interval(), $selectedApis);
+		}
+		catch (\Exception $e) {
+			NMM_Util::log(__FILE__, __LINE__, 'Rate warm-up failed for ' . $cryptoId . ': ' . $e->getMessage());
+		}
+	}
 }
 
 ?>

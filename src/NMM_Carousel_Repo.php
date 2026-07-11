@@ -10,10 +10,11 @@ class NMM_Carousel_Repo {
 		global $wpdb;
 		$this->tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;
 
+		// re-seed only when the coin registry has grown since the last init;
+		// the autoloaded option check avoids a COUNT query on every construct
 		$countCryptos = count(NMM_Cryptocurrencies::get());
-		$countCryptosInDb = self::get_count();
 
-		if ($countCryptos != $countCryptosInDb) {
+		if ((int) get_option('nmm_carousel_seeded_count', 0) !== $countCryptos) {
 			self::init();
 		}
 	}
@@ -37,21 +38,13 @@ class NMM_Carousel_Repo {
 		}
 
 		if (count($values) > 0) {
-			@$wpdb->query($wpdb->prepare(
+			$wpdb->query($wpdb->prepare(
 				"INSERT INTO `$tableName` (`cryptocurrency`) VALUES " . implode(', ', $placeholders),
 				$values
 			));
 		}
-	}
 
-	public static function get_count() {
-		global $wpdb;
-		$tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;
-		$query = "SELECT count(*) FROM `$tableName`";
-
-		$result = $wpdb->get_var($query);
-
-		return $result;
+		update_option('nmm_carousel_seeded_count', count($cryptos));
 	}
 
 	public static function record_exists($cryptoId) {

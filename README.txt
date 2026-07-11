@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.0
+Stable Tag: 2.9.1
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -121,6 +121,14 @@ Public transaction APIs for these coins no longer exist or were never available,
 3. Customer Thank-You Page
 
 == Changelog ==
+
+= 2.9.1 =
+* Performance: exchange rates are refreshed in the background job, so the thank-you page is a cache hit for nearly every customer instead of the first one after expiry waiting on up to five APIs
+* Performance: the address-carousel table no longer runs a COUNT query on every instantiation (replaced with an autoloaded option check)
+* Performance: consumed-transaction lists are capped at the 200 most recent hashes per address so they can no longer grow without bound
+* Monero: transfer lookups now ask the wallet RPC for just the order's subaddress (subaddr_indices) instead of every transfer in the account
+* The checkout payment method now shows an icon (filterable via nmm_gateway_icon)
+* Admin flash notices moved from the generic my_flash_notices option to nmm_flash_notices (existing queued notices are migrated)
 
 = 2.9.0 =
 * Internationalization: every customer- and merchant-facing string is now translatable (text domain: nomiddleman-crypto-payments-for-woocommerce), including checkout, the thank-you page, emails, order notes, admin settings, validation errors, and the JavaScript wallet/status messages

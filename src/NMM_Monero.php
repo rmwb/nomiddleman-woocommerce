@@ -116,11 +116,22 @@ class NMM_Monero {
 	 * matching XMR's round precision of 12.
 	 */
 	public static function get_address_transactions($address) {
-		$result = self::rpc('get_transfers', array(
+		$params = array(
 			'in' => true,
 			'pool' => true,
 			'account_index' => 0,
-		));
+		);
+
+		// let the wallet filter to this order's subaddress instead of
+		// returning every transfer in the account; fall back to the full
+		// list (client-side filtered below) if the lookup fails
+		$indexResult = self::rpc('get_address_index', array('address' => $address));
+
+		if (!is_wp_error($indexResult) && isset($indexResult->index->minor)) {
+			$params['subaddr_indices'] = array((int) $indexResult->index->minor);
+		}
+
+		$result = self::rpc('get_transfers', $params);
 
 		if (is_wp_error($result)) {
 			NMM_Util::log(__FILE__, __LINE__, 'XMR RPC failed: ' . $result->get_error_message());
