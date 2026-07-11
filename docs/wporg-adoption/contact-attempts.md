@@ -9,9 +9,13 @@ replies before sending adoption-email.md.
 
 Contact attempts made **2026-07-11** (add links/screenshots below as records):
 
-- [x] Contact attempts made 2026-07-11, including a direct Slack DM to
-      rgostic on WordPress Slack — paste links / screenshot refs here:
-      -
+- [x] Support-forum post, 2026-07-11: "Attempting to contact the plugin
+      author about adoption" (posted as @rmwb) on
+      https://wordpress.org/support/plugin/nomiddleman-crypto-payments-for-woocommerce/
+- [x] GitHub issue, 2026-07-11:
+      https://github.com/nomiddleman/nomiddleman-woocommerce/issues/40
+- [x] Direct Slack DM to rgostic on WordPress Slack, 2026-07-11 22:15
+      (screenshot saved — Slack free-plan history expires)
 - [ ] Screenshot each attempt and keep copies outside Slack (Slack history
       can expire on the free plan)
 - [ ] Create/verify your wordpress.org account (needed to receive commit access)

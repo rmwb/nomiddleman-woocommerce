@@ -25,9 +25,12 @@ a modern host.
 
 **Contact attempts.** I have tried to reach the original developer via:
 
-- A post on the plugin's wordpress.org support forum on [DATE] (link: [LINK])
-- An issue on the original GitHub repository on [DATE] (link: [LINK])
-- [Any email attempts, with dates]
+- A post on the plugin's wordpress.org support forum on 2026-07-11
+  ("Attempting to contact the plugin author about adoption")
+- An issue on the original GitHub repository on 2026-07-11:
+  https://github.com/nomiddleman/nomiddleman-woocommerce/issues/40
+- A direct message to the author on the official WordPress Slack on
+  2026-07-11 (screenshot available)
 
 I have received no response. Screenshots of these attempts are available on
 request.
@@ -56,7 +59,7 @@ Since v2.4.8 it has had (all changelogged in readme.txt, currently v2.9.1):
 A release zip built exactly as it would be deployed is attached / available
 at: https://github.com/rmwb/nomiddleman-woocommerce/releases/latest
 
-My wordpress.org username is **[YOUR-WPORG-USERNAME]**.
+My wordpress.org username is **rmwb**.
 
 I understand the plugin will be reviewed as if it were a new submission, and
 that you will contact the original developer and give them 30 days to
