@@ -120,6 +120,47 @@ Public transaction APIs for these coins no longer exist or were never available,
 2. Adding Addresses
 3. Customer Thank-You Page
 
+== External Services ==
+
+All requests below are made server-side by the store. The only data ever transmitted are public blockchain wallet addresses used for orders, public transaction identifiers, cryptocurrency tickers, and ISO currency codes. No customer names, emails, IP addresses, or order contents are ever sent to any third-party service.
+
+**Exchange rates.** Fetched at checkout and refreshed by the background job; the merchant chooses which price APIs are used on the Pricing Options tab:
+
+* CoinGecko (api.coingecko.com), HitBTC (api.hitbtc.com), Gate.io (data.gate.io), Binance (api.binance.com), Poloniex (api.poloniex.com) - cryptocurrency to USD prices (only the coin's ticker is sent)
+* Frankfurter (api.frankfurter.dev) and Open ER-API (open.er-api.com) - fiat exchange rates when the store currency is not USD (only the currency code is sent)
+
+**Payment verification.** Used only in Autopay and Privacy modes, and only for coins the merchant enables; each service is queried with the order's public wallet address:
+
+* Bitcoin: mempool.space, blockstream.info, blockchain.info
+* Litecoin: litecoinspace.org, BlockCypher (api.blockcypher.com)
+* Dogecoin: BlockCypher (api.blockcypher.com; optional merchant API token is sent if configured)
+* Ethereum, ERC-20 tokens, Ethereum Classic and multi-network stablecoins: Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com)
+* Bitcoin Cash: blockchain.info
+* Bitcoin SV: WhatsOnChain (api.whatsonchain.com)
+* Dash: insight.dash.org
+* XRP: XRPSCAN (api.xrpscan.com)
+* Cardano: Koios (api.koios.rest)
+* Tezos: TzKT (api.tzkt.io)
+* Tron and USDT TRC-20: Tronscan (apilist.tronscan.org)
+* Solana: public mainnet RPC (api.mainnet-beta.solana.com)
+* EOS: Greymass (eos.greymass.com) and EOSRIO Hyperion (eos.hyperion.eosrio.io)
+* Stellar: Horizon (horizon.stellar.org)
+* Waves: nodes.wavesnodes.com
+* Qtum: qtum.info
+* Decred: explorer.dcrdata.org
+* Groestlcoin: groestlsight.groestlcoin.org
+* DigiByte: digiexplorer.info
+* Zcash: Blockchair (api.blockchair.com)
+* Blackcoin: explorer.blackcoin.nl
+* Bitcore: insight.bitcore.cc, chainz.cryptoid.info
+* Myriad: blockbook.myralicious.com
+* Lisk (defunct network): node08.lisk.io
+* DeepOnion (defunct explorer): explorer.deeponion.org
+
+**Merchant-configured endpoints.** Monero Autopay talks only to the merchant's own monero-wallet-rpc URL entered in settings - no third party is involved. Any verification endpoint above can be redirected to the merchant's own node or explorer instance with the nmm_api_url filter.
+
+**QR codes** are generated locally in memory. No QR or image service is contacted.
+
 == Changelog ==
 
 = 2.9.1 =

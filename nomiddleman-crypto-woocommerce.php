@@ -11,7 +11,7 @@ Version: 2.9.1
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
-Copyright: © 2020 Nomiddleman Crypto
+Copyright: © 2020 Nomiddleman Crypto, © 2026 rmwb
 License: GNU General Public License v3.0
 License URI: http://www.gnu.org/licenses/gpl-3.0.html
 
