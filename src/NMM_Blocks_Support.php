@@ -47,6 +47,11 @@ final class NMM_Blocks_Support extends AbstractPaymentMethodType {
             'title' => $nmmSettings->get_customer_gateway_message(),
             'cryptos' => $cryptos,
             'supports' => array('products'),
+            'i18n' => array(
+                'defaultTitle' => __('Pay with cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce'),
+                'chooseLabel' => __('Choose a cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce'),
+                'chooseError' => __('Please choose a cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'),
+            ),
         );
     }
 }

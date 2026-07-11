@@ -22,8 +22,8 @@ class NMM_Admin {
 
     public static function register_menu() {
         $hook = add_menu_page(
-            apply_filters('nmm_settings_page_title', 'Nomiddleman Crypto Settings'),
-            apply_filters('nmm_settings_menu_title', 'Nomiddleman Crypto Payments'),
+            apply_filters('nmm_settings_page_title', __('Nomiddleman Crypto Settings', 'nomiddleman-crypto-payments-for-woocommerce')),
+            apply_filters('nmm_settings_menu_title', __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce')),
             'manage_options',
             NMM_REDUX_SLUG,
             array(__CLASS__, 'render_page'),
@@ -69,8 +69,8 @@ class NMM_Admin {
         $cryptos = NMM_Cryptocurrencies::get_alpha();
 
         $tabs = array(
-            'general' => 'General Settings',
-            'cryptos' => 'Select Cryptocurrencies',
+            'general' => __('General Settings', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'cryptos' => __('Select Cryptocurrencies', 'nomiddleman-crypto-payments-for-woocommerce'),
         );
 
         foreach ($cryptos as $crypto) {
@@ -79,11 +79,11 @@ class NMM_Admin {
             }
         }
 
-        $tabs['pricing'] = 'Pricing Options';
+        $tabs['pricing'] = __('Pricing Options', 'nomiddleman-crypto-payments-for-woocommerce');
 
         ?>
         <div class="wrap nmm-settings-wrap">
-            <h1><?php echo esc_html(apply_filters('nmm_settings_display_name', 'Nomiddleman Crypto Payments for Woocommerce')); ?>
+            <h1><?php echo esc_html(apply_filters('nmm_settings_display_name', __('Nomiddleman Crypto Payments for Woocommerce', 'nomiddleman-crypto-payments-for-woocommerce'))); ?>
                 <span class="nmm-version">v<?php echo esc_html(NMM_VERSION); ?></span></h1>
 
             <?php settings_errors('nmmpro_options'); ?>
@@ -108,22 +108,22 @@ class NMM_Admin {
 
                     <div class="nmm-tab-panels">
                         <div class="nmm-tab-panel" id="nmm-tab-general">
-                            <h2>General Settings</h2>
+                            <h2><?php esc_html_e('General Settings', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
                             <table class="form-table" role="presentation">
                                 <?php
-                                self::render_text_row('payment_label', 'Payment Label',
-                                    self::value($values, 'payment_label', 'Pay with cryptocurrency'),
-                                    'This will be displayed on the checkout screen when the customer selects their payment option.');
-                                self::render_textarea_row('payment_message_html', 'Customer Payment Message',
+                                self::render_text_row('payment_label', __('Payment Label', 'nomiddleman-crypto-payments-for-woocommerce'),
+                                    self::value($values, 'payment_label', __('Pay with cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce')),
+                                    __('This will be displayed on the checkout screen when the customer selects their payment option.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                                self::render_textarea_row('payment_message_html', __('Customer Payment Message', 'nomiddleman-crypto-payments-for-woocommerce'),
                                     self::value($values, 'payment_message_html', ''),
-                                    'This is displayed above the crypto payment details on the payment screen (After the customer clicks "Checkout").');
+                                    __('This is displayed above the crypto payment details on the payment screen (After the customer clicks "Checkout").', 'nomiddleman-crypto-payments-for-woocommerce'));
                                 ?>
                             </table>
                         </div>
 
                         <div class="nmm-tab-panel" id="nmm-tab-cryptos">
-                            <h2>Select Cryptocurrencies</h2>
-                            <p class="description">Choose the cryptocurrencies you want to accept, save, then configure each one on its own tab.</p>
+                            <h2><?php esc_html_e('Select Cryptocurrencies', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
+                            <p class="description"><?php esc_html_e('Choose the cryptocurrencies you want to accept, save, then configure each one on its own tab.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                             <div class="nmm-crypto-select">
                                 <?php
                                 $selected = $settings->get_selected_cryptos();
@@ -149,8 +149,8 @@ class NMM_Admin {
                         endforeach; ?>
 
                         <div class="nmm-tab-panel" id="nmm-tab-pricing">
-                            <h2>Pricing Options</h2>
-                            <p class="description">Price is the average of the APIs selected. At least one must be selected. Adding more can slow down thank you page loading.</p>
+                            <h2><?php esc_html_e('Pricing Options', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
+                            <p class="description"><?php esc_html_e('Price is the average of the APIs selected. At least one must be selected. Adding more can slow down thank you page loading.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                             <?php
                             $priceApis = array(
                                 '0' => 'CoinGecko',
@@ -173,19 +173,19 @@ class NMM_Admin {
                                 <?php endforeach; ?>
                             </div>
 
-                            <h2>API Keys (optional)</h2>
+                            <h2><?php esc_html_e('API Keys (optional)', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
                             <table class="form-table" role="presentation">
                                 <?php
-                                self::render_text_row('blockcypher_token', 'BlockCypher API Token',
+                                self::render_text_row('blockcypher_token', __('BlockCypher API Token', 'nomiddleman-crypto-payments-for-woocommerce'),
                                     self::value($values, 'blockcypher_token', ''),
-                                    'Optional. LTC and DOGE payment verification uses BlockCypher, whose keyless tier allows roughly 100 requests per hour. A free token from blockcypher.com raises that substantially for busier stores.');
+                                    __('Optional. LTC and DOGE payment verification uses BlockCypher, whose keyless tier allows roughly 100 requests per hour. A free token from blockcypher.com raises that substantially for busier stores.', 'nomiddleman-crypto-payments-for-woocommerce'));
                                 ?>
                             </table>
                         </div>
                     </div>
                 </div>
 
-                <?php submit_button('Save Settings'); ?>
+                <?php submit_button(__('Save Settings', 'nomiddleman-crypto-payments-for-woocommerce')); ?>
             </form>
         </div>
         <?php
@@ -206,43 +206,46 @@ class NMM_Admin {
 
             <?php if ($storedModeUnavailable) : ?>
                 <div class="notice notice-error inline nmm-inline-notice">
-                    <p><strong>The mode previously configured for <?php echo esc_html($crypto->get_name()); ?> can no longer verify payments</strong> &mdash;
-                    every public API for it has shut down. Orders in this mode will never confirm automatically.
-                    Please switch to Classic Mode (manual confirmation) below and save.</p>
+                    <p><strong><?php
+                        /* translators: %s: cryptocurrency name */
+                        printf(esc_html__('The mode previously configured for %s can no longer verify payments', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($crypto->get_name())); ?></strong> &mdash;
+                    <?php esc_html_e('every public API for it has shut down. Orders in this mode will never confirm automatically. Please switch to Classic Mode (manual confirmation) below and save.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                 </div>
             <?php endif; ?>
 
             <?php if (!$autopayAvailable && $crypto->has_autopay() || !$hdAvailable && $crypto->has_hd()) : ?>
                 <p class="description">
-                    <?php if (!$autopayAvailable && $crypto->has_autopay()) : ?>
-                        Autopay Mode is unavailable for <?php echo esc_html($cid); ?>: no working transaction API exists anymore.
-                    <?php endif; ?>
-                    <?php if (!$hdAvailable && $crypto->has_hd()) : ?>
-                        Privacy Mode is unavailable for <?php echo esc_html($cid); ?>: no working balance API exists anymore.
-                    <?php endif; ?>
+                    <?php if (!$autopayAvailable && $crypto->has_autopay()) :
+                        /* translators: %s: cryptocurrency ticker */
+                        printf(esc_html__('Autopay Mode is unavailable for %s: no working transaction API exists anymore.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($cid));
+                    endif; ?>
+                    <?php if (!$hdAvailable && $crypto->has_hd()) :
+                        /* translators: %s: cryptocurrency ticker */
+                        printf(esc_html__('Privacy Mode is unavailable for %s: no working balance API exists anymore.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($cid));
+                    endif; ?>
                 </p>
             <?php endif; ?>
 
             <table class="form-table" role="presentation">
                 <tr>
-                    <th scope="row">Markup/Markdown %</th>
+                    <th scope="row"><?php esc_html_e('Markup/Markdown %', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <input type="number" step="0.1" min="-99.9" max="100"
                                name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_markup]"
                                value="<?php echo esc_attr(self::value($values, $cid . '_markup', '0.0')); ?>" />
-                        <p class="description">This will increase/decrease the amount of cryptocurrency the customer will owe for the order. (4.8 = 4.8% markup, -10.0 = 10% markdown). Only the crypto amount changes; the fiat value shown to the customer stays the same.</p>
+                        <p class="description"><?php esc_html_e('This will increase/decrease the amount of cryptocurrency the customer will owe for the order. (4.8 = 4.8% markup, -10.0 = 10% markdown). Only the crypto amount changes; the fiat value shown to the customer stays the same.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
                 </tr>
                 <tr>
-                    <th scope="row">Mode</th>
+                    <th scope="row"><?php esc_html_e('Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <fieldset class="nmm-mode-select">
-                            <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="0" <?php checked($mode, '0'); ?> /> Classic Mode</label><br />
+                            <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="0" <?php checked($mode, '0'); ?> /> <?php esc_html_e('Classic Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></label><br />
                             <?php if ($autopayAvailable) : ?>
-                                <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="1" <?php checked($mode, '1'); ?> /> Autopay Mode <strong>(BETA)</strong></label><br />
+                                <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="1" <?php checked($mode, '1'); ?> /> <?php esc_html_e('Autopay Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?> <strong><?php esc_html_e('(BETA)', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></label><br />
                             <?php endif; ?>
                             <?php if ($hdAvailable) : ?>
-                                <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="2" <?php checked($mode, '2'); ?> /> Privacy Mode</label>
+                                <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="2" <?php checked($mode, '2'); ?> /> <?php esc_html_e('Privacy Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></label>
                             <?php endif; ?>
                         </fieldset>
                     </td>
@@ -250,15 +253,15 @@ class NMM_Admin {
 
                 <?php if ($autopayAvailable) : ?>
                 <tr class="nmm-requires-mode" data-modes="1">
-                    <th scope="row">Autopay Disclaimer</th>
+                    <th scope="row"><?php esc_html_e('Autopay Disclaimer', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <div class="notice notice-warning inline nmm-inline-notice">
-                            <p>Please note Autopay Mode is still in <strong>beta</strong>. There is no guarantee every order will be processed correctly.</p>
-                            <p><strong>Adjusting the following settings can improve Autopay accuracy:</strong></p>
+                            <p><?php echo wp_kses_post(__('Please note Autopay Mode is still in <strong>beta</strong>. There is no guarantee every order will be processed correctly.', 'nomiddleman-crypto-payments-for-woocommerce')); ?></p>
+                            <p><?php echo wp_kses_post(__('<strong>Adjusting the following settings can improve Autopay accuracy:</strong>', 'nomiddleman-crypto-payments-for-woocommerce')); ?></p>
                             <ul>
-                                <li><strong>Wallet Addresses:</strong> Adding more addresses greatly increases autopay reliability while increasing privacy. <em>We suggest having as many addresses as orders you get an hour in that cryptocurrency.</em></li>
-                                <li><strong>Order Cancellation Timer:</strong> Reducing this will not only increase autopay reliability but also reduce the effects of volatility. <em>We suggest a value of 1 hour for high throughput stores.</em></li>
-                                <li><strong>Auto-Confirm Percentage:</strong> Do not touch this unless you know what you are doing.</li>
+                                <li><?php echo wp_kses_post(__('<strong>Wallet Addresses:</strong> Adding more addresses greatly increases autopay reliability while increasing privacy. <em>We suggest having as many addresses as orders you get an hour in that cryptocurrency.</em>', 'nomiddleman-crypto-payments-for-woocommerce')); ?></li>
+                                <li><?php echo wp_kses_post(__('<strong>Order Cancellation Timer:</strong> Reducing this will not only increase autopay reliability but also reduce the effects of volatility. <em>We suggest a value of 1 hour for high throughput stores.</em>', 'nomiddleman-crypto-payments-for-woocommerce')); ?></li>
+                                <li><?php echo wp_kses_post(__('<strong>Auto-Confirm Percentage:</strong> Do not touch this unless you know what you are doing.', 'nomiddleman-crypto-payments-for-woocommerce')); ?></li>
                             </ul>
                         </div>
                     </td>
@@ -267,16 +270,16 @@ class NMM_Admin {
 
                 <?php if ($cid === 'XMR') : ?>
                 <tr class="nmm-requires-mode" data-modes="1">
-                    <th scope="row">Wallet RPC URL</th>
+                    <th scope="row"><?php esc_html_e('Wallet RPC URL', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <input type="text" class="regular-text" placeholder="http://127.0.0.1:18083/json_rpc"
                                name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_url]"
                                value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_url', '')); ?>" />
-                        <p class="description">Your own monero-wallet-rpc endpoint (a view-only wallet is enough). Each order gets a fresh subaddress and payments are verified through this RPC - your view key never leaves your server. If the RPC runs on another host, protect it with --rpc-login and fill in the credentials below.</p>
+                        <p class="description"><?php esc_html_e('Your own monero-wallet-rpc endpoint (a view-only wallet is enough). Each order gets a fresh subaddress and payments are verified through this RPC - your view key never leaves your server. If the RPC runs on another host, protect it with --rpc-login and fill in the credentials below.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
                 </tr>
                 <tr class="nmm-requires-mode" data-modes="1">
-                    <th scope="row">Wallet RPC Login (optional)</th>
+                    <th scope="row"><?php esc_html_e('Wallet RPC Login (optional)', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <input type="text" placeholder="username"
                                name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_user]"
@@ -289,7 +292,7 @@ class NMM_Admin {
                 <?php endif; ?>
 
                 <tr class="nmm-requires-mode" data-modes="<?php echo ($cid === 'XMR') ? '0' : '0,1'; ?>">
-                    <th scope="row">Wallet Addresses</th>
+                    <th scope="row"><?php esc_html_e('Wallet Addresses', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <div class="nmm-multi-text" data-field="<?php echo esc_attr($cid); ?>_addresses">
                             <?php
@@ -302,68 +305,68 @@ class NMM_Admin {
                                     <input type="text" class="regular-text"
                                            name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_addresses][]"
                                            value="<?php echo esc_attr($address); ?>" />
-                                    <button type="button" class="button-link nmm-multi-text-remove" aria-label="Remove address">Remove</button>
+                                    <button type="button" class="button-link nmm-multi-text-remove" aria-label="<?php esc_attr_e('Remove address', 'nomiddleman-crypto-payments-for-woocommerce'); ?>"><?php esc_html_e('Remove', 'nomiddleman-crypto-payments-for-woocommerce'); ?></button>
                                 </div>
                             <?php endforeach; ?>
-                            <button type="button" class="button nmm-multi-text-add">Add Address</button>
+                            <button type="button" class="button nmm-multi-text-add"><?php esc_html_e('Add Address', 'nomiddleman-crypto-payments-for-woocommerce'); ?></button>
                         </div>
                     </td>
                 </tr>
 
                 <?php if ($hdAvailable) : ?>
                 <tr class="nmm-requires-mode" data-modes="2">
-                    <th scope="row">Privacy Mode MPK</th>
+                    <th scope="row"><?php esc_html_e('Privacy Mode MPK', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <textarea rows="3" class="large-text nmm-mpk-input" id="<?php echo esc_attr($cid); ?>_hd_mpk-textarea"
                                   data-crypto="<?php echo esc_attr($cid); ?>"
                                   name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_hd_mpk]"><?php echo esc_textarea(self::value($values, $cid . '_hd_mpk', '')); ?></textarea>
-                        <p class="description">Your HD Wallet Master Public Key. We highly recommend using a brand new MPK for each store you run. You run the risk of address reuse and incorrectly processed orders if you use your MPK for multiple stores and/or purposes.</p>
+                        <p class="description"><?php esc_html_e('Your HD Wallet Master Public Key. We highly recommend using a brand new MPK for each store you run. You run the risk of address reuse and incorrectly processed orders if you use your MPK for multiple stores and/or purposes.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
                 </tr>
                 <tr class="nmm-requires-mode" data-modes="2">
-                    <th scope="row">Privacy Mode Sample Addresses</th>
+                    <th scope="row"><?php esc_html_e('Privacy Mode Sample Addresses', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
-                        <p class="description nmm-danger"><strong>PLEASE VERIFY YOU CONTROL THESE ADDRESSES BEFORE SAVING OR ELSE LOSS OF FUNDS WILL OCCUR!</strong></p>
+                        <p class="description nmm-danger"><strong><?php esc_html_e('PLEASE VERIFY YOU CONTROL THESE ADDRESSES BEFORE SAVING OR ELSE LOSS OF FUNDS WILL OCCUR!', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></p>
                         <div class="nmm-sample-addresses" data-crypto="<?php echo esc_attr($cid); ?>">
                             <?php for ($i = 0; $i < 3; $i++) : ?>
                                 <input type="text" class="regular-text" readonly="readonly"
                                        id="<?php echo esc_attr($cid); ?>_hd_mpk_sample_addresses-<?php echo (int) $i; ?>"
-                                       value="" placeholder="Addresses will be generated when a valid MPK is entered" />
+                                       value="" placeholder="<?php esc_attr_e('Addresses will be generated when a valid MPK is entered', 'nomiddleman-crypto-payments-for-woocommerce'); ?>" />
                             <?php endfor; ?>
                         </div>
-                        <p class="description">Due to lack of convention around MPK xpub prefixes, it is not possible to guess which address format an xpub should generate. Only legacy addresses starting with "1" are generated.</p>
+                        <p class="description"><?php esc_html_e('Due to lack of convention around MPK xpub prefixes, it is not possible to guess which address format an xpub should generate. Only legacy addresses starting with "1" are generated.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
                 </tr>
                 <?php
-                self::render_number_row($cid . '_hd_percent_to_process', 'HD Wallet Auto-Confirm Percentage',
+                self::render_number_row($cid . '_hd_percent_to_process', __('HD Wallet Auto-Confirm Percentage', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_hd_percent_to_process', '1.000'),
                     '0.800', '1.000', '0.001', '2',
-                    'Privacy Mode will automatically confirm payments that are this percentage of the total amount requested. (1 = 100%), (0.94 = 94%)');
-                self::render_number_row($cid . '_hd_required_confirmations', 'Privacy Mode Required Confirmations',
+                    __('Privacy Mode will automatically confirm payments that are this percentage of the total amount requested. (1 = 100%), (0.94 = 94%)', 'nomiddleman-crypto-payments-for-woocommerce'));
+                self::render_number_row($cid . '_hd_required_confirmations', __('Privacy Mode Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_hd_required_confirmations', '2'),
                     '0', '100', '1', '2',
-                    'The number of confirmations a payment needs before it is considered a valid payment.');
-                self::render_number_row($cid . '_hd_order_cancellation_time_hr', 'Privacy Mode Order Cancellation Timer (hr)',
+                    __('The number of confirmations a payment needs before it is considered a valid payment.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                self::render_number_row($cid . '_hd_order_cancellation_time_hr', __('Privacy Mode Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_hd_order_cancellation_time_hr', '24'),
                     '0.01', '168', '0.01', '2',
-                    'Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)');
+                    __('Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)', 'nomiddleman-crypto-payments-for-woocommerce'));
                 endif; ?>
 
                 <?php if ($autopayAvailable) :
-                self::render_number_row($cid . '_autopayment_percent_to_process', 'Auto-Confirm Percentage',
+                self::render_number_row($cid . '_autopayment_percent_to_process', __('Auto-Confirm Percentage', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_autopayment_percent_to_process', '0.9999'),
                     '0.9850', '1.0000', '0.0001', '1',
-                    'Auto-Payment will automatically confirm payments within this percentage of the total requested. Lowering it increases the risk of matching the wrong payment - change with care.');
+                    __('Auto-Payment will automatically confirm payments within this percentage of the total requested. Lowering it increases the risk of matching the wrong payment - change with care.', 'nomiddleman-crypto-payments-for-woocommerce'));
                 if ($crypto->needs_confirmations()) {
-                    self::render_number_row($cid . '_autopayment_required_confirmations', 'Required Confirmations',
+                    self::render_number_row($cid . '_autopayment_required_confirmations', __('Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
                         self::value($values, $cid . '_autopayment_required_confirmations', '2'),
                         '0', '100', '1', '1',
-                        'The number of confirmations a payment needs before it is considered a valid payment.');
+                        __('The number of confirmations a payment needs before it is considered a valid payment.', 'nomiddleman-crypto-payments-for-woocommerce'));
                 }
-                self::render_number_row($cid . '_autopayment_order_cancellation_time_hr', 'Order Cancellation Timer (hr)',
+                self::render_number_row($cid . '_autopayment_order_cancellation_time_hr', __('Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_autopayment_order_cancellation_time_hr', '1'),
                     '0.01', '168', '0.01', '1',
-                    'Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)');
+                    __('Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)', 'nomiddleman-crypto-payments-for-woocommerce'));
                 endif; ?>
             </table>
         </div>

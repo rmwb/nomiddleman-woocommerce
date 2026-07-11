@@ -3,6 +3,12 @@
 
 	// ---- Pay in browser wallet (EVM: MetaMask or any injected provider) ----
 
+	var i18n = window.nmmPayI18n || {};
+
+	function t(key, fallback) {
+		return i18n[key] || fallback;
+	}
+
 	var btn = document.getElementById('nmm-wallet-pay');
 
 	function setMsg(text) {
@@ -42,17 +48,17 @@
 				tx.value = '0x' + BigInt(d.units).toString(16);
 			}
 
-			setMsg('Confirm the payment in your wallet…');
+			setMsg(t('confirmInWallet', 'Confirm the payment in your wallet…'));
 			return window.ethereum.request({ method: 'eth_sendTransaction', params: [tx] });
 		}).then(function (hash) {
-			setMsg('Transaction sent (' + hash.substring(0, 18) + '…). Waiting for the network to confirm — this page updates automatically.');
+			setMsg(t('txSent', 'Transaction sent (%s…). Waiting for the network to confirm — this page updates automatically.').replace('%s', hash.substring(0, 18)));
 		}).catch(function (err) {
 			if (err && err.code === 4902) {
-				setMsg('Your wallet does not know this network. Please add it in your wallet and try again.');
+				setMsg(t('unknownNetwork', 'Your wallet does not know this network. Please add it in your wallet and try again.'));
 			} else if (err && err.code === 4001) {
-				setMsg('Payment cancelled in wallet.');
+				setMsg(t('cancelledInWallet', 'Payment cancelled in wallet.'));
 			} else {
-				setMsg((err && err.message) ? err.message : 'Could not start the wallet payment. You can still pay by scanning the QR code or copying the address.');
+				setMsg((err && err.message) ? err.message : t('walletFailed', 'Could not start the wallet payment. You can still pay by scanning the QR code or copying the address.'));
 			}
 		});
 	}
@@ -86,16 +92,16 @@
 				}
 
 				if (json.data.paid) {
-					status.textContent = 'Payment received — thank you!';
+					status.textContent = t('paid', 'Payment received — thank you!');
 					status.classList.add('nmm-status-paid');
 					window.setTimeout(function () { window.location.reload(); }, 2000);
 					return;
 				}
 
 				if (json.data.underpaid) {
-					status.textContent = 'Partial payment received: ' + json.data.received
-						+ ' of ' + json.data.expected
-						+ '. Please send the remaining amount to the same address.';
+					status.textContent = t('partial', 'Partial payment received: %1$s of %2$s. Please send the remaining amount to the same address.')
+						.replace('%1$s', json.data.received)
+						.replace('%2$s', json.data.expected);
 				}
 
 				window.setTimeout(tick, pollDelay);

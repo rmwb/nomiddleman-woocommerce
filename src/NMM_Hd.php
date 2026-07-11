@@ -64,7 +64,8 @@ class NMM_Hd {
 					$order = new WC_Order( $orderId );
 
 					$orderNote = sprintf(
-						'Order payment of %s %s verified at %s.',
+						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time */
+						__('Order payment of %1$s %2$s verified at %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
 						NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 						$cryptoId,
 						date('Y-m-d H:i:s', time()));			
@@ -83,7 +84,8 @@ class NMM_Hd {
 					// handle multiple underpayments, just add a new note
 					if ($record['status'] === 'underpaid') {
 						$orderNote = sprintf(
-							'New payment was received but is still under order total. Received payment of %s %s.<br>Remaining payment required: %s<br>Wallet Address: %s',
+							/* translators: 1: amount received, 2: cryptocurrency ticker, 3: remaining amount, 4: wallet address */
+							__('New payment was received but is still under order total. Received payment of %1$s %2$s.<br>Remaining payment required: %3$s<br>Wallet Address: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
 							NMM_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount),
 							$cryptoId,
 							NMM_Cryptocurrencies::get_price_string($cryptoId, ((float) $orderAmount) - $blockchainTotalReceived),
@@ -97,7 +99,8 @@ class NMM_Hd {
 					// handle first underpayment, update status to pending payment (since we use on-hold for orders with no payment yet)
 					else {						
 						$orderNote = sprintf(
-							'Payment of %s %s received at %s. This is under the amount required to process this order.<br>Remaining payment required: %s<br>Wallet Address: %s',
+							/* translators: 1: amount received, 2: cryptocurrency ticker, 3: date/time, 4: remaining amount, 5: wallet address */
+							__('Payment of %1$s %2$s received at %3$s. This is under the amount required to process this order.<br>Remaining payment required: %4$s<br>Wallet Address: %5$s', 'nomiddleman-crypto-payments-for-woocommerce'),
 							NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 							$cryptoId,
 							date('m/d/Y g:i a', time() + (60 * 60 * get_option('gmt_offset'))),
@@ -250,9 +253,10 @@ class NMM_Hd {
 
 				$order = new WC_Order($orderId);
 				$orderNote = sprintf(
-					'Your ' . $cryptoId . ' order was <strong>cancelled</strong> because you were unable to pay for %s hour(s). Please do not send any funds to the payment address.',
-					round($orderCancellationTimeSec/3600, 1),
-					$address);
+					/* translators: 1: cryptocurrency ticker, 2: number of hours */
+					__('Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce'),
+					$cryptoId,
+					round($orderCancellationTimeSec/3600, 1));
 
 				add_filter('woocommerce_email_subject_customer_note', 'NMM_change_cancelled_email_note_subject_line', 1, 2);
 	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);

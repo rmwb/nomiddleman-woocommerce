@@ -104,7 +104,7 @@ class NMM_Monero {
 		));
 
 		if (is_wp_error($result) || !isset($result->address)) {
-			throw new \Exception('Could not create a Monero payment address. Please try again or contact the site administrator.');
+			throw new \Exception(esc_html__('Could not create a Monero payment address. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		return $result->address;

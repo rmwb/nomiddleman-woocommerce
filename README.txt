@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.8.1
+Stable Tag: 2.9.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -121,6 +121,10 @@ Public transaction APIs for these coins no longer exist or were never available,
 3. Customer Thank-You Page
 
 == Changelog ==
+
+= 2.9.0 =
+* Internationalization: every customer- and merchant-facing string is now translatable (text domain: nomiddleman-crypto-payments-for-woocommerce), including checkout, the thank-you page, emails, order notes, admin settings, validation errors, and the JavaScript wallet/status messages
+* Translation template (.pot) shipped in /languages - translators can build .po/.mo files against it
 
 = 2.8.1 =
 * Hardening: every PHP file now blocks direct web access (ABSPATH guard)

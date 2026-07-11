@@ -87,7 +87,7 @@ class NMM_Settings {
 			}
 		}
 
-		return 'Pay with cryptocurrency';
+		return __('Pay with cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce');
 	}
 
 	public function get_customer_payment_message($crypto) {

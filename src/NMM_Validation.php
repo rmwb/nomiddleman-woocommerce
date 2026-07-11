@@ -61,7 +61,7 @@ class NMM_Validation {
 				if (filter_var($rpcUrl, FILTER_VALIDATE_URL) === false) {
 					$invalidCryptoSettings = true;
 					$atLeastOneInvalidCrypto = true;
-					$errorMessages[] = 'Monero Autopay needs a valid monero-wallet-rpc URL. Disabling Monero.';
+					$errorMessages[] = __('Monero Autopay needs a valid monero-wallet-rpc URL. Disabling Monero.', 'nomiddleman-crypto-payments-for-woocommerce');
 				}
 			}
 			else if ($cryptoSelected && ($newSettings->basic_enabled($cryptoId) || $newSettings->autopay_enabled($cryptoId))) {
@@ -78,7 +78,8 @@ class NMM_Validation {
 				if (! $hasValidWalletAddress) {
 					$invalidCryptoSettings = true;
 					$atLeastOneInvalidCrypto = true;
-					$errorMessages[] = $cryptoName . ' has no valid wallet addresses. Disabling ' . $cryptoName . '.';
+					/* translators: %1$s: cryptocurrency name */
+					$errorMessages[] = sprintf(__('%1$s has no valid wallet addresses. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
 				}
 				else {
 					$carouselRepo = new NMM_Carousel_Repo();
@@ -92,7 +93,8 @@ class NMM_Validation {
 					if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
 						$invalidCryptoSettings = true;
 						$atLeastOneInvalidCrypto = true;
-						$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '.';
+						/* translators: %1$s: cryptocurrency name */
+							$errorMessages[] = sprintf(__('%1$s has an invalid HD MPK. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
 					}
 				}
 				else {
@@ -100,17 +102,20 @@ class NMM_Validation {
 						$invalidCryptoSettings = true;
 						$atLeastOneInvalidCrypto = true;
 						if (NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
-							$errorMessages[] = 'Please use an xpub MPK. Disabling ' . $cryptoName . '.';
+							/* translators: %s: cryptocurrency name */
+							$errorMessages[] = sprintf(__('Please use an xpub MPK. Disabling %s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
 						}
 						else {
-							$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '.';
+							/* translators: %1$s: cryptocurrency name */
+							$errorMessages[] = sprintf(__('%1$s has an invalid HD MPK. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
 						}
 					}
 					else {
 						if (!NMM_Hd::is_valid_xpub($mpk)) {
 							$invalidCryptoSettings = true;
 							$atLeastOneInvalidCrypto = true;
-							$errorMessages[] = $cryptoName . ' has an invalid HD MPK. Disabling ' . $cryptoName . '.';
+							/* translators: %1$s: cryptocurrency name */
+							$errorMessages[] = sprintf(__('%1$s has an invalid HD MPK. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
 						}
 					}
 				}
@@ -123,7 +128,8 @@ class NMM_Validation {
 				if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
 					if ($address !== '') {
 						$invalidAddressKeys[] = $k;
-						$errorMessages[] = $cryptoName . ' has invalid address: ' . esc_html($address);
+						/* translators: 1: cryptocurrency name, 2: the invalid address */
+						$errorMessages[] = sprintf(__('%1$s has invalid address: %2$s', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName, esc_html($address));
 					}
 					else {
 						$invalidAddressKeys[] = $k;

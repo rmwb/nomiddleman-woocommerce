@@ -98,7 +98,8 @@ class NMM_Payment {
 				foreach ($matchingPaymentRecords as $matchingRecord) {
 					$orderId = $matchingRecord['order_id'];
 					$order = new WC_Order($orderId);
-					$order->add_order_note('This order has a matching ' . $cryptoId . ' transaction but we cannot verify it due to other orders with similar payment totals. Please reconcile manually. Transaction Hash: ' . $txHash);
+					/* translators: 1: cryptocurrency ticker, 2: transaction hash */
+					$order->add_order_note(sprintf(__('This order has a matching %1$s transaction but we cannot verify it due to other orders with similar payment totals. Please reconcile manually. Transaction Hash: %2$s', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoId, $txHash));
 				}
 				
 				
@@ -114,7 +115,8 @@ class NMM_Payment {
 
 				$order = wc_get_order($orderId);
 				$orderNote = sprintf(
-						'Order payment of %s %s verified at %s. Transaction Hash: %s',
+						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time, 4: transaction hash */
+						__('Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
 						NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $transactionAmount / (10**$crypto->get_round_precision())),
 						$cryptoId,
 						date('Y-m-d H:i:s', time()),
@@ -264,7 +266,7 @@ class NMM_Payment {
 
 		if ($result['result'] === 'error') {			
 			NMM_Util::log(__FILE__, __LINE__, 'BAD API CALL');
-			throw new \Exception('Could not reach external service to do auto payment processing.');
+			throw new \Exception(esc_html__('Could not reach external service to do auto payment processing.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}		
 
 		return $result['transactions'];
@@ -296,9 +298,10 @@ class NMM_Payment {
 				$order = new WC_Order($orderId);
 
 				$orderNote = sprintf(
-					'Your ' . $cryptoId . ' order was <strong>cancelled</strong> because you were unable to pay for %s hour(s). Please do not send any funds to the payment address.',
-					round($paymentCancellationTimeSec/3600, 1),
-					$address);
+					/* translators: 1: cryptocurrency ticker, 2: number of hours */
+					__('Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce'),
+					$cryptoId,
+					round($paymentCancellationTimeSec/3600, 1));
 
 				add_filter('woocommerce_email_subject_customer_note', 'NMM_change_cancelled_email_note_subject_line', 1, 2);
 	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);   

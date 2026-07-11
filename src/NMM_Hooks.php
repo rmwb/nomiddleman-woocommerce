@@ -5,26 +5,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 function NMM_change_cancelled_email_note_subject_line($subject, $order) {
-	$subject = 'Order ' . $order->get_id() . ' has been cancelled due to non-payment';
+	/* translators: %d: order number */
+	$subject = sprintf(__('Order %d has been cancelled due to non-payment', 'nomiddleman-crypto-payments-for-woocommerce'), $order->get_id());
 
 	return $subject;
 
 }
 
 function NMM_change_cancelled_email_heading($heading, $order) {
-	$heading = "Your order has been cancelled. Do not send any cryptocurrency to the payment address.";
+	$heading = __('Your order has been cancelled. Do not send any cryptocurrency to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce');
 
 	return $heading;
 }
 
 function NMM_change_partial_email_note_subject_line($subject, $order) {
-	$subject = 'Partial payment received for Order ' . $order->get_id();
+	/* translators: %d: order number */
+	$subject = sprintf(__('Partial payment received for Order %d', 'nomiddleman-crypto-payments-for-woocommerce'), $order->get_id());
 
 	return $subject;
 }
 
 function NMM_change_partial_email_heading($heading, $order) {
-	$heading = 'Partial payment received for Order ' . $order->get_id();
+	/* translators: %d: order number */
+	$heading = sprintf(__('Partial payment received for Order %d', 'nomiddleman-crypto-payments-for-woocommerce'), $order->get_id());
 
 	return $heading;
 }
@@ -276,8 +279,8 @@ function NMM_first_mpk_address_ajax() {
 		}
 		
 		if (!NMM_Util::p_enabled() && (NMM_Hd::is_valid_ypub($mpk) || NMM_Hd::is_valid_zpub($mpk))) {
-			$message = 'You have entered a valid Segwit MPK.';
-			$message2 = 'Segwit MPKs (ypub/zpub) are not supported - please use an xpub.';
+			$message = __('You have entered a valid Segwit MPK.', 'nomiddleman-crypto-payments-for-woocommerce');
+			$message2 = __('Segwit MPKs (ypub/zpub) are not supported - please use an xpub.', 'nomiddleman-crypto-payments-for-woocommerce');
 
 			echo json_encode([$message, $message2, '']);
 			wp_die();

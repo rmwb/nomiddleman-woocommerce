@@ -101,13 +101,14 @@ class NMM_Exchange {
         $response = wp_remote_get('https://open.er-api.com/v6/latest/' . rawurlencode($fromCurr));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
-            throw new \Exception( 'Could not reach the currency conversion service. Please try again.' );
+            throw new \Exception(esc_html__('Could not reach the currency conversion service. Please try again.', 'nomiddleman-crypto-payments-for-woocommerce'));
         }
 
         $body = json_decode($response['body']);
 
         if (!isset($body->rates->USD) || $body->rates->USD <= 0) {
-            throw new \Exception( 'Could not convert ' . esc_html($fromCurr) . ' to USD. Please try again.' );
+            /* translators: %s: currency code */
+            throw new \Exception(sprintf(esc_html__('Could not convert %s to USD. Please try again.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($fromCurr)));
         }
 
         $conversionRate = (float) $body->rates->USD;

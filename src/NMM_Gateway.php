@@ -21,8 +21,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $this->id = 'nmmpro_gateway';        
         $this->title = $nmmSettings->get_customer_gateway_message();
         $this->has_fields = true;
-        $this->method_title = 'Nomiddleman Crypto Payments';
-        $this->method_description = 'Allow customers to pay using cryptocurrency';
+        $this->method_title = __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce');
+        $this->method_description = __('Allow customers to pay using cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce');
         $this->init_form_fields();
         $this->init_settings();
 
@@ -33,12 +33,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
     public function admin_options() {
         
         ?>
-        <h2>Nomiddleman Crypto Payments</h2>
+        <h2><?php esc_html_e('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
         <div class="nmm-options">
             <table class="form-table">
                 <?php $this->generate_settings_html(); ?>
             </table><!--/.form-table-->
-            <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMM_REDUX_SLUG . '&tab=general')); ?>">Nomiddleman Plugin Settings</a>
+            <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMM_REDUX_SLUG . '&tab=general')); ?>"><?php esc_html_e('Nomiddleman Plugin Settings', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
         </div>
         <?php        
     }
@@ -49,14 +49,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // general settings
         $generalSettings = array(
             'general_settings' => array(
-                'title' => 'General settings',
+                'title' => __('General settings', 'nomiddleman-crypto-payments-for-woocommerce'),
                 'type' => 'title',
                 'class' => 'section-title',
             ),
             'enabled' => array(
-                'title' => 'Enable/Disable', 'woocommerce',
+                'title' => __('Enable/Disable', 'nomiddleman-crypto-payments-for-woocommerce'),
                 'type' => 'checkbox',
-                'label' => 'Enable cryptocurrency payments', 'woocommerce',
+                'label' => __('Enable cryptocurrency payments', 'nomiddleman-crypto-payments-for-woocommerce'),
                 'default' => 'yes',
                 'class' => 'nmm-setting',
             ),
@@ -101,7 +101,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         woocommerce_form_field(
             'nmm_currency_id', array(
                 'type'     => 'select',                
-                'label'    => 'Choose a cryptocurrency',
+                'label'    => __('Choose a cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce'),
                 'required' => true,
                 'default' => 'BTC',
                 'options'  => $selectOptions,
@@ -115,7 +115,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         if (WC()->session->get('chosen_payment_method') === $this->id) {
             // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce verifies its checkout nonce before invoking gateway hooks.
             if (empty($_POST['nmm_currency_id'])) {
-                wc_add_notice('Please choose a cryptocurrency.', 'error');
+                wc_add_notice(__('Please choose a cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
                 return;
             }
             try {
@@ -144,7 +144,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // also surfaces through $_POST for legacy gateways.
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce/Store API verify their own nonces before process_payment runs.
         if (empty($_POST['nmm_currency_id']) || !array_key_exists(sanitize_text_field($_POST['nmm_currency_id']), $this->cryptos)) {
-            wc_add_notice('Please choose a cryptocurrency.', 'error');
+            wc_add_notice(__('Please choose a cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
             return array('result' => 'failure');
         }
 
@@ -163,6 +163,17 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $cssPath = NMM_PLUGIN_DIR . '/assets/css/nmm-thank-you-page.css';
         wp_enqueue_style('nmm-styles', $cssPath);
         wp_enqueue_script('nmm-pay', NMM_PLUGIN_DIR . '/assets/js/nmm-pay.js', array(), NMM_VERSION, true);
+        wp_localize_script('nmm-pay', 'nmmPayI18n', array(
+            'confirmInWallet' => __('Confirm the payment in your wallet…', 'nomiddleman-crypto-payments-for-woocommerce'),
+            /* translators: %s: truncated transaction hash */
+            'txSent' => __('Transaction sent (%s…). Waiting for the network to confirm — this page updates automatically.', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'unknownNetwork' => __('Your wallet does not know this network. Please add it in your wallet and try again.', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'cancelledInWallet' => __('Payment cancelled in wallet.', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'walletFailed' => __('Could not start the wallet payment. You can still pay by scanning the QR code or copying the address.', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'paid' => __('Payment received — thank you!', 'nomiddleman-crypto-payments-for-woocommerce'),
+            /* translators: 1: amount received, 2: amount expected */
+            'partial' => __('Partial payment received: %1$s of %2$s. Please send the remaining amount to the same address.', 'nomiddleman-crypto-payments-for-woocommerce'),
+        ));
         
         try {
             $order = wc_get_order($order_id);
@@ -172,7 +183,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             if (!empty($existingWalletAddress)) {
 
                 if ($order->is_paid()) {
-                    echo '<p class="nmm-status-paid">Payment received - thank you! Your order is being processed.</p>';
+                    echo '<p class="nmm-status-paid">' . esc_html__('Payment received - thank you! Your order is being processed.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
                     return;
                 }
 
@@ -242,7 +253,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                         $orderWalletAddress = $hdRepo->get_oldest_ready();
                     }
                     catch ( \Exception $e) {
-                        throw new \Exception('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator... Inner Exception: ' . $e->getMessage());
+                        throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($e->getMessage()));
                     }
                 }
 
@@ -255,7 +266,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 $hdRepo->set_order_amount($orderWalletAddress, $formattedCryptoTotal);
 
                 $orderNote = sprintf(
-                    'Privacy Mode (HD wallet) address %s is awaiting payment of %s %s.',
+                    /* translators: 1: wallet address, 2: amount, 3: cryptocurrency ticker */
+                    __('Privacy Mode (HD wallet) address %1$s is awaiting payment of %2$s %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
                     $orderWalletAddress,
                     $formattedCryptoTotal,
                     $cryptoId);
@@ -279,7 +291,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 }
 
                 $orderNote = sprintf(
-                    'Awaiting payment of %s %s to payment address %s.',
+                    /* translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address */
+                    __('Awaiting payment of %1$s %2$s to payment address %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
                     $formattedCryptoTotal,
                     $cryptoId,
                     $orderWalletAddress);
@@ -304,12 +317,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
             $order = wc_get_order($order_id);
 
             // cancel order if something went wrong
-            $order->update_status('wc-failed', 'Error Message: ' . $e->getMessage());
+            /* translators: %s: error message */
+            $order->update_status('wc-failed', sprintf(__('Error Message: %s', 'nomiddleman-crypto-payments-for-woocommerce'), $e->getMessage()));
             NMM_Util::log(__FILE__, __LINE__, 'Something went wrong during checkout: ' . $e->getMessage());
             echo '<div class="woocommerce-NoticeGroup woocommerce-NoticeGroup-checkout">';
             echo '<ul class="woocommerce-error">';
             echo '<li>';
-            echo 'Something went wrong.<br>';
+            echo esc_html__('Something went wrong.', 'nomiddleman-crypto-payments-for-woocommerce') . '<br>';
             echo esc_html($e->getMessage());
             echo '</li>';
             echo '</ul>';
@@ -330,11 +344,11 @@ class NMM_Gateway extends WC_Payment_Gateway {
             : $crypto->get_symbol() . $formattedTotal;
 
         if ($plain_text) {
-            echo "\nPAYMENT DETAILS\n\n";
-            echo 'Address: ' . esc_html($orderWalletAddress) . "\n";
-            echo 'Currency: ' . esc_html($crypto->get_name()) . "\n";
-            echo 'Total: ' . esc_html($totalLine) . "\n";
-            echo 'Scan a QR code for this payment on your order page: ' . esc_url($order->get_checkout_order_received_url()) . "\n\n";
+            echo "\n" . esc_html__('PAYMENT DETAILS', 'nomiddleman-crypto-payments-for-woocommerce') . "\n\n";
+            echo esc_html__('Address:', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($orderWalletAddress) . "\n";
+            echo esc_html__('Currency:', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($crypto->get_name()) . "\n";
+            echo esc_html__('Total:', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($totalLine) . "\n";
+            echo esc_html__('Scan a QR code for this payment on your order page:', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_url($order->get_checkout_order_received_url()) . "\n\n";
             return;
         }
 
@@ -345,24 +359,24 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $cid = NMM_Qr::stash_email_image($orderId, $qrData);
 
         ?>
-        <h2>Additional Details</h2>
+        <h2><?php esc_html_e('Additional Details', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
         <?php if ($cid !== '') : ?>
-        <p>QR Code Payment: </p>
+        <p><?php esc_html_e('QR Code Payment:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> </p>
         <div style="margin-bottom:12px;">
-            <img src="cid:<?php echo esc_attr($cid); ?>" width="196" height="196" alt="Payment QR code" />
+            <img src="cid:<?php echo esc_attr($cid); ?>" width="196" height="196" alt="<?php esc_attr_e('Payment QR code', 'nomiddleman-crypto-payments-for-woocommerce'); ?>" />
         </div>
         <?php endif; ?>
         <p>
-            Address: <?php echo esc_html($orderWalletAddress) ?>
+            <?php esc_html_e('Address:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> <?php echo esc_html($orderWalletAddress) ?>
         </p>
         <p>
-            Currency: <?php echo '<img src="' . esc_url($crypto->get_logo_file_path()) . '" alt="" />' . esc_html($crypto->get_name()); ?>
+            <?php esc_html_e('Currency:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> <?php echo '<img src="' . esc_url($crypto->get_logo_file_path()) . '" alt="" />' . esc_html($crypto->get_name()); ?>
         </p>
         <p>
-            Total: <?php echo esc_html($totalLine); ?>
+            <?php esc_html_e('Total:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> <?php echo esc_html($totalLine); ?>
         </p>
         <p>
-            <a href="<?php echo esc_url($order->get_checkout_order_received_url()); ?>">View payment details and QR code on your order page</a>
+            <a href="<?php echo esc_url($order->get_checkout_order_received_url()); ?>"><?php esc_html_e('View payment details and QR code on your order page', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
         </p>
         <?php
     }
@@ -394,16 +408,16 @@ class NMM_Gateway extends WC_Payment_Gateway {
         echo wp_kses_post($customerMessage);
         ?>
 
-        <h2>Cryptocurrency payment details</h2>
+        <h2><?php esc_html_e('Cryptocurrency payment details', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
         <ul class="woocommerce-order-overview woocommerce-thankyou-order-details order_details">
             <li class="woocommerce-order-overview__qr-code">
-                <p style="word-wrap: break-word;">QR Code payment:</p>
+                <p style="word-wrap: break-word;"><?php esc_html_e('QR Code payment:', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                 <div class="qr-code-container">
                     <?php echo NMM_Qr::svg($qrData, 200); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- trusted SVG markup generated in memory by this plugin. ?>
                 </div>
             </li>
             <li>
-                <p style="word-wrap: break-word;">Wallet Address:
+                <p style="word-wrap: break-word;"><?php esc_html_e('Wallet Address:', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
                     <strong>
                         <span class="woocommerce-Price-amount amount">
                             <?php echo '<span class="all-copy">' . esc_html($orderWalletAddress) . '</span>' ?>
@@ -412,7 +426,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </p>
             </li>
             <li>
-                <p>Currency: 
+                <p><?php esc_html_e('Currency:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> 
                     <strong>
                         <?php
                             echo '<img style="display:inline;height:23px;width:23px;vertical-align:middle;" src="' . esc_url($crypto->get_logo_file_path()) . '" />';
@@ -424,7 +438,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </p>
             </li>
             <li>
-                <p style="word-wrap: break-word;">Total: 
+                <p style="word-wrap: break-word;"><?php esc_html_e('Total:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> 
                     <strong>
                         <span class="woocommerce-Price-amount amount">
                             <?php 
@@ -454,18 +468,18 @@ class NMM_Gateway extends WC_Payment_Gateway {
                         data-contract="<?php echo esc_attr($crypto->is_erc20_token() ? $crypto->get_erc20_contract() : ''); ?>"
                         data-chain="<?php echo esc_attr(NMM_Cryptocurrencies::evm_chain_id($crypto->get_id())); ?>"
                         data-units="<?php echo esc_attr(NMM_Qr::to_base_units($cryptoTotal, $crypto->get_round_precision())); ?>">
-                    Pay in browser wallet
+                    <?php esc_html_e('Pay in browser wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
                 </button>
                 <p id="nmm-wallet-msg" aria-live="polite"></p>
             <?php elseif ($crypto->get_id() === 'SOL') : ?>
-                <p><a class="button alt" href="<?php echo esc_url($qrData); ?>">Open in Solana wallet</a></p>
+                <p><a class="button alt" href="<?php echo esc_url($qrData); ?>"><?php esc_html_e('Open in Solana wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a></p>
             <?php endif; ?>
 
             <p id="nmm-payment-status" class="nmm-payment-status"
                data-order="<?php echo esc_attr($orderId); ?>"
                data-key="<?php echo esc_attr($orderKey); ?>"
                data-ajax="<?php echo esc_url(admin_url('admin-ajax.php')); ?>">
-                Waiting for payment&hellip; this page updates automatically.
+                <?php esc_html_e('Waiting for payment… this page updates automatically.', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
             </p>
         </div>
         <?php
@@ -482,7 +496,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $prices = array();
         $reduxSettings = get_option(NMM_REDUX_ID);
         if (!array_key_exists('selected_price_apis', $reduxSettings)) {
-            throw new \Exception('No price API selected. Please contact plug-in support.');
+            throw new \Exception(esc_html__('No price API selected. Please contact plug-in support.', 'nomiddleman-crypto-payments-for-woocommerce'));
         }
 
         $selectedPriceApis = $reduxSettings['selected_price_apis'];
@@ -532,7 +546,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $count = count($prices);
 
         if ($count === 0) {        
-            throw new \Exception('No cryptocurrency exchanges could be reached, please try again.');
+            throw new \Exception(esc_html__('No cryptocurrency exchanges could be reached, please try again.', 'nomiddleman-crypto-payments-for-woocommerce'));
         }
 
         foreach ($prices as $price) {

@@ -7,8 +7,10 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.8.1
+Version: 2.9.0
 Requires PHP: 7.4
+Text Domain: nomiddleman-crypto-payments-for-woocommerce
+Domain Path: /languages
 Copyright: © 2020 Nomiddleman Crypto
 License: GNU General Public License v3.0
 License URI: http://www.gnu.org/licenses/gpl-3.0.html
@@ -19,9 +21,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+add_action('init', 'NMM_load_textdomain');
 add_action('plugins_loaded', 'NMM_init_gateways');
 add_action('before_woocommerce_init', 'NMM_declare_wc_feature_compatibility');
 add_action('woocommerce_blocks_loaded', 'NMM_register_blocks_support');
+
+function NMM_load_textdomain() {
+    load_plugin_textdomain('nomiddleman-crypto-payments-for-woocommerce', false, dirname(plugin_basename(__FILE__)) . '/languages');
+}
 
 function NMM_declare_wc_feature_compatibility() {
     if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
@@ -66,7 +73,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_BASENAME', plugin_basename(NMM_PLUGIN_FILE));
 
     define('NMM_CRON_JOB_URL', plugins_url('', __FILE__) . '/src/NMM_Cron.php');
-    define('NMM_VERSION', '2.8.1');
+    define('NMM_VERSION', '2.9.0');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 

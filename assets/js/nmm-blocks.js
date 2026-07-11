@@ -13,9 +13,10 @@
 	var decodeEntities = window.wp.htmlEntities.decodeEntities;
 
 	var settings = getSetting('nmmpro_gateway_data', {});
+	var i18n = settings.i18n || {};
 	var cryptos = settings.cryptos || [];
 	var defaultCrypto = cryptos.length > 0 ? cryptos[0].id : '';
-	var label = decodeEntities(settings.title || 'Pay with cryptocurrency');
+	var label = decodeEntities(settings.title || i18n.defaultTitle || 'Pay with cryptocurrency');
 
 	function Content(props) {
 		var stateHook = useState(defaultCrypto);
@@ -30,7 +31,7 @@
 					if (!selected) {
 						return {
 							type: responseTypes.ERROR,
-							message: 'Please choose a cryptocurrency.'
+							message: i18n.chooseError || 'Please choose a cryptocurrency.'
 						};
 					}
 
@@ -55,7 +56,7 @@
 			el(
 				'label',
 				{ htmlFor: 'nmm_currency_id', style: { display: 'block', marginBottom: '4px' } },
-				'Choose a cryptocurrency'
+				i18n.chooseLabel || 'Choose a cryptocurrency'
 			),
 			el(
 				'select',
