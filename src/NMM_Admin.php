@@ -88,6 +88,13 @@ class NMM_Admin {
 
             <?php settings_errors('nmmpro_options'); ?>
 
+            <?php if (!NMM_Util::hd_math_available()) : ?>
+                <div class="notice notice-warning">
+                    <p><strong><?php esc_html_e('Privacy Mode is unavailable on this server.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong>
+                    <?php esc_html_e('Generating HD wallet addresses needs the PHP gmp extension (preferred) or bcmath, and neither is enabled. Ask your host to enable one, then reload this page. Classic and Autopay Modes are unaffected.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+                </div>
+            <?php endif; ?>
+
             <form method="post" action="options.php" class="nmm-settings-form">
                 <?php settings_fields(self::OPTION_GROUP); ?>
 

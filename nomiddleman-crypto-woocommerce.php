@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.1
+Version: 2.9.2
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -70,7 +70,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.1');
+    define('NMM_VERSION', '2.9.2');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -140,6 +140,7 @@ function NMM_init_gateways(){
     
     if (is_admin()) {
         add_action('wp_ajax_firstmpkaddress', 'NMM_first_mpk_address_ajax');
+        add_filter('site_status_tests', 'NMM_register_site_health_test');
     }
 
     // thank-you page payment status poller (guests included)
@@ -378,6 +379,53 @@ function NMM_Register_Extensions() {
     if (get_option(NMM_EXTENSION_KEY) !== $extensionsToLoad) {
         update_option(NMM_EXTENSION_KEY, $extensionsToLoad);
     }
+}
+
+// Site Health test: Privacy Mode (HD wallets) needs the gmp or bcmath PHP
+// extension. Without one, address derivation fails with a misleading
+// "check your MPK" error, so surface the real cause under Tools > Site Health.
+function NMM_register_site_health_test($tests) {
+    $tests['direct']['nmm_hd_math'] = array(
+        'label' => __('Nomiddleman Privacy Mode math extension', 'nomiddleman-crypto-payments-for-woocommerce'),
+        'test'  => 'NMM_site_health_hd_math',
+    );
+    return $tests;
+}
+
+function NMM_site_health_hd_math() {
+    $result = array(
+        'label'       => __('The PHP extension for Privacy Mode is available', 'nomiddleman-crypto-payments-for-woocommerce'),
+        'status'      => 'good',
+        'badge'       => array(
+            'label' => __('Nomiddleman Crypto', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'color' => 'blue',
+        ),
+        'description' => '<p>' . esc_html__('The gmp or bcmath PHP extension is enabled, so Privacy Mode (HD wallet) address generation will work.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>',
+        'test'        => 'nmm_hd_math',
+    );
+
+    if (NMM_Util::hd_math_available()) {
+        return $result;
+    }
+
+    // Only Privacy-capable coins need this; check whether one is configured
+    // so we escalate the severity when it is actually in use.
+    $privacyInUse = false;
+    $settings = new NMM_Settings(get_option(NMM_REDUX_ID, array()));
+    foreach (NMM_Cryptocurrencies::get() as $crypto) {
+        if ($crypto->has_hd() && $settings->crypto_selected($crypto->get_id()) && $settings->hd_enabled($crypto->get_id())) {
+            $privacyInUse = true;
+            break;
+        }
+    }
+
+    $result['status']      = $privacyInUse ? 'critical' : 'recommended';
+    $result['label']       = $privacyInUse
+        ? __('Privacy Mode is enabled but its PHP extension is missing', 'nomiddleman-crypto-payments-for-woocommerce')
+        : __('Privacy Mode needs the gmp or bcmath PHP extension', 'nomiddleman-crypto-payments-for-woocommerce');
+    $result['description'] = '<p>' . esc_html__('Nomiddleman Privacy Mode generates a fresh HD wallet address for each order using elliptic-curve math that PHP cannot do on its own. Neither the gmp nor the bcmath PHP extension is enabled, so Privacy Mode address generation will fail with a misleading "check your MPK" error. Ask your host to enable the gmp extension (preferred) or bcmath, then retry. Coins set to Classic or Autopay Mode are unaffected.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+
+    return $result;
 }
 
 add_filter('woocommerce_payment_gateways', 'NMM_filter_gateways');

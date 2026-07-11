@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.1
+Stable Tag: 2.9.2
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -163,6 +163,10 @@ All requests below are made server-side by the store. The only data ever transmi
 
 == Frequently Asked Questions ==
 
+= Privacy Mode says "Address creation failed, please check your MPK" - what's wrong? =
+
+This almost always means the server is missing the PHP math extension Privacy Mode needs, not that your MPK is wrong. Generating HD wallet addresses requires either the **gmp** extension (preferred, and faster) or **bcmath**. If neither is enabled - common right after a PHP upgrade - address generation fails with that misleading message. Ask your host to enable gmp (or bcmath) and try again. Tools > Site Health will also flag this. Classic Mode and Autopay Mode do not need these extensions.
+
 = Can I run payment verification against my own node instead of a public explorer? =
 
 Yes. The `nmm_api_url` filter lets you redirect any verification request to your own self-hosted instance (for example your own mempool, Blockscout, or Insight server), as long as it runs the same software the plugin expects. See the developer hooks documentation for examples: https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
@@ -174,6 +178,10 @@ Note that this filter currently covers blockchain verification requests only, no
 Yes. Filters are available for redirecting verification requests, customizing the customer payment message, adjusting Autopay matching tolerances, changing the checkout icon, and white-labeling the settings page. The full reference with code examples is at https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
 
 == Changelog ==
+
+= 2.9.2 =
+* Privacy Mode now fails clearly when the server lacks the required PHP math extension: a Tools > Site Health check and a settings-page notice explain that gmp (or bcmath) must be enabled, instead of the misleading "check your MPK" error
+* Documented developer hooks (docs/HOOKS.md) and the External Services the plugin contacts; added a Frequently Asked Questions section
 
 = 2.9.1 =
 * Performance: exchange rates are refreshed in the background job, so the thank-you page is a cache hit for nearly every customer instead of the first one after expiry waiting on up to five APIs
