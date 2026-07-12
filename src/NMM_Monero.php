@@ -78,10 +78,12 @@ class NMM_Monero {
 				$curlOpts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
 				$curlOpts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
 			}
-			// Pin the connection to the exact IP we validated, so a hostname that
-			// re-resolves to a private address between validation and connect
-			// (DNS rebinding) cannot redirect us there.
-			if (defined('CURLOPT_RESOLVE') && $target['ip'] !== '') {
+			// Pin a hostname connection to the exact IP we validated, so a host
+			// that re-resolves to a private address between validation and connect
+			// (DNS rebinding) cannot redirect us there. IP literals are never
+			// pinned (plan_request sets pin=false): there is no DNS to rebind, and
+			// a RESOLVE entry for an IPv6 literal is malformed.
+			if ($plan['pin'] && defined('CURLOPT_RESOLVE') && $target['ip'] !== '') {
 				$curlOpts[CURLOPT_RESOLVE] = array($target['host'] . ':' . $target['port'] . ':' . $target['ip']);
 			}
 			curl_setopt_array($ch, $curlOpts);
@@ -189,7 +191,7 @@ class NMM_Monero {
 	 * request. IP literals never need pinning (there is no DNS to rebind).
 	 *
 	 * Returns array( 'transport' => 'curl'|'wp_remote'|'reject',
-	 *                'digest' => bool, 'reason' => string ).
+	 *                'digest' => bool, 'pin' => bool, 'reason' => string ).
 	 *
 	 * - curl:      the host is an IP literal (safe on any cURL build), or it is a
 	 *              hostname and the build can pin it to the validated IP. The only
@@ -200,19 +202,29 @@ class NMM_Monero {
 	 *              cURL build without CURLOPT_RESOLVE. Even a public host is unsafe
 	 *              because it re-resolves at connect time and could land in private
 	 *              space (rebinding), so we refuse rather than reopen the SSRF path.
+	 *
+	 * 'pin' is true only when the caller must attach CURLOPT_RESOLVE - i.e. a
+	 * hostname target. An IP literal is never pinned: there is no DNS to rebind,
+	 * and a RESOLVE entry for one is redundant (IPv4) or malformed (IPv6, where
+	 * the literal's own colons break the HOST:PORT:ADDRESS form).
 	 */
 	public static function plan_request($target, $hasCurl, $canPin, $hasCreds) {
 		$isLiteral = !empty($target['is_literal']);
 
 		if ($hasCurl && ($isLiteral || ($canPin && $target['ip'] !== ''))) {
-			return array('transport' => 'curl', 'digest' => (bool) $hasCreds, 'reason' => $isLiteral ? 'ip-literal-curl' : 'pinned');
+			return array(
+				'transport' => 'curl',
+				'digest' => (bool) $hasCreds,
+				'pin' => !$isLiteral,
+				'reason' => $isLiteral ? 'ip-literal-curl' : 'pinned',
+			);
 		}
 
 		if ($isLiteral) {
-			return array('transport' => 'wp_remote', 'digest' => false, 'reason' => 'ip-literal');
+			return array('transport' => 'wp_remote', 'digest' => false, 'pin' => false, 'reason' => 'ip-literal');
 		}
 
-		return array('transport' => 'reject', 'digest' => false, 'reason' => 'unpinnable-hostname');
+		return array('transport' => 'reject', 'digest' => false, 'pin' => false, 'reason' => 'unpinnable-hostname');
 	}
 
 	// True for loopback / private / link-local (incl. 169.254.169.254 cloud

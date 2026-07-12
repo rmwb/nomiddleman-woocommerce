@@ -67,6 +67,7 @@ $publicHost     = array('host' => 'wallet.example.com','port' => 443,   'ip' => 
 $privateLiteral = array('host' => '127.0.0.1',         'port' => 18082, 'ip' => '127.0.0.1',     'is_literal' => true,  'is_private' => true);
 $privateHost    = array('host' => 'localhost',         'port' => 18082, 'ip' => '127.0.0.1',     'is_literal' => false, 'is_private' => true);
 $unresolvable   = array('host' => 'nope.invalid',      'port' => 80,    'ip' => '',              'is_literal' => false, 'is_private' => true);
+$ipv6Literal    = array('host' => '::1',               'port' => 18082, 'ip' => '::1',           'is_literal' => true,  'is_private' => true);
 
 // cURL that can pin: pin every host, public or private.
 mok('curl pins public literal',      plan($publicLiteral, true, true, false)['transport'] === 'curl');
@@ -74,6 +75,14 @@ mok('curl pins public hostname',     plan($publicHost,    true, true, false)['tr
 mok('curl pins private hostname',    plan($privateHost,   true, true, false)['transport'] === 'curl');
 mok('curl digest off without creds', plan($publicLiteral, true, true, false)['digest'] === false);
 mok('curl digest on with creds',     plan($publicLiteral, true, true, true)['digest']  === true);
+
+// pin flag: only a hostname is pinned with CURLOPT_RESOLVE. IP literals must not
+// be pinned - redundant for IPv4, and a malformed RESOLVE entry for IPv6.
+mok('pin set for hostname',          plan($publicHost,    true, true, false)['pin'] === true);
+mok('pin NOT set for ipv4 literal',  plan($publicLiteral, true, true, false)['pin'] === false);
+mok('pin NOT set for ipv6 literal',  plan($ipv6Literal,   true, true, false)['pin'] === false);
+mok('ipv6 literal still uses curl',  plan($ipv6Literal,   true, true, false)['transport'] === 'curl');
+mok('pin NOT set on wp_remote path', plan($publicLiteral, false, false, false)['pin'] === false);
 
 // cURL present but the build CANNOT pin (no CURLOPT_RESOLVE): a hostname must be
 // refused (it would send unpinned), while an IP literal is still safe over cURL
