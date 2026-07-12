@@ -2182,21 +2182,40 @@ class NMM_Blockchain {
 		// public mainnet RPC, keyless; only finalized transactions are listed
 		$rpc = 'https://api.mainnet-beta.solana.com';
 
-		// getSignaturesForAddress returns newest-first and caps at 1000 per call.
-		// Carousel SOL addresses are reused, so a valid payment can be pushed
-		// past any single page by later activity (or a cheap dusting burst). We
-		// page backwards with the `before` cursor and stop once signatures fall
-		// outside the payment lifetime window, so an in-window payment is never
-		// missed. Hard caps bound the work if the window is flooded.
+		// getSignaturesForAddress returns newest-first. Carousel SOL addresses
+		// are reused, so a valid payment can be pushed past a single page by
+		// later activity - or a cheap dusting burst - which is also an attack
+		// surface: naively fetching a getTransaction for every signature lets an
+		// attacker force ~1000 sequential RPC calls per address per tick, hit
+		// rate limits, and hold the cron lock for a long time.
+		//
+		// Instead we keep a per-address cache of signatures already inspected
+		// (SOL is finalized/instant, so a signature's outcome never changes once
+		// inspected) and spend only a small getTransaction budget each tick on
+		// signatures we have not seen. Dust is inspected at most once; because
+		// inspected signatures are skipped, successive ticks make forward
+		// progress deeper into the window, so a buried in-window payment is
+		// still reached over a few ticks while per-tick work stays bounded.
 		$cutoffTime = ($transactionLifetime !== null) ? time() - (int) $transactionLifetime : null;
-		$pageSize = 100;   // signatures per getSignaturesForAddress call
-		$maxPages = 10;    // up to 1000 signatures scanned per address per tick
+		$pageSize = 100;        // signatures per getSignaturesForAddress call
+		$maxScanPages = 5;      // <=500 signatures scanned for candidates per tick
+		$inspectBudget = 25;    // <=25 getTransaction calls per address per tick
+		$seenCap = 400;         // bounded inspected-signature cache
 
-		$entries = array();
+		$seenKey = 'nmm_sol_seen_' . md5($address);
+		$seen = get_transient($seenKey);
+		if (!is_array($seen)) {
+			$seen = array();
+		}
+		$seenLookup = array_flip($seen);
+
+		// Phase 1: page newest-first and collect up to $inspectBudget in-window
+		// signatures we have not already inspected.
+		$candidates = array();
 		$before = null;
 		$reachedCutoff = false;
 
-		for ($page = 0; $page < $maxPages; $page++) {
+		for ($page = 0; $page < $maxScanPages && count($candidates) < $inspectBudget; $page++) {
 			$sigParams = array('limit' => $pageSize, 'commitment' => 'finalized');
 			if ($before !== null) {
 				$sigParams['before'] = $before;
@@ -2262,7 +2281,16 @@ class NMM_Blockchain {
 					continue;
 				}
 
-				$entries[] = $entry;
+				// Skip signatures already inspected on an earlier tick; this is
+				// what lets us make forward progress under dusting.
+				if (isset($seenLookup[$entry->signature])) {
+					continue;
+				}
+
+				$candidates[] = $entry;
+				if (count($candidates) >= $inspectBudget) {
+					break;
+				}
 			}
 
 			if ($reachedCutoff || count($body->result) < $pageSize) {
@@ -2270,13 +2298,14 @@ class NMM_Blockchain {
 			}
 		}
 
-		if ($reachedCutoff === false && count($entries) >= $maxPages * $pageSize) {
-			NMM_Util::log(__FILE__, __LINE__, 'solana signature scan hit the page cap for ' . $address . '; very old in-window payments may need another tick.');
-		}
-
+		// Phase 2: fetch each candidate transaction and mark it inspected. A
+		// signature is only recorded as inspected once we get a usable finalized
+		// result, so a transient RPC failure retries it next tick instead of
+		// silently dropping a real payment.
 		$transactions = array();
+		$newlyInspected = array();
 
-		foreach ($entries as $entry) {
+		foreach ($candidates as $entry) {
 			$txResponse = self::api_post($rpc, array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => json_encode(array(
@@ -2292,14 +2321,18 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($txResponse) || $txResponse['response']['code'] !== 200) {
-				continue;
+				continue; // do not mark inspected; retry next tick
 			}
 
 			$tx = json_decode($txResponse['body']);
 
 			if (!isset($tx->result->transaction->message->accountKeys) || !isset($tx->result->meta->preBalances)) {
-				continue;
+				continue; // unusable/transient; retry next tick
 			}
+
+			// Usable finalized result: its outcome is decided, so record it as
+			// inspected regardless of whether it credited our address.
+			$newlyInspected[] = $entry->signature;
 
 			// lamports received = balance delta of our address in this transaction
 			foreach ($tx->result->transaction->message->accountKeys as $index => $accountKey) {
@@ -2316,6 +2349,15 @@ class NMM_Blockchain {
 					break;
 				}
 			}
+		}
+
+		// Persist the bounded inspected-signature cache (newest kept).
+		if (!empty($newlyInspected)) {
+			$seen = array_merge($seen, $newlyInspected);
+			if (count($seen) > $seenCap) {
+				$seen = array_slice($seen, -$seenCap);
+			}
+			set_transient($seenKey, $seen, 6 * HOUR_IN_SECONDS);
 		}
 
 		return array(
