@@ -170,8 +170,8 @@ function NMM_first_mpk_address_ajax() {
 
 		$mpk = sanitize_text_field($_POST['mpk']);
 		$cryptoId = sanitize_text_field($_POST['cryptoId']);
-		$hdMode = sanitize_text_field($_POST['hdMode']);		
-		
+		$hdMode = isset($_POST['hdMode']) ? sanitize_text_field($_POST['hdMode']) : '0';
+
 		if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
 			return;
 		}
@@ -207,7 +207,9 @@ function NMM_filter_gateways($gateways){
     }
     
     if (is_checkout()) {
-	    unset($gateways['NMM_Gateway']);
+	    $gateways = array_values(array_filter($gateways, function ($g) {
+	        return $g !== 'NMM_Gateway';
+	    }));
 	}
 	else {
 		$gateways[] = 'NMM_Gateway';
