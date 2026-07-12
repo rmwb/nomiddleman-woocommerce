@@ -228,5 +228,21 @@ $removed = NMM_Sol_Retry_Repo::delete_stale_globally($now - (7 * 24 * 60 * 60), 
 rok('global cleanup removes stale row for unscanned address', $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='GONEADDR'") == 0, "removed=$removed");
 rok('global cleanup keeps a recent row', $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='LIVEADDR'") == 1);
 
+// ---------- 7b. run_global_cleanup: retention clamp protects live entries ----------
+$wpdb->query("DELETE FROM `$t`");
+// A row that first failed 1h ago - well inside a 3h payment window + margin.
+$wpdb->query($wpdb->prepare("INSERT INTO `$t` (address,signature,first_failed_at,attempts,next_retry_at,block_time) VALUES ('WINDOW','recent',%d,2,%d,0)", $now - 3600, $now));
+// Even if a filter asks for 0s retention, the clamp keeps it >= lifetime+30m.
+NMM_Sol_Retry_Repo::run_global_cleanup(0, 3 * 60 * 60 + 30 * 60);
+rok('clamp keeps an in-window entry despite a 0s retention filter', $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='WINDOW'") == 1);
+
+// ---------- 7c. run_global_cleanup drains a backlog in bounded batches ----------
+$wpdb->query("DELETE FROM `$t`");
+$vals = array();
+for ($i = 0; $i < 1200; $i++) { $vals[] = "('DRAIN','d$i'," . ($stale) . ",1," . ($stale) . ",0)"; }
+$wpdb->query("INSERT INTO `$t` (address,signature,first_failed_at,attempts,next_retry_at,block_time) VALUES " . implode(',', $vals));
+$drained = NMM_Sol_Retry_Repo::run_global_cleanup(7 * 24 * 60 * 60, 0, 500, 40);
+rok('drains a 1200-row backlog across bounded batches', (int) $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='DRAIN'") === 0, "drained=$drained");
+
 $wpdb->query("DELETE FROM `$t`");
 echo $pass ? "\nSOL-RETRY (durable queue) CHECKS PASSED\n" : "\nSOL-RETRY CHECKS FAILED\n";

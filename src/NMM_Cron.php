@@ -80,8 +80,14 @@ function NMM_do_cron_job() {
 		// (SOL disabled, or a carousel address removed/replaced) once they are far
 		// past any matching window. Per-address expiry never revisits those, so
 		// this bounded global pass prevents unbounded growth across config changes.
-		$solGlobalRetention = apply_filters('nmm_sol_retry_global_retention_seconds', 7 * DAY_IN_SECONDS);
-		NMM_Sol_Retry_Repo::delete_stale_globally(time() - (int) $solGlobalRetention, 500);
+		// A seven-day retention needs no minute-by-minute checking, so gate it to
+		// run at most hourly; run_global_cleanup() clamps the retention to a safe
+		// minimum and drains in bounded batches when there is work.
+		if (get_transient('nmm_sol_global_cleanup_ran') === false) {
+			$solGlobalRetention = (int) apply_filters('nmm_sol_retry_global_retention_seconds', 7 * DAY_IN_SECONDS);
+			NMM_Sol_Retry_Repo::run_global_cleanup($solGlobalRetention, $autoPaymentTransactionLifetimeSec + 30 * MINUTE_IN_SECONDS);
+			set_transient('nmm_sol_global_cleanup_ran', 1, HOUR_IN_SECONDS);
+		}
 
 		NMM_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMM_get_time_passed($startTime));
 	}

@@ -141,6 +141,25 @@ abandoned checkouts from pushing a later *paid* address beyond your wallet's
 the seed — 20 by default in Electrum). See the "gap limit" note in the FAQ for
 the recommended wallet-side safeguard.
 
+### `nmm_sol_retry_global_retention_seconds`
+
+How long a durable Solana retry entry is kept before a global cleanup pass may
+delete it, measured from its first failed detail lookup (default: 7 days). This
+pass reclaims rows for addresses that are no longer scanned at all — after SOL
+Autopay is disabled, or a carousel address is removed or replaced — which the
+per-address expiry would otherwise never revisit. The cleanup runs at most once
+an hour.
+
+```php
+apply_filters( 'nmm_sol_retry_global_retention_seconds', $seconds );
+```
+
+For safety the effective value is clamped to at least the Autopay transaction
+lifetime plus 30 minutes, so a filter returning zero, a negative number, or a
+value shorter than the payment window can never delete a still-live retry entry.
+Use it to lengthen retention (e.g. to keep evidence for longer), not to shorten
+it below the matching window.
+
 ## Appearance
 
 ### `nmm_gateway_icon`

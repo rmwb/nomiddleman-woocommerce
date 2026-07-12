@@ -166,6 +166,29 @@ class NMM_Sol_Retry_Repo {
 		return (int) $result;
 	}
 
+	// Run the global cleanup: clamp the retention to a safe minimum (so a filter
+	// can never delete a still-live entry), then drain stale rows in consecutive
+	// bounded batches, stopping once a batch is short (backlog cleared) or the
+	// per-run batch cap is reached (bounding how long the cron lock is held).
+	// Returns the total rows removed.
+	public static function run_global_cleanup($retentionSeconds, $minRetentionSeconds, $batchSize = 500, $maxBatches = 40) {
+		$retentionSeconds = max((int) $retentionSeconds, (int) $minRetentionSeconds);
+		$cutoff = time() - $retentionSeconds;
+
+		$total = 0;
+		$batches = 0;
+		do {
+			$removed = self::delete_stale_globally($cutoff, $batchSize);
+			if ($removed < 0) {
+				break; // database error (already logged)
+			}
+			$total += $removed;
+			$batches++;
+		} while ($removed === $batchSize && $batches < $maxBatches);
+
+		return $total;
+	}
+
 	// Count of queued signatures for an address (used by tests/diagnostics).
 	public static function count_for($address) {
 		if (!self::available()) {
