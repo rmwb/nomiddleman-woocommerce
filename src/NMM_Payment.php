@@ -35,7 +35,7 @@ class NMM_Payment {
 		NMM_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
 		
 		try {
-			$transactions = self::get_address_transactions($cryptoId, $address);
+			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
 		}
 		catch (\Exception $e) {
 			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId);
@@ -143,7 +143,7 @@ class NMM_Payment {
 		}		
 	}
 
-	private static function get_address_transactions($cryptoId, $address) {
+	private static function get_address_transactions($cryptoId, $address, $transactionLifetime = null) {
 		if ($cryptoId === 'ETH') {
 			$result = NMM_Blockchain::get_eth_address_transactions($address);
 		}
@@ -259,7 +259,7 @@ class NMM_Payment {
 			$result = NMM_Blockchain::get_trc20_usdt_address_transactions($address);
 		}
 		if ($cryptoId === 'SOL') {
-			$result = NMM_Blockchain::get_sol_address_transactions($address);
+			$result = NMM_Blockchain::get_sol_address_transactions($address, $transactionLifetime);
 		}
 		
 		if ($cryptoId === 'XMR') {

@@ -2170,46 +2170,106 @@ class NMM_Blockchain {
 		);
 	}
 
-	public static function get_sol_address_transactions($address) {
+	public static function get_sol_address_transactions($address, $transactionLifetime = null) {
 
 		// public mainnet RPC, keyless; only finalized transactions are listed
 		$rpc = 'https://api.mainnet-beta.solana.com';
 
-		$response = self::api_post($rpc, array(
-			'headers' => array('Content-Type' => 'application/json'),
-			'body' => json_encode(array(
-				'jsonrpc' => '2.0',
-				'id' => 1,
-				'method' => 'getSignaturesForAddress',
-				'params' => array($address, array('limit' => 12, 'commitment' => 'finalized')),
-			)),
-		));
+		// getSignaturesForAddress returns newest-first and caps at 1000 per call.
+		// Carousel SOL addresses are reused, so a valid payment can be pushed
+		// past any single page by later activity (or a cheap dusting burst). We
+		// page backwards with the `before` cursor and stop once signatures fall
+		// outside the payment lifetime window, so an in-window payment is never
+		// missed. Hard caps bound the work if the window is flooded.
+		$cutoffTime = ($transactionLifetime !== null) ? time() - (int) $transactionLifetime : null;
+		$pageSize = 100;   // signatures per getSignaturesForAddress call
+		$maxPages = 10;    // up to 1000 signatures scanned per address per tick
 
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . print_r($response, true));
+		$entries = array();
+		$before = null;
+		$reachedCutoff = false;
 
-			return array(
-				'result' => 'error',
-				'total_received' => '',
-			);
+		for ($page = 0; $page < $maxPages; $page++) {
+			$sigParams = array('limit' => $pageSize, 'commitment' => 'finalized');
+			if ($before !== null) {
+				$sigParams['before'] = $before;
+			}
+
+			$response = self::api_post($rpc, array(
+				'headers' => array('Content-Type' => 'application/json'),
+				'body' => json_encode(array(
+					'jsonrpc' => '2.0',
+					'id' => 1,
+					'method' => 'getSignaturesForAddress',
+					'params' => array($address, $sigParams),
+				)),
+			));
+
+			if (is_wp_error($response) || $response['response']['code'] !== 200) {
+				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . print_r($response, true));
+
+				// A first-page failure means we have nothing; surface the error.
+				// A later-page failure still lets us inspect what we already have.
+				if ($page === 0) {
+					return array(
+						'result' => 'error',
+						'total_received' => '',
+					);
+				}
+				break;
+			}
+
+			$body = json_decode($response['body']);
+
+			if (!isset($body->result) || !is_array($body->result)) {
+				if ($page === 0) {
+					return array(
+						'result' => 'error',
+						'message' => 'No transactions found',
+					);
+				}
+				break;
+			}
+
+			if (count($body->result) === 0) {
+				break; // no more history
+			}
+
+			foreach ($body->result as $entry) {
+				if (!isset($entry->signature)) {
+					continue;
+				}
+
+				// Advance the cursor past every signature we see, failed or not,
+				// so the next page continues strictly older than this one.
+				$before = $entry->signature;
+
+				// Once signatures are older than the payment window, nothing
+				// further back can be a live payment - stop paging.
+				if ($cutoffTime !== null && isset($entry->blockTime) && $entry->blockTime !== null && $entry->blockTime < $cutoffTime) {
+					$reachedCutoff = true;
+					break;
+				}
+
+				if ($entry->err !== null) {
+					continue;
+				}
+
+				$entries[] = $entry;
+			}
+
+			if ($reachedCutoff || count($body->result) < $pageSize) {
+				break;
+			}
 		}
 
-		$body = json_decode($response['body']);
-
-		if (!isset($body->result) || !is_array($body->result)) {
-			return array(
-				'result' => 'error',
-				'message' => 'No transactions found',
-			);
+		if ($reachedCutoff === false && count($entries) >= $maxPages * $pageSize) {
+			NMM_Util::log(__FILE__, __LINE__, 'solana signature scan hit the page cap for ' . $address . '; very old in-window payments may need another tick.');
 		}
 
 		$transactions = array();
 
-		foreach ($body->result as $entry) {
-			if (!isset($entry->signature) || $entry->err !== null) {
-				continue;
-			}
-
+		foreach ($entries as $entry) {
 			$txResponse = self::api_post($rpc, array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => json_encode(array(
