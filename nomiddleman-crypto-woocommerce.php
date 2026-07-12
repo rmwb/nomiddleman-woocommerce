@@ -309,15 +309,14 @@ function NMM_update_hd_table() {
     // without it, a concurrent-derivation race could insert the same derived
     // address twice and hand it to two different orders.
     if (get_option('nmm_hd_table_version', '1.0') === '1.1') {
-        // Collapse any pre-existing duplicates before adding the constraint,
-        // keeping the lowest id for each (cryptocurrency, address) pair.
-        $wpdb->query(
-            "DELETE t1 FROM `$tableName` t1
-             INNER JOIN `$tableName` t2
-             ON t1.cryptocurrency = t2.cryptocurrency
-             AND t1.address = t2.address
-             AND t1.id > t2.id"
-        );
+        // Collapse any pre-existing duplicates before adding the constraint.
+        // Do NOT blindly keep the lowest id: a higher-id duplicate may be the
+        // one actually assigned to a live order or holding received funds.
+        // Reconcile each duplicate group and keep the most operationally
+        // important row (funds first, then an active/assigned row, then order
+        // association, then most recent), logging any dropped row that carried
+        // an order or funds so a human can follow up.
+        NMM_reconcile_duplicate_hd_addresses($tableName);
 
         // Add the unique key only if it is not already present.
         $existing = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'");
@@ -338,6 +337,67 @@ function NMM_update_hd_table() {
         }
     }
 
+}
+
+// Collapse duplicate (cryptocurrency, address) rows down to one, choosing the
+// keeper by operational importance rather than by id, so the migration to a
+// UNIQUE KEY can never silently discard the row an order actually depends on.
+function NMM_reconcile_duplicate_hd_addresses($tableName) {
+    global $wpdb;
+
+    $dupes = $wpdb->get_results(
+        "SELECT cryptocurrency, address FROM `$tableName`
+         GROUP BY cryptocurrency, address HAVING COUNT(*) > 1"
+    );
+
+    foreach ((array) $dupes as $dupe) {
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, status, order_id, total_received FROM `$tableName`
+             WHERE cryptocurrency = %s AND address = %s",
+            $dupe->cryptocurrency, $dupe->address
+        ));
+
+        if (count($rows) < 2) {
+            continue;
+        }
+
+        // Rank so the most important row sorts first: funded, then an active
+        // status (assigned/underpaid/complete), then any order association,
+        // then the most recently derived (highest id).
+        usort($rows, 'NMM_compare_hd_rows_for_keep');
+        $keeper = array_shift($rows);
+
+        foreach ($rows as $loser) {
+            if (!empty($loser->order_id) || (float) $loser->total_received > 0) {
+                NMM_Util::log(__FILE__, __LINE__, sprintf(
+                    'HD dedupe: dropping duplicate %s address %s row id %d (order %s, received %s) in favour of row id %d; manual review may be needed.',
+                    $dupe->cryptocurrency, $dupe->address, $loser->id,
+                    $loser->order_id, $loser->total_received, $keeper->id
+                ));
+            }
+            $wpdb->delete($tableName, array('id' => $loser->id), array('%d'));
+        }
+    }
+}
+
+// Sort comparator: returns the more important HD row first.
+function NMM_compare_hd_rows_for_keep($a, $b) {
+    $rank = function ($row) {
+        return array(
+            ((float) $row->total_received > 0) ? 1 : 0,                              // funded wins
+            in_array($row->status, array('assigned', 'underpaid', 'complete'), true) ? 1 : 0, // active state
+            !empty($row->order_id) ? 1 : 0,                                          // has an order
+            (int) $row->id,                                                          // most recent
+        );
+    };
+    $ra = $rank($a);
+    $rb = $rank($b);
+    foreach ($ra as $i => $va) {
+        if ($va !== $rb[$i]) {
+            return ($va > $rb[$i]) ? -1 : 1; // higher rank sorts first
+        }
+    }
+    return 0;
 }
 
 function NMM_create_payment_table() {
