@@ -52,8 +52,9 @@ register_activation_hook(__FILE__, 'NMM_activate');
 register_deactivation_hook(__FILE__, 'NMM_deactivate');
 register_uninstall_hook(__FILE__, 'NMM_uninstall');
 define('NMM_HD_TABLE', 'nmmpro_hd_addresses');
-define('NMM_PAYMENT_TABLE', 'nmmpro_payments');  
+define('NMM_PAYMENT_TABLE', 'nmmpro_payments');
 define('NMM_CAROUSEL_TABLE', 'nmmpro_carousel');
+define('NMM_SOL_RETRY_TABLE', 'nmmpro_sol_retry');
 define('NMM_LOGFILE_NAME', 'nmm.log');
 define('NMM_REDUX_ID', 'nmmpro_redux_options');
 define('NMM_EXTENSION_KEY', 'nmm_registered_extensions');
@@ -108,6 +109,7 @@ function NMM_init_gateways(){
     require_once(plugin_basename('src/NMM_Carousel_Repo.php'));
     require_once(plugin_basename('src/NMM_Hd_Repo.php'));
     require_once(plugin_basename('src/NMM_Payment_Repo.php'));
+    require_once(plugin_basename('src/NMM_Sol_Retry_Repo.php'));
 
     // Simple Objects
     require_once(plugin_basename('src/NMM_Cryptocurrency.php'));
@@ -149,6 +151,7 @@ function NMM_init_gateways(){
 
     NMM_Register_Extensions();
     NMM_update_hd_table();
+    NMM_maybe_create_sol_retry_table();
 
     add_action('init', 'NMM_schedule_payment_checks');
     add_action('admin_init', 'NMM_cleanup_legacy_qr_files');
@@ -212,6 +215,49 @@ function NMM_activate() {
     delete_option('nmm_flash_notices');
     NMM_create_payment_table();
     NMM_create_carousel_table();
+    NMM_maybe_create_sol_retry_table();
+}
+
+// Create the durable Solana retry-queue table once (gated by an option so the
+// CREATE does not run on every load), verifying it exists before recording it.
+function NMM_maybe_create_sol_retry_table() {
+    if (get_option('nmm_sol_retry_table_created') === 'yes') {
+        return;
+    }
+
+    global $wpdb;
+    NMM_create_sol_retry_table();
+
+    $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) === $tableName) {
+        update_option('nmm_sol_retry_table_created', 'yes');
+    }
+    else {
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table creation did not complete (' . $wpdb->last_error . '); will retry next load.');
+    }
+}
+
+function NMM_create_sol_retry_table() {
+    global $wpdb;
+    $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+
+    $query = "CREATE TABLE IF NOT EXISTS `$tableName`
+        (
+            `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            `address` char(64) NOT NULL,
+            `signature` char(96) NOT NULL,
+            `first_failed_at` bigint(20) NOT NULL DEFAULT '0',
+            `attempts` int(11) NOT NULL DEFAULT '0',
+            `next_retry_at` bigint(20) NOT NULL DEFAULT '0',
+            `block_time` bigint(20) NOT NULL DEFAULT '0',
+
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `addr_sig` (`address`, `signature`),
+            KEY `addr_due` (`address`, `next_retry_at`),
+            KEY `block_time` (`block_time`)
+        );";
+
+    $wpdb->query($query);
 }
 
 function NMM_deactivate() {
@@ -226,6 +272,14 @@ function NMM_uninstall() {
     NMM_drop_mpk_address_table();
     NMM_drop_payment_table();
     NMM_drop_carousel_table();
+    NMM_drop_sol_retry_table();
+    delete_option('nmm_sol_retry_table_created');
+}
+
+function NMM_drop_sol_retry_table() {
+    global $wpdb;
+    $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+    $wpdb->query("DROP TABLE IF EXISTS `$tableName`");
 }
 
 function NMM_drop_mpk_address_table() {

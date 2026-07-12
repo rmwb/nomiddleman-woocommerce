@@ -2188,33 +2188,29 @@ class NMM_Blockchain {
 		// getTransaction for every signature would let an attacker force ~1000
 		// sequential RPC calls per tick, hit rate limits, and hold the cron lock.
 		//
-		// We sweep the in-window history newest-to-oldest across ticks. Each tick
-		// resumes from a persisted cursor and inspects a bounded batch, advancing
-		// the cursor monotonically; when the sweep reaches the window cutoff (or
-		// the end of history) the cursor is cleared so the next sweep restarts
-		// from the newest signature. The cursor is a single value persisted
-		// independently of any bounded cache, so - unlike a fixed-size
-		// dedup cache, which oscillates once more signatures than it holds must
-		// be skipped - every in-window signature is guaranteed to be reached
-		// within one sweep, however deeply a payment is buried, while per-tick
-		// work stays hard bounded.
+		// We sweep the in-window history newest-to-oldest across ticks, resuming
+		// from a persisted cursor and inspecting a bounded batch. A signature
+		// whose detail lookup fails is recorded in a DURABLE table
+		// (NMM_Sol_Retry_Repo) before the cursor advances past it, then retried on
+		// later ticks with exponential backoff until it succeeds or ages out of
+		// the matching window. Because that store is durable and unbounded, the
+		// sweep never has to pause and no in-window failure is ever dropped, so
+		// new payments are always collected while per-tick RPC work stays fixed.
 		$cutoffTime = ($transactionLifetime !== null) ? time() - (int) $transactionLifetime : null;
 		$pageSize = 100;        // signatures per getSignaturesForAddress call
 		$maxPages = 5;          // safety bound on getSignatures pages per tick
 		$inspectBudget = 25;    // <=25 getTransaction calls per address per tick
-		$retryCap = 50;                        // bounded queue of failed-detail signatures
 		$retryBudget = intdiv($inspectBudget, 2); // at most half the budget on retries, so the sweep always advances
-		// Keep retrying a failed signature for the whole time it could still be a
-		// live payment (the matching window) plus a margin, rather than dropping
-		// it after a fixed number of attempts - an ordinary RPC outage or host
-		// backoff can burn many consecutive ticks. Poll with exponential backoff
-		// so a persistent failure is checked sparsely, not every tick.
-		$retryRetentionSec = ($transactionLifetime !== null ? (int) $transactionLifetime : 3 * 60 * 60) + 1800;
+		// Retain a failed signature for the whole time it could still be a live
+		// payment (the matching window) plus a margin; poll with exponential
+		// backoff so a persistent failure is checked sparsely, not every tick.
+		$lifetimeSec = ($transactionLifetime !== null ? (int) $transactionLifetime : 3 * 60 * 60);
+		$retentionCutoff = time() - ($lifetimeSec + 1800);
+		$windowCutoffBlockTime = ($cutoffTime !== null) ? $cutoffTime : 0;
 		$retryBaseSec = 60;       // first backoff step (~one cron tick)
 		$retryMaxSec = 30 * 60;   // cap on the interval between retries
 
 		$cursorKey = 'nmm_sol_cursor_' . md5($address);
-		$retryKey  = 'nmm_sol_retry_' . md5($address);
 
 		// Resume the sweep from the persisted cursor; false => start a fresh
 		// sweep from the newest signature.
@@ -2223,71 +2219,48 @@ class NMM_Blockchain {
 			$before = null;
 		}
 
-		// Retry queue is a map: signature => { first, attempts, next }. Preserved
-		// insertion order gives us fair rotation (see below).
-		$retryMap = get_transient($retryKey);
-		if (!is_array($retryMap)) {
-			$retryMap = array();
-		}
-
 		$transactions = array();
 		$hardError = false;
 		$nowTs = time();
 
-		// Phase 0: retry signatures whose detail lookup failed earlier, but spend
-		// at most $retryBudget of the tick here so a batch of persistently-failing
-		// signatures can never starve the sweep (which would freeze the cursor and
-		// stop new payments from ever being inspected). Expire entries only once
-		// they are past the matching window (prominent log), and among the rest
-		// attempt those whose backoff has elapsed, oldest-first, re-queuing failures
-		// at the back with a longer backoff so every entry is rotated fairly.
-		$due = array();
-		foreach ($retryMap as $sig => $meta) {
-			$meta = self::sol_normalize_retry($meta, $nowTs);
-			$retryMap[$sig] = $meta;
-
-			if ($nowTs - $meta['first'] > $retryRetentionSec) {
-				NMM_Util::log(__FILE__, __LINE__, 'Giving up on Solana signature ' . $sig . ' after ' . $meta['attempts'] . ' failed detail lookups over ' . ($nowTs - $meta['first']) . 's (now past the payment matching window).');
-				unset($retryMap[$sig]);
-				continue;
-			}
-			if ($meta['next'] <= $nowTs) {
-				$due[] = $sig;
-			}
+		// Expire durable retries now conclusively outside the matching window (or
+		// past the retention safety net), logging the final give-up.
+		$expiredCount = NMM_Sol_Retry_Repo::delete_expired($address, $windowCutoffBlockTime, $retentionCutoff);
+		if ($expiredCount > 0) {
+			NMM_Util::log(__FILE__, __LINE__, 'Expired ' . $expiredCount . ' Solana retry signature(s) for ' . $address . ' now past the payment matching window.');
 		}
 
+		// Retry phase: re-check a bounded oldest-due batch of previously failed
+		// signatures. Success resolves and removes the entry; a further failure
+		// reschedules it with a longer backoff. Bounded by $retryBudget so the
+		// sweep always keeps at least half the per-tick budget - and, being a
+		// LIMITed query, the cost is fixed no matter how large the queue is.
 		$retriesUsed = 0;
-		foreach (array_slice($due, 0, $retryBudget) as $sig) {
+		foreach (NMM_Sol_Retry_Repo::get_due($address, $retryBudget, $nowTs) as $row) {
 			$retriesUsed++;
-			$meta = $retryMap[$sig];
-			unset($retryMap[$sig]); // re-add at the back only if still failing
-
+			$sig = $row['signature'];
 			list($ok, $tx) = self::sol_inspect_signature($rpc, $sig, $address);
 			if ($ok) {
 				if ($tx !== null) {
 					$transactions[] = $tx;
 				}
+				NMM_Sol_Retry_Repo::remove($address, $sig);
 			}
 			else {
-				$meta = self::sol_bump_retry($meta, $nowTs, $retryBaseSec, $retryMaxSec);
-				$retryMap[$sig] = $meta;
-				if ($meta['attempts'] % 10 === 0) {
-					NMM_Util::log(__FILE__, __LINE__, 'Solana signature ' . $sig . ' still failing detail lookup after ' . $meta['attempts'] . ' attempts (' . ($nowTs - $meta['first']) . 's).');
+				$attempts = (int) $row['attempts'] + 1;
+				NMM_Sol_Retry_Repo::reschedule($address, $sig, $attempts, $nowTs + self::sol_retry_backoff($attempts, $retryBaseSec, $retryMaxSec));
+				if ($attempts % 10 === 0) {
+					NMM_Util::log(__FILE__, __LINE__, 'Solana signature ' . $sig . ' still failing detail lookup after ' . $attempts . ' attempts (' . ($nowTs - (int) $row['first_failed_at']) . 's).');
 				}
 			}
 		}
 
 		// Phase 1: from the cursor, page older and collect the remaining budget of
-		// signatures to inspect this tick - but never collect more than the retry
-		// map can still hold. Every collected candidate that fails must be
-		// remembered (the cursor advances past it), so if we collected past the
-		// map's headroom a failure would have to be dropped, and a dropped
-		// signature is only re-reached on the next full sweep - which on a busy
-		// address can exceed the matching window. When the map is full we collect
-		// nothing and leave the cursor put, applying backpressure until retries
-		// succeed or expire and free space, so a live failure is never evicted.
-		$retryHeadroom = max(0, $retryCap - count($retryMap));
-		$sweepBudget = min(max(0, $inspectBudget - $retriesUsed), $retryHeadroom);
+		// signatures to inspect this tick. No backpressure is needed: every
+		// candidate that fails is stored durably below before the cursor moves
+		// past it, so the sweep can always advance and keep collecting new
+		// payments even while many older signatures are still being retried.
+		$sweepBudget = max(0, $inspectBudget - $retriesUsed);
 		$candidates = array();
 		$sweepComplete = false;
 		$hitBudget = false;
@@ -2378,14 +2351,13 @@ class NMM_Blockchain {
 		}
 
 		// Phase 2: inspect this tick's sweep candidates. A candidate whose detail
-		// lookup fails is added to the retry map (Phase 0 next tick), so the
-		// already-advanced cursor never drops it.
+		// lookup fails is recorded durably (retry phase next tick) BEFORE we let
+		// the cursor stay advanced past it, so it can never be dropped.
 		foreach ($candidates as $entry) {
 			list($ok, $tx) = self::sol_inspect_signature($rpc, $entry->signature, $address);
 			if (!$ok) {
-				$sig = $entry->signature;
-				$meta = isset($retryMap[$sig]) ? self::sol_normalize_retry($retryMap[$sig], $nowTs) : array('first' => $nowTs, 'attempts' => 0, 'next' => 0);
-				$retryMap[$sig] = self::sol_bump_retry($meta, $nowTs, $retryBaseSec, $retryMaxSec);
+				$blockTime = (isset($entry->blockTime) && $entry->blockTime !== null) ? (int) $entry->blockTime : 0;
+				NMM_Sol_Retry_Repo::enqueue($address, $entry->signature, $blockTime, $nowTs);
 			}
 			elseif ($tx !== null) {
 				$transactions[] = $tx;
@@ -2400,22 +2372,6 @@ class NMM_Blockchain {
 		}
 		else {
 			delete_transient($cursorKey);
-		}
-
-		// The Phase-1 backpressure keeps the map from exceeding $retryCap, so this
-		// is only a defensive backstop. If it ever trips, log loudly and keep the
-		// newest (most likely still in-window) failures - silently dropping an
-		// in-window signature is exactly the failure mode we are guarding against.
-		if (count($retryMap) > $retryCap) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry map exceeded ' . $retryCap . ' for ' . $address . ' despite backpressure; dropping ' . (count($retryMap) - $retryCap) . ' oldest - please investigate.');
-			uasort($retryMap, function ($a, $b) { return $b['first'] - $a['first']; });
-			$retryMap = array_slice($retryMap, 0, $retryCap, true);
-		}
-		if (!empty($retryMap)) {
-			set_transient($retryKey, $retryMap, 6 * HOUR_IN_SECONDS);
-		}
-		else {
-			delete_transient($retryKey);
 		}
 
 		// Only report a hard error when we truly have nothing; otherwise return
@@ -2440,32 +2396,15 @@ class NMM_Blockchain {
 	// caller should retry it), and true when we got a usable finalized result;
 	// the second element is an NMM_Transaction when the tx credited $address,
 	// otherwise null.
-	// Coerce a retry-map entry into { first, attempts, next }, tolerating the
-	// legacy plain-integer (attempt count) format from an in-flight upgrade.
-	private static function sol_normalize_retry($meta, $now) {
-		if (is_array($meta)) {
-			return array(
-				'first' => isset($meta['first']) ? (int) $meta['first'] : $now,
-				'attempts' => isset($meta['attempts']) ? (int) $meta['attempts'] : 1,
-				'next' => isset($meta['next']) ? (int) $meta['next'] : 0,
-			);
+	// Seconds until the next retry for a signature on its Nth failed attempt: the
+	// first failure is retried on the next tick, later failures back off
+	// exponentially up to $maxSec so a persistent failure is polled sparsely.
+	private static function sol_retry_backoff($attempts, $baseSec, $maxSec) {
+		if ($attempts <= 1) {
+			return 0;
 		}
-		return array('first' => $now, 'attempts' => (int) $meta, 'next' => 0);
-	}
-
-	// Record another failed attempt and schedule the next retry: the first
-	// failure is retried on the next tick, later failures back off exponentially
-	// up to $maxSec so a persistently-failing signature is polled sparsely.
-	private static function sol_bump_retry($meta, $now, $baseSec, $maxSec) {
-		$meta['attempts']++;
-		if ($meta['attempts'] <= 1) {
-			$meta['next'] = $now;
-		}
-		else {
-			$step = $baseSec * (1 << min($meta['attempts'] - 2, 20));
-			$meta['next'] = $now + min($step, $maxSec);
-		}
-		return $meta;
+		$step = $baseSec * (1 << min($attempts - 2, 20));
+		return min($step, $maxSec);
 	}
 
 	private static function sol_inspect_signature($rpc, $signature, $address) {
