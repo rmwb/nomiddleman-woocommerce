@@ -121,6 +121,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
             }
             try {
                 $chosenCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
+                if (!array_key_exists($chosenCryptoId, $this->cryptos)) {
+                    wc_add_notice(__('Please choose a valid cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
+                    return;
+                }
                 $crypto = $this->cryptos[$chosenCryptoId];
                 $curr = get_woocommerce_currency();
                 $cryptoPerUsd = $this->get_crypto_value_in_usd($crypto->get_id(), $crypto->get_update_interval());
@@ -152,6 +156,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $selectedCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
         // phpcs:enable
         WC()->session->set('chosen_crypto_id', $selectedCryptoId);
+        $order->update_meta_data('nmm_chosen_crypto_id', $selectedCryptoId);
+        $order->save();
 
         return array(
                       'result' => 'success',
@@ -207,7 +213,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
             $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
-            $chosenCryptoId = WC()->session->get('chosen_crypto_id');
+            $chosenCryptoId = $order->get_meta('nmm_chosen_crypto_id');
+            if (empty($chosenCryptoId)) {
+                $chosenCryptoId = WC()->session->get('chosen_crypto_id');
+            }
+
+            if (empty($chosenCryptoId) || !array_key_exists($chosenCryptoId, $this->cryptos)) {
+                throw new \Exception(esc_html__('We could not determine which cryptocurrency you selected. Please return to checkout and place the order again.', 'nomiddleman-crypto-payments-for-woocommerce'));
+            }
+
             $crypto = $this->cryptos[$chosenCryptoId];
             $cryptoId = $crypto->get_id();
 
@@ -339,7 +353,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
     }
 
     public function additional_email_details($order, $sent_to_admin, $plain_text, $email) {
-        $chosenCrypto = WC()->session->get('chosen_crypto_id');
+        $chosenCrypto = $order->get_meta('nmm_chosen_crypto_id');
+        if (empty($chosenCrypto)) {
+            $chosenCrypto = WC()->session->get('chosen_crypto_id');
+        }
+        if (empty($chosenCrypto) || !array_key_exists($chosenCrypto, $this->cryptos)) {
+            return; // nothing reliable to attach; the order note still has details
+        }
         $crypto =  $this->cryptos[$chosenCrypto];
         $orderCryptoTotal = WC()->session->get($crypto->get_id() . '_amount');
         $orderWalletAddress = $order->get_meta('wallet_address');
