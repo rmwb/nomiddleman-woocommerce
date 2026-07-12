@@ -388,8 +388,10 @@ class NMM_Hd {
 				$hdRepo->set_quarantine($address, 'quarantine_verified', time());
 			}
 			else {
-				$hdRepo->set_status($address, 'ready');
-				$hdRepo->set_order_amount($address, 0.0);
+				// One atomic, status-guarded UPDATE so a checkout that claims the
+				// address the instant it becomes ready cannot have its new order
+				// amount clobbered by a second write.
+				$hdRepo->recycle_quarantined($address);
 				NMM_Util::log(__FILE__, __LINE__, 'Quarantine: recycling pristine unused address ' . $address . ' after two clean fresh checks.');
 			}
 		}

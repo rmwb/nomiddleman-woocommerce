@@ -199,6 +199,22 @@ class NMM_Hd_Repo {
 		));
 	}
 
+	// Atomically return a verified-clean quarantined address to the ready pool,
+	// clearing every stale assignment field in the SAME guarded UPDATE. The
+	// `status` = 'quarantine_verified' guard means that if anything else has
+	// already moved this row on (or a checkout claimed it in a race after it
+	// became ready), this UPDATE matches nothing and cannot clobber the new
+	// order's amount/id. Returns the number of rows changed (1 if recycled).
+	public function recycle_quarantined($address) {
+		global $wpdb;
+		return $wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = 'ready', `order_amount` = 0, `order_id` = NULL, `assigned_at` = 0, `total_received` = 0, `last_checked` = 0
+			 WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d AND `status` = 'quarantine_verified'",
+			$address, $this->cryptoId, $this->hdMode
+		));
+	}
+
 	public function set_total_received($address, $totalReceived) {
 		global $wpdb;
 		NMM_Util::log(__FILE__, __LINE__, 'Updating total received at ' . $address .' to: ' . $totalReceived);
