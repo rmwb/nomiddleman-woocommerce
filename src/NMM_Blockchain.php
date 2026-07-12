@@ -2183,39 +2183,41 @@ class NMM_Blockchain {
 		$rpc = 'https://api.mainnet-beta.solana.com';
 
 		// getSignaturesForAddress returns newest-first. Carousel SOL addresses
-		// are reused, so a valid payment can be pushed past a single page by
-		// later activity - or a cheap dusting burst - which is also an attack
-		// surface: naively fetching a getTransaction for every signature lets an
-		// attacker force ~1000 sequential RPC calls per address per tick, hit
-		// rate limits, and hold the cron lock for a long time.
+		// are reused, so a valid payment can be buried under later activity - or
+		// a cheap dusting burst - which is also an attack surface: fetching a
+		// getTransaction for every signature would let an attacker force ~1000
+		// sequential RPC calls per tick, hit rate limits, and hold the cron lock.
 		//
-		// Instead we keep a per-address cache of signatures already inspected
-		// (SOL is finalized/instant, so a signature's outcome never changes once
-		// inspected) and spend only a small getTransaction budget each tick on
-		// signatures we have not seen. Dust is inspected at most once; because
-		// inspected signatures are skipped, successive ticks make forward
-		// progress deeper into the window, so a buried in-window payment is
-		// still reached over a few ticks while per-tick work stays bounded.
+		// We sweep the in-window history newest-to-oldest across ticks. Each tick
+		// resumes from a persisted cursor and inspects a bounded batch, advancing
+		// the cursor monotonically; when the sweep reaches the window cutoff (or
+		// the end of history) the cursor is cleared so the next sweep restarts
+		// from the newest signature. The cursor is a single value persisted
+		// independently of any bounded cache, so - unlike a fixed-size
+		// dedup cache, which oscillates once more signatures than it holds must
+		// be skipped - every in-window signature is guaranteed to be reached
+		// within one sweep, however deeply a payment is buried, while per-tick
+		// work stays hard bounded.
 		$cutoffTime = ($transactionLifetime !== null) ? time() - (int) $transactionLifetime : null;
 		$pageSize = 100;        // signatures per getSignaturesForAddress call
-		$maxScanPages = 5;      // <=500 signatures scanned for candidates per tick
+		$maxPages = 5;          // safety bound on getSignatures pages per tick
 		$inspectBudget = 25;    // <=25 getTransaction calls per address per tick
-		$seenCap = 400;         // bounded inspected-signature cache
 
-		$seenKey = 'nmm_sol_seen_' . md5($address);
-		$seen = get_transient($seenKey);
-		if (!is_array($seen)) {
-			$seen = array();
+		// Resume the sweep from the persisted cursor; false => start a fresh
+		// sweep from the newest signature.
+		$cursorKey = 'nmm_sol_cursor_' . md5($address);
+		$before = get_transient($cursorKey);
+		if ($before === false) {
+			$before = null;
 		}
-		$seenLookup = array_flip($seen);
 
-		// Phase 1: page newest-first and collect up to $inspectBudget in-window
-		// signatures we have not already inspected.
+		// Phase 1: from the cursor, page older and collect up to $inspectBudget
+		// signatures to inspect this tick.
 		$candidates = array();
-		$before = null;
-		$reachedCutoff = false;
+		$sweepComplete = false;
+		$hitBudget = false;
 
-		for ($page = 0; $page < $maxScanPages && count($candidates) < $inspectBudget; $page++) {
+		for ($page = 0; $page < $maxPages && count($candidates) < $inspectBudget; $page++) {
 			$sigParams = array('limit' => $pageSize, 'commitment' => 'finalized');
 			if ($before !== null) {
 				$sigParams['before'] = $before;
@@ -2258,7 +2260,8 @@ class NMM_Blockchain {
 			}
 
 			if (count($body->result) === 0) {
-				break; // no more history
+				$sweepComplete = true; // no more history at this cursor
+				break;
 			}
 
 			foreach ($body->result as $entry) {
@@ -2271,9 +2274,9 @@ class NMM_Blockchain {
 				$before = $entry->signature;
 
 				// Once signatures are older than the payment window, nothing
-				// further back can be a live payment - stop paging.
+				// further back can be a live payment - the sweep is complete.
 				if ($cutoffTime !== null && isset($entry->blockTime) && $entry->blockTime !== null && $entry->blockTime < $cutoffTime) {
-					$reachedCutoff = true;
+					$sweepComplete = true;
 					break;
 				}
 
@@ -2281,29 +2284,31 @@ class NMM_Blockchain {
 					continue;
 				}
 
-				// Skip signatures already inspected on an earlier tick; this is
-				// what lets us make forward progress under dusting.
-				if (isset($seenLookup[$entry->signature])) {
-					continue;
-				}
-
 				$candidates[] = $entry;
 				if (count($candidates) >= $inspectBudget) {
+					$hitBudget = true;
 					break;
 				}
 			}
 
-			if ($reachedCutoff || count($body->result) < $pageSize) {
+			if ($sweepComplete) {
+				break;
+			}
+			if ($hitBudget) {
+				// Stopped on the per-tick budget, not on end-of-history. The
+				// current page may still hold unprocessed signatures, so resume
+				// from the advanced cursor next tick - do NOT treat this as the
+				// end of the sweep.
+				break;
+			}
+			if (count($body->result) < $pageSize) {
+				$sweepComplete = true; // consumed a short page: end of history
 				break;
 			}
 		}
 
-		// Phase 2: fetch each candidate transaction and mark it inspected. A
-		// signature is only recorded as inspected once we get a usable finalized
-		// result, so a transient RPC failure retries it next tick instead of
-		// silently dropping a real payment.
+		// Phase 2: fetch each candidate transaction.
 		$transactions = array();
-		$newlyInspected = array();
 
 		foreach ($candidates as $entry) {
 			$txResponse = self::api_post($rpc, array(
@@ -2327,12 +2332,8 @@ class NMM_Blockchain {
 			$tx = json_decode($txResponse['body']);
 
 			if (!isset($tx->result->transaction->message->accountKeys) || !isset($tx->result->meta->preBalances)) {
-				continue; // unusable/transient; retry next tick
+				continue;
 			}
-
-			// Usable finalized result: its outcome is decided, so record it as
-			// inspected regardless of whether it credited our address.
-			$newlyInspected[] = $entry->signature;
 
 			// lamports received = balance delta of our address in this transaction
 			foreach ($tx->result->transaction->message->accountKeys as $index => $accountKey) {
@@ -2351,13 +2352,14 @@ class NMM_Blockchain {
 			}
 		}
 
-		// Persist the bounded inspected-signature cache (newest kept).
-		if (!empty($newlyInspected)) {
-			$seen = array_merge($seen, $newlyInspected);
-			if (count($seen) > $seenCap) {
-				$seen = array_slice($seen, -$seenCap);
-			}
-			set_transient($seenKey, $seen, 6 * HOUR_IN_SECONDS);
+		// Persist the sweep cursor: clear it when the sweep finished so the next
+		// tick restarts from the newest signature (catching new arrivals);
+		// otherwise remember where to resume so progress stays monotonic.
+		if ($sweepComplete) {
+			delete_transient($cursorKey);
+		}
+		else {
+			set_transient($cursorKey, $before, 6 * HOUR_IN_SECONDS);
 		}
 
 		return array(

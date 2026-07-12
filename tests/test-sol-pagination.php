@@ -1,12 +1,14 @@
 <?php
 /**
- * Offline test for the Solana Autopay fetcher's bounded, resumable paging.
+ * Offline test for the Solana Autopay fetcher's bounded, resumable sweep.
  *
  * Drives NMM_Blockchain::get_sol_address_transactions() against a scripted RPC
- * (no network) to prove: a per-tick getTransaction budget, an inspected-signature
- * cache so dust is fetched at most once, forward progress across ticks so a
- * buried in-window payment is still reached, and that signatures older than the
- * payment window are never fetched.
+ * (no network) to prove: a per-tick getTransaction budget, monotonic forward
+ * progress via a persisted cursor so a payment buried far beyond one tick's
+ * batch is still reached within one sweep (the case a fixed-size dedup cache
+ * could not guarantee), prompt detection of a payment near the top, that
+ * out-of-window signatures are never fetched, and a hard per-tick bound under a
+ * dust flood.
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED);
@@ -19,124 +21,115 @@ nmm_test_require_plugin(array(
 	'src/NMM_Blockchain.php',
 ));
 
-$ADDR = 'PAYADDR1111111111111111111111111111111111';
-$now = time();
-
-// Build a newest-first ledger. index 0 = newest. One real payment is buried at
-// position 40; everything else is zero-value dust. A final entry sits *outside*
-// the 3600s window and must never be fetched.
-$LIFETIME = 3600;
-$PAYMENT_POS = 40;
-$PAYMENT_LAMPORTS = 5000000;
-$ledger = array();
-for ($i = 0; $i < 60; $i++) {
-	$ledger[] = array(
-		'sig'       => sprintf('sig%03d', $i),
-		'blockTime' => $now - 10 - ($i * 10),                 // within window (<= now-600)
-		'delta'     => ($i === $PAYMENT_POS) ? $PAYMENT_LAMPORTS : 0,
-	);
-}
-$ledger[] = array('sig' => 'sigOLD', 'blockTime' => $now - 5000, 'delta' => 9999999); // beyond cutoff
-
-$sigIndex = array();
-foreach ($ledger as $n => $row) { $sigIndex[$row['sig']] = $n; }
-
-$GLOBALS['nmm_gettx_calls'] = array();   // signatures fetched via getTransaction (this tick)
-$GLOBALS['nmm_getsig_calls'] = 0;
-
-$GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) use ($ADDR, $ledger, $sigIndex) {
-	$req = json_decode($postBody, true);
-	$m = isset($req['method']) ? $req['method'] : '';
-
-	if ($m === 'getSignaturesForAddress') {
-		$GLOBALS['nmm_getsig_calls']++;
-		$opts = isset($req['params'][1]) ? $req['params'][1] : array();
-		$limit = isset($opts['limit']) ? (int) $opts['limit'] : 1000;
-		$start = 0;
-		if (isset($opts['before']) && isset($sigIndex[$opts['before']])) {
-			$start = $sigIndex[$opts['before']] + 1;   // strictly older
-		}
-		$out = array();
-		for ($n = $start; $n < count($ledger) && count($out) < $limit; $n++) {
-			$out[] = array('signature' => $ledger[$n]['sig'], 'blockTime' => $ledger[$n]['blockTime'], 'err' => null);
-		}
-		return array('body' => json_encode(array('result' => $out)), 'response' => array('code' => 200));
-	}
-
-	if ($m === 'getTransaction') {
-		$sig = $req['params'][0];
-		$GLOBALS['nmm_gettx_calls'][] = $sig;
-		$delta = isset($sigIndex[$sig]) ? $ledger[$sigIndex[$sig]]['delta'] : 0;
-		$body = array('result' => array(
-			'blockTime' => $ledger[$sigIndex[$sig]]['blockTime'],
-			'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => $ADDR)))),
-			'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000 + $delta)),
-		));
-		return array('body' => json_encode($body), 'response' => array('code' => 200));
-	}
-
-	return array('body' => json_encode(array('result' => null)), 'response' => array('code' => 200));
-};
-
 $failed = false;
 function ok($label, $pass, $extra = '') {
 	global $failed;
-	printf("%-52s %s%s\n", $label, $pass ? 'ok' : 'FAIL', $extra !== '' ? '  ' . $extra : '');
+	printf("%-56s %s%s\n", $label, $pass ? 'ok' : 'FAIL', $extra !== '' ? '  ' . $extra : '');
 	if (!$pass) { $failed = true; }
+}
+
+// Build a scripted ledger for one address: newest-first, index 0 = newest.
+// $paymentPos gets a positive lamport delta; everything else is dust (delta 0).
+// A final entry sits outside the window and must never be fetched.
+function make_handler($addr, $count, $paymentPos, $paymentLamports, $lifetime) {
+	$now = time();
+	$ledger = array();
+	for ($i = 0; $i < $count; $i++) {
+		$ledger[] = array(
+			'sig'       => sprintf('sig%05d', $i),
+			'blockTime' => $now - 5 - $i,                       // all within window
+			'delta'     => ($i === $paymentPos) ? $paymentLamports : 0,
+		);
+	}
+	$ledger[] = array('sig' => 'sigOLD', 'blockTime' => $now - ($lifetime + 5000), 'delta' => 9999999);
+	$idx = array();
+	foreach ($ledger as $n => $r) { $idx[$r['sig']] = $n; }
+
+	return function ($url, $method, $postBody, $headers) use ($addr, $ledger, $idx) {
+		$req = json_decode($postBody, true);
+		$m = isset($req['method']) ? $req['method'] : '';
+		if ($m === 'getSignaturesForAddress') {
+			$GLOBALS['nmm_getsig_calls']++;
+			$opts = isset($req['params'][1]) ? $req['params'][1] : array();
+			$limit = isset($opts['limit']) ? (int) $opts['limit'] : 1000;
+			$start = (isset($opts['before']) && isset($idx[$opts['before']])) ? $idx[$opts['before']] + 1 : 0;
+			$out = array();
+			for ($n = $start; $n < count($ledger) && count($out) < $limit; $n++) {
+				$out[] = array('signature' => $ledger[$n]['sig'], 'blockTime' => $ledger[$n]['blockTime'], 'err' => null);
+			}
+			return array('body' => json_encode(array('result' => $out)), 'response' => array('code' => 200));
+		}
+		if ($m === 'getTransaction') {
+			$sig = $req['params'][0];
+			$GLOBALS['nmm_gettx_calls'][] = $sig;
+			$delta = isset($idx[$sig]) ? $ledger[$idx[$sig]]['delta'] : 0;
+			$body = array('result' => array(
+				'blockTime' => $ledger[$idx[$sig]]['blockTime'],
+				'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => $addr)))),
+				'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000 + $delta)),
+			));
+			return array('body' => json_encode($body), 'response' => array('code' => 200));
+		}
+		return array('body' => json_encode(array('result' => null)), 'response' => array('code' => 200));
+	};
 }
 
 function tick($addr, $lifetime) {
 	$GLOBALS['nmm_gettx_calls'] = array();
 	$GLOBALS['nmm_getsig_calls'] = 0;
-	$res = NMM_Blockchain::get_sol_address_transactions($addr, $lifetime);
-	return $res;
+	return NMM_Blockchain::get_sol_address_transactions($addr, $lifetime);
 }
 
-// --- Tick 1: newest 25 inspected (budget), payment at 40 not yet reached ---
-$r1 = tick($ADDR, $LIFETIME);
-ok('tick1 succeeds', $r1['result'] === 'success');
-ok('tick1 getTransaction budget respected (<=25)', count($GLOBALS['nmm_gettx_calls']) <= 25, '(' . count($GLOBALS['nmm_gettx_calls']) . ')');
-ok('tick1 finds no payment yet', count($r1['transactions']) === 0);
+// ---- Scenario A: payment buried at position 650 among 700 in-window sigs ----
+$LIFE = 100000;
+$ADDR = 'BURIED11111111111111111111111111111111111111';
+$PAYPOS = 650;
+$PAYLAMPORTS = 7000000;
+$GLOBALS['nmm_http_handler'] = make_handler($ADDR, 700, $PAYPOS, $PAYLAMPORTS, $LIFE);
 
-// --- Tick 2: skips cached 0-24, inspects 25-49; payment at 40 is reached ---
-$r2 = tick($ADDR, $LIFETIME);
-ok('tick2 getTransaction budget respected (<=25)', count($GLOBALS['nmm_gettx_calls']) <= 25, '(' . count($GLOBALS['nmm_gettx_calls']) . ')');
-ok('tick2 does not re-fetch cached signatures', count(array_intersect($GLOBALS['nmm_gettx_calls'], array('sig000','sig010','sig024'))) === 0);
-ok('tick2 finds the buried payment', count($r2['transactions']) === 1);
-if (count($r2['transactions']) === 1) {
-	$tx = $r2['transactions'][0];
-	ok('  payment amount correct', (int) $tx->get_amount() === $PAYMENT_LAMPORTS, '(' . $tx->get_amount() . ')');
-	ok('  payment signature correct', $tx->get_hash() === sprintf('sig%03d', $PAYMENT_POS));
+$foundTick = -1;
+$budgetOk = true;
+$pagesOk = true;
+$sigOldFetched = false;
+$maxTicks = 40;
+for ($t = 1; $t <= $maxTicks; $t++) {
+	$r = tick($ADDR, $LIFE);
+	if (count($GLOBALS['nmm_gettx_calls']) > 25) { $budgetOk = false; }
+	if ($GLOBALS['nmm_getsig_calls'] > 5) { $pagesOk = false; }
+	if (in_array('sigOLD', $GLOBALS['nmm_gettx_calls'], true)) { $sigOldFetched = true; }
+	foreach ($r['transactions'] as $tx) {
+		if ($tx->get_hash() === sprintf('sig%05d', $PAYPOS)) { $foundTick = $t; break; }
+	}
+	if ($foundTick > 0) { break; }
 }
 
-// --- Tick 3: forward progress into 50-59, no payment there ---
-$r3 = tick($ADDR, $LIFETIME);
-ok('tick3 makes progress without re-fetching payment', !in_array(sprintf('sig%03d', $PAYMENT_POS), $GLOBALS['nmm_gettx_calls'], true));
-ok('tick3 budget respected (<=25)', count($GLOBALS['nmm_gettx_calls']) <= 25);
+ok('buried payment at pos 650 is eventually found', $foundTick > 0, '(tick ' . $foundTick . ')');
+ok('found within one sweep (<= ceil(700/25)+2 ticks)', $foundTick > 0 && $foundTick <= 30, '(tick ' . $foundTick . ')');
+ok('per-tick getTransaction budget held every tick (<=25)', $budgetOk);
+ok('per-tick getSignatures pages held every tick (<=5)', $pagesOk);
+ok('out-of-window signature never fetched', !$sigOldFetched);
 
-// --- Cutoff: the beyond-window signature is never fetched on any tick ---
-$allFetched = array();
-for ($k = 0; $k < 4; $k++) { tick($ADDR, $LIFETIME); }
-// (by now everything in-window is cached; ensure sigOLD was never touched)
-$sigOldFetchedEver = false;
-// re-run one more tick capturing calls
-tick($ADDR, $LIFETIME);
-ok('cutoff: beyond-window signature never fetched', !in_array('sigOLD', $GLOBALS['nmm_gettx_calls'], true));
+// ---- Scenario B: payment near the top is found promptly (tick 1) ----
+$ADDR2 = 'PROMPT22222222222222222222222222222222222222';
+$GLOBALS['nmm_http_handler'] = make_handler($ADDR2, 300, 2, 3000000, $LIFE);
+$r1 = tick($ADDR2, $LIFE);
+$prompt = false;
+foreach ($r1['transactions'] as $tx) { if ($tx->get_hash() === 'sig00002') { $prompt = true; } }
+ok('payment near the top found on tick 1', $prompt);
+ok('  amount correct', $prompt && (int) $r1['transactions'][0]->get_amount() === 3000000);
 
-// --- Dusting bound: a fresh address with 1000 dust sigs still bounds one tick ---
+// ---- Scenario C: dust flood still bounds a single tick ----
 $GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) {
 	$req = json_decode($postBody, true);
-	$m = $req['method'];
-	$now = time();
-	if ($m === 'getSignaturesForAddress') {
+	if ($req['method'] === 'getSignaturesForAddress') {
 		$GLOBALS['nmm_getsig_calls']++;
 		$opts = $req['params'][1];
 		$limit = (int) $opts['limit'];
-		$start = 0;
-		if (isset($opts['before'])) { $start = ((int) substr($opts['before'], 4)) + 1; }
+		$start = isset($opts['before']) ? ((int) substr($opts['before'], 4)) + 1 : 0;
 		$out = array();
-		for ($n = $start; $n < 1000 && count($out) < $limit; $n++) {
-			$out[] = array('signature' => sprintf('dust%04d', $n), 'blockTime' => $now - 10, 'err' => null);
+		$now = time();
+		for ($n = $start; $n < 5000 && count($out) < $limit; $n++) {
+			$out[] = array('signature' => sprintf('dust%05d', $n), 'blockTime' => $now - 10, 'err' => null);
 		}
 		return array('body' => json_encode(array('result' => $out)), 'response' => array('code' => 200));
 	}
@@ -148,8 +141,8 @@ $GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) {
 };
 $GLOBALS['nmm_gettx_calls'] = array();
 $GLOBALS['nmm_getsig_calls'] = 0;
-NMM_Blockchain::get_sol_address_transactions('DUSTADDR9999999999999999999999999999999999', 3600);
-ok('dusting: <=25 getTransaction calls in one tick', count($GLOBALS['nmm_gettx_calls']) <= 25, '(' . count($GLOBALS['nmm_gettx_calls']) . ')');
-ok('dusting: <=5 getSignatures pages in one tick', $GLOBALS['nmm_getsig_calls'] <= 5, '(' . $GLOBALS['nmm_getsig_calls'] . ')');
+NMM_Blockchain::get_sol_address_transactions('DUST3333333333333333333333333333333333333333', 3600);
+ok('dust flood: <=25 getTransaction in one tick', count($GLOBALS['nmm_gettx_calls']) <= 25, '(' . count($GLOBALS['nmm_gettx_calls']) . ')');
+ok('dust flood: <=5 getSignatures pages in one tick', $GLOBALS['nmm_getsig_calls'] <= 5, '(' . $GLOBALS['nmm_getsig_calls'] . ')');
 
 exit($failed ? 1 : 0);
