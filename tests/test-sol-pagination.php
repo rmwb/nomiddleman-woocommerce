@@ -264,4 +264,36 @@ ok('valid payment found despite 25 permanently-failing retries', $foundTickE > 0
 ok('  found quickly (sweep not starved by retries)', $foundTickE > 0 && $foundTickE <= 3, '(tick ' . $foundTickE . ')');
 ok('  per-tick budget held with a full failing queue', $budgetOkE);
 
+// ---- Scenario F: time-based retention, backoff, and expiry ----
+// Seed the retry map directly: one entry past the matching window (must expire
+// and never be fetched), one still backing off (not due -> skipped), one due
+// (must be retried). No sweep work: getSignatures returns empty.
+$ADDR6 = 'RETAIN66666666666666666666666666666666666666';
+$now = time();
+$retention = $LIFE + 1800;
+set_transient('nmm_sol_retry_' . md5($ADDR6), array(
+	'STALESIG'   => array('first' => $now - ($retention + 1000), 'attempts' => 15, 'next' => 0),        // past window -> expire
+	'BACKOFFSIG' => array('first' => $now - 100, 'attempts' => 5, 'next' => $now + 5000),               // not due -> skip
+	'DUESIG'     => array('first' => $now - 100, 'attempts' => 1, 'next' => $now - 10),                 // due -> retry
+), 6 * 3600);
+
+$GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) {
+	$req = json_decode($postBody, true);
+	if ($req['method'] === 'getSignaturesForAddress') {
+		return array('body' => json_encode(array('result' => array())), 'response' => array('code' => 200)); // no sweep work
+	}
+	$GLOBALS['nmm_gettx_calls'][] = $req['params'][0];
+	return array('body' => json_encode(array('result' => null)), 'response' => array('code' => 200)); // DUESIG fails again
+};
+$GLOBALS['nmm_gettx_calls'] = array();
+NMM_Blockchain::get_sol_address_transactions($ADDR6, $LIFE);
+$mapF = get_transient('nmm_sol_retry_' . md5($ADDR6));
+if (!is_array($mapF)) { $mapF = array(); }
+
+ok('stale entry (past window) expired from queue', !isset($mapF['STALESIG']));
+ok('  stale entry never re-fetched', !in_array('STALESIG', $GLOBALS['nmm_gettx_calls'], true));
+ok('backed-off entry retained but not fetched', isset($mapF['BACKOFFSIG']) && !in_array('BACKOFFSIG', $GLOBALS['nmm_gettx_calls'], true));
+ok('due entry was retried', in_array('DUESIG', $GLOBALS['nmm_gettx_calls'], true));
+ok('  due entry re-queued with backoff after failing', isset($mapF['DUESIG']) && $mapF['DUESIG']['attempts'] === 2 && $mapF['DUESIG']['next'] > $now);
+
 exit($failed ? 1 : 0);
