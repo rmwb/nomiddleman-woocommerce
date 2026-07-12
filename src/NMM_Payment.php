@@ -299,15 +299,41 @@ class NMM_Payment {
 		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
 		$paymentRepo = new NMM_Payment_Repo();
-		$unpaidPayments = $paymentRepo->get_unpaid();
+
+		// Single clock for the whole pass, shared by the coarse SQL cutoff below
+		// and the exact per-record check, so the two can never disagree by a
+		// second at a boundary.
+		$now = time();
+
+		// Only rows old enough to be expirable for SOME configured coin can
+		// possibly be cancelled. The shortest cancellation window among the coins
+		// that actually have unpaid rows is a safe coarse cutoff: anything newer
+		// than it is within every window and cannot be expired. Filtering on it in
+		// SQL lets the unpaid_expiry(status, ordered_at) index do a range scan
+		// instead of returning every unpaid checkout for PHP to iterate.
+		$unpaidCryptos = $paymentRepo->get_distinct_unpaid_cryptos();
+		if (empty($unpaidCryptos)) {
+			return;
+		}
+
+		$shortestWindowSec = null;
+		foreach ($unpaidCryptos as $unpaidCryptoId) {
+			$windowSec = (float) $nmmSettings->get_autopay_cancellation_time($unpaidCryptoId) * 60 * 60;
+			if ($shortestWindowSec === null || $windowSec < $shortestWindowSec) {
+				$shortestWindowSec = $windowSec;
+			}
+		}
+
+		$coarseCutoff = $now - $shortestWindowSec;
+		$unpaidPayments = $paymentRepo->get_unpaid($coarseCutoff);
 
 		foreach ($unpaidPayments as $paymentRecord) {
 			$orderTime = $paymentRecord['ordered_at'];
-			$cryptoId = $paymentRecord['cryptocurrency'];			
+			$cryptoId = $paymentRecord['cryptocurrency'];
 
 			$paymentCancellationTimeHr = $nmmSettings->get_autopay_cancellation_time($cryptoId);
 			$paymentCancellationTimeSec = $paymentCancellationTimeHr * 60 * 60;
-			$timeSinceOrder = time() - $orderTime;
+			$timeSinceOrder = $now - $orderTime;
 			NMM_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
 
 			if ($timeSinceOrder > $paymentCancellationTimeSec) {

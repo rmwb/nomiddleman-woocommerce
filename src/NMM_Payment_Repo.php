@@ -25,21 +25,42 @@ class NMM_Payment_Repo {
 		));
 	}
 
-	public function get_unpaid() {
+	/**
+	 * Unpaid payment rows. When $orderedBefore is given (a unix timestamp), only
+	 * rows older than it are returned: WHERE status='unpaid' AND ordered_at < cutoff,
+	 * which the unpaid_expiry(status, ordered_at) index serves as a range scan so
+	 * the expiry cron never has to transfer and iterate every recent unpaid
+	 * checkout. Passing null keeps the old "every unpaid row" behaviour.
+	 */
+	public function get_unpaid($orderedBefore = null) {
 		global $wpdb;
 
-		$query = "SELECT `address`,
-						 `cryptocurrency`,
-						 `order_id`,
-						 `order_amount`,
-						 `status`,
-						 `ordered_at`
-				  FROM `$this->tableName`
-				  WHERE `status` = 'unpaid'";
+		$select = "SELECT `address`,
+						  `cryptocurrency`,
+						  `order_id`,
+						  `order_amount`,
+						  `status`,
+						  `ordered_at`
+				   FROM `$this->tableName`
+				   WHERE `status` = 'unpaid'";
 
-		$results = $wpdb->get_results($query, ARRAY_A);
+		if ($orderedBefore === null) {
+			return $wpdb->get_results($select, ARRAY_A);
+		}
 
-		return $results;
+		return $wpdb->get_results($wpdb->prepare(
+			$select . " AND `ordered_at` < %d",
+			(int) $orderedBefore
+		), ARRAY_A);
+	}
+
+	// Distinct cryptocurrencies among the unpaid rows. Cheap (index-only on the
+	// status prefix, few distinct values) and lets the expiry cron compute the
+	// shortest cancellation window it must consider before querying.
+	public function get_distinct_unpaid_cryptos() {
+		global $wpdb;
+
+		return $wpdb->get_col("SELECT DISTINCT `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'");
 	}
 
 	public function get_distinct_unpaid_addresses() {

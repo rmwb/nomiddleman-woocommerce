@@ -102,5 +102,37 @@ NMM_Payment::cancel_expired_payments(); // no unpaid rows -> order stays pending
 aok('order left pending (claim lost)',          ord_status($oClaimed) === 'pending');
 aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) === 'paid');
 
+// --- Index: the expiry query must range-scan unpaid_expiry, not read every row ---
+// Seed a realistic distribution - many recent unpaid checkouts, a few old ones -
+// and assert the exact production query (WHERE status='unpaid' AND ordered_at <
+// cutoff) uses the unpaid_expiry(status, ordered_at) index rather than scanning
+// all unpaid rows. This is what the coarse cutoff in cancel_expired_payments()
+// buys: O(expired) transferred to PHP, not O(all unpaid).
+$wpdb->query("DELETE FROM `$pt`");
+$now = time();
+$fresh24 = $now - (1 * 3600);    // within the 24h BTC window
+$old48   = $now - (48 * 3600);   // past it
+$rows = array();
+for ($i = 0; $i < 400; $i++) { $rows[] = $wpdb->prepare("('addr_f_%d','BTC','unpaid',%d,%d,'0.00100000',0)", $i, $fresh24, 800000 + $i); }
+for ($i = 0; $i < 12;  $i++) { $rows[] = $wpdb->prepare("('addr_o_%d','BTC','unpaid',%d,%d,'0.00100000',0)", $i, $old48,  900000 + $i); }
+$wpdb->query("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES " . implode(',', $rows));
+$wpdb->query("ANALYZE TABLE `$pt`");
+
+$cutoff = $now - (24 * 3600);
+$explainQuery = "SELECT `address`,`cryptocurrency`,`order_id`,`order_amount`,`status`,`ordered_at` FROM `$pt` WHERE `status` = 'unpaid' AND `ordered_at` < " . (int) $cutoff;
+$plan = $wpdb->get_results("EXPLAIN $explainQuery", ARRAY_A);
+$planKey  = isset($plan[0]['key'])  ? $plan[0]['key']  : '(none)';
+$planType = isset($plan[0]['type']) ? $plan[0]['type'] : '(none)';
+$planRows = isset($plan[0]['rows']) ? (int) $plan[0]['rows'] : -1;
+
+aok('expiry query uses unpaid_expiry index',   $planKey === 'unpaid_expiry', 'key=' . $planKey);
+aok('  as a range scan',                       $planType === 'range', 'type=' . $planType);
+aok('  examines far fewer than 412 rows',      $planRows > 0 && $planRows <= 100, 'rows=' . $planRows);
+
+// And the cutoff query itself returns only the old rows (correctness of the filter).
+$repo2 = new NMM_Payment_Repo();
+aok('cutoff returns only the 12 expired rows', count($repo2->get_unpaid($cutoff)) === 12, 'got=' . count($repo2->get_unpaid($cutoff)));
+aok('no-cutoff still returns all 412 rows',    count($repo2->get_unpaid()) === 412, 'got=' . count($repo2->get_unpaid()));
+
 $wpdb->query("DELETE FROM `$pt`");
 echo $pass ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";
