@@ -2399,10 +2399,14 @@ class NMM_Blockchain {
 			delete_transient($cursorKey);
 		}
 
-		// Only report a hard error when we truly have nothing; otherwise return
-		// what we found (a retry recovery or a partial sweep) as success so the
-		// caller does not throw the recovered transactions away.
-		if ($hardError && empty($transactions)) {
+		// Report an error only when this tick found nothing AND the cycle was
+		// incomplete - either a getSignatures call failed, or a failed detail
+		// lookup could not be stored durably (so an unchecked signature remains
+		// behind the held cursor). An empty SUCCESS must mean "checked completely,
+		// no payment", which is not true in those cases. When we did recover a
+		// payment we return it as success regardless, so the caller never discards
+		// it; the held cursor still guarantees the unstored signature is retried.
+		if (($hardError || $enqueueFailed) && empty($transactions)) {
 			return array(
 				'result' => 'error',
 				'total_received' => '',

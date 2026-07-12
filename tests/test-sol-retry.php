@@ -148,12 +148,14 @@ $GLOBALS['sol_sigs'] = array(
 $GLOBALS['sol_tx'] = array('sigA' => 0, 'sigB' => 'fail', 'sigC' => 0);
 $GLOBALS['sol_addr'] = $E;
 
-// Tick 1: table dropped so sigB's enqueue fails; the cursor must stop at sigA.
+// Tick 1: table dropped so sigB's enqueue fails; no payment was recovered, so
+// the cycle is incomplete -> error result, and the cursor must stop at sigA.
 $wpdb->suppress_errors(true);                             // the dropped-table errors below are expected
 $wpdb->query("DROP TABLE IF EXISTS `$t`");
 $GLOBALS['sol_gettx'] = array();
-NMM_Blockchain::get_sol_address_transactions($E, $LIFE);
+$rE1 = NMM_Blockchain::get_sol_address_transactions($E, $LIFE);
 $heldCursor = get_transient('nmm_sol_cursor_' . md5($E));
+rok('enqueue failure with no payment returns an error', $rE1['result'] === 'error');
 rok('cursor holds at last safely-handled sig (before failed enqueue)', $heldCursor === 'sigA', var_export($heldCursor, true));
 
 // Tick 2: table restored; resuming from sigA must re-encounter sigB and now
@@ -165,6 +167,30 @@ $GLOBALS['sol_gettx'] = array();
 NMM_Blockchain::get_sol_address_transactions($E, $LIFE); // cursor still points at sigA
 rok('failed signature is re-encountered on the next tick', in_array('sigB', $GLOBALS['sol_gettx'], true));
 rok('  and is now durably enqueued', NMM_Sol_Retry_Repo::count_for($E) >= 1);
+
+// ---------- 5b. Enqueue failure AFTER a payment was recovered -> success ----------
+// sigP (a real payment, resolved before the failure), then sigQ (fails inspection
+// and its enqueue fails). The tick must return success WITH the payment, and the
+// cursor must still hold behind sigQ.
+$F = 'RINV6666666666666666666666666666666666666666';
+delete_transient('nmm_sol_cursor_' . md5($F));
+$GLOBALS['sol_addr'] = $F;
+$GLOBALS['sol_sigs'] = array(
+	array('signature' => 'sigP', 'blockTime' => $now - 5),
+	array('signature' => 'sigQ', 'blockTime' => $now - 6),
+);
+$GLOBALS['sol_tx'] = array('sigP' => 6100000, 'sigQ' => 'fail');
+$wpdb->suppress_errors(true);
+$wpdb->query("DROP TABLE IF EXISTS `$t`");                 // make sigQ's enqueue fail
+$rF = NMM_Blockchain::get_sol_address_transactions($F, $LIFE);
+$heldF = get_transient('nmm_sol_cursor_' . md5($F));
+NMM_create_sol_retry_table();
+$wpdb->query("DELETE FROM `$t`");
+$wpdb->suppress_errors(false);
+$payFound = false; foreach ($rF['transactions'] as $tx) { if ($tx->get_hash() === 'sigP') { $payFound = (int) $tx->get_amount(); } }
+rok('enqueue failure after a recovered payment returns success', $rF['result'] === 'success');
+rok('  the recovered payment is included', $payFound === 6100000, $payFound ? "amt=$payFound" : '');
+rok('  cursor still held behind the unstored signature', $heldF === 'sigP', var_export($heldF, true));
 
 // ---------- 6. Schema repair: maybe_create adds missing indexes ----------
 $wpdb->suppress_errors(true);
