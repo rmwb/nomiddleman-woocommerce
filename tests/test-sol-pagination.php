@@ -145,4 +145,66 @@ NMM_Blockchain::get_sol_address_transactions('DUST333333333333333333333333333333
 ok('dust flood: <=25 getTransaction in one tick', count($GLOBALS['nmm_gettx_calls']) <= 25, '(' . count($GLOBALS['nmm_gettx_calls']) . ')');
 ok('dust flood: <=5 getSignatures pages in one tick', $GLOBALS['nmm_getsig_calls'] <= 5, '(' . $GLOBALS['nmm_getsig_calls'] . ')');
 
+// ---- Scenario D: payment's first getTransaction fails, next tick succeeds ----
+// The payment sits near the top (pos 2) of a large history, so if a failed
+// detail lookup were only retried on sweep restart it would take ~28 ticks;
+// the retry queue must instead recover it on the very next tick.
+$ADDR4 = 'RETRY44444444444444444444444444444444444444';
+$PAYSIG = 'sig00002';
+$now = time();
+$ledgerD = array();
+for ($i = 0; $i < 700; $i++) {
+	$ledgerD[] = array('sig' => sprintf('sig%05d', $i), 'blockTime' => $now - 5 - $i, 'delta' => ($i === 2) ? 4200000 : 0);
+}
+$idxD = array();
+foreach ($ledgerD as $n => $r) { $idxD[$r['sig']] = $n; }
+$GLOBALS['nmm_gettx_counts'] = array();
+
+$GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) use ($ADDR4, $ledgerD, $idxD, $PAYSIG) {
+	$req = json_decode($postBody, true);
+	$m = $req['method'];
+	if ($m === 'getSignaturesForAddress') {
+		$GLOBALS['nmm_getsig_calls']++;
+		$opts = $req['params'][1];
+		$limit = (int) $opts['limit'];
+		$start = (isset($opts['before']) && isset($idxD[$opts['before']])) ? $idxD[$opts['before']] + 1 : 0;
+		$out = array();
+		for ($n = $start; $n < count($ledgerD) && count($out) < $limit; $n++) {
+			$out[] = array('signature' => $ledgerD[$n]['sig'], 'blockTime' => $ledgerD[$n]['blockTime'], 'err' => null);
+		}
+		return array('body' => json_encode(array('result' => $out)), 'response' => array('code' => 200));
+	}
+	$sig = $req['params'][0];
+	$GLOBALS['nmm_gettx_calls'][] = $sig;
+	$GLOBALS['nmm_gettx_counts'][$sig] = (isset($GLOBALS['nmm_gettx_counts'][$sig]) ? $GLOBALS['nmm_gettx_counts'][$sig] : 0) + 1;
+	// Fail the payment's FIRST detail lookup with an incomplete (not-yet-
+	// available) response - retryable, and does not trip the host backoff a
+	// 429/5xx would, so we can assert the retry-queue timing directly.
+	if ($sig === $PAYSIG && $GLOBALS['nmm_gettx_counts'][$sig] === 1) {
+		return array('body' => json_encode(array('result' => null)), 'response' => array('code' => 200));
+	}
+	$delta = isset($idxD[$sig]) ? $ledgerD[$idxD[$sig]]['delta'] : 0;
+	$body = array('result' => array(
+		'blockTime' => $ledgerD[$idxD[$sig]]['blockTime'],
+		'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => $ADDR4)))),
+		'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000 + $delta)),
+	));
+	return array('body' => json_encode($body), 'response' => array('code' => 200));
+};
+
+$foundTickD = -1;
+$budgetOkD = true;
+for ($t = 1; $t <= 5; $t++) {
+	$r = tick($ADDR4, $LIFE);
+	if (count($GLOBALS['nmm_gettx_calls']) > 25) { $budgetOkD = false; }
+	foreach ($r['transactions'] as $tx) {
+		if ($tx->get_hash() === $PAYSIG) { $foundTickD = $t; break; }
+	}
+	if ($foundTickD > 0) { break; }
+}
+ok('payment whose 1st detail lookup failed is recovered', $foundTickD > 0, '(tick ' . $foundTickD . ')');
+ok('  recovered on the next tick via retry queue (not sweep restart)', $foundTickD === 2, '(tick ' . $foundTickD . ')');
+ok('  payment not found on tick 1 (its lookup failed then)', $foundTickD !== 1);
+ok('  per-tick budget held during retry', $budgetOkD);
+
 exit($failed ? 1 : 0);

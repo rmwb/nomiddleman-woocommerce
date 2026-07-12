@@ -2202,22 +2202,57 @@ class NMM_Blockchain {
 		$pageSize = 100;        // signatures per getSignaturesForAddress call
 		$maxPages = 5;          // safety bound on getSignatures pages per tick
 		$inspectBudget = 25;    // <=25 getTransaction calls per address per tick
+		$retryCap = 50;         // bounded queue of signatures whose detail lookup failed
+
+		$cursorKey = 'nmm_sol_cursor_' . md5($address);
+		$retryKey  = 'nmm_sol_retry_' . md5($address);
 
 		// Resume the sweep from the persisted cursor; false => start a fresh
 		// sweep from the newest signature.
-		$cursorKey = 'nmm_sol_cursor_' . md5($address);
 		$before = get_transient($cursorKey);
 		if ($before === false) {
 			$before = null;
 		}
 
-		// Phase 1: from the cursor, page older and collect up to $inspectBudget
+		$retryQueue = get_transient($retryKey);
+		if (!is_array($retryQueue)) {
+			$retryQueue = array();
+		}
+
+		$transactions = array();
+		$hardError = false;
+
+		// Phase 0: retry signatures whose detail lookup failed on an earlier tick
+		// BEFORE advancing the sweep, so a transient getTransaction failure (rate
+		// limit, timeout, incomplete body) never means a real payment waits for
+		// the whole sweep to restart. Advancing the sweep cursor past a candidate
+		// is only safe because any candidate that fails below is re-queued here.
+		$stillFailing = array();
+		$retriesUsed = 0;
+		foreach ($retryQueue as $retrySig) {
+			if ($retriesUsed >= $inspectBudget) {
+				$stillFailing[] = $retrySig; // over budget this tick; keep for later
+				continue;
+			}
+			$retriesUsed++;
+			list($ok, $tx) = self::sol_inspect_signature($rpc, $retrySig, $address);
+			if (!$ok) {
+				$stillFailing[] = $retrySig; // still failing; keep retrying
+			}
+			elseif ($tx !== null) {
+				$transactions[] = $tx;
+			}
+		}
+		$retryQueue = $stillFailing;
+
+		// Phase 1: from the cursor, page older and collect the remaining budget of
 		// signatures to inspect this tick.
+		$sweepBudget = max(0, $inspectBudget - $retriesUsed);
 		$candidates = array();
 		$sweepComplete = false;
 		$hitBudget = false;
 
-		for ($page = 0; $page < $maxPages && count($candidates) < $inspectBudget; $page++) {
+		for ($page = 0; $page < $maxPages && count($candidates) < $sweepBudget; $page++) {
 			$sigParams = array('limit' => $pageSize, 'commitment' => 'finalized');
 			if ($before !== null) {
 				$sigParams['before'] = $before;
@@ -2236,13 +2271,11 @@ class NMM_Blockchain {
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
 				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . print_r($response, true));
 
-				// A first-page failure means we have nothing; surface the error.
-				// A later-page failure still lets us inspect what we already have.
+				// Signal a hard error only if we end up with nothing at all; a
+				// later-page failure still lets us inspect what we collected, and
+				// Phase 0 may already have recovered a payment.
 				if ($page === 0) {
-					return array(
-						'result' => 'error',
-						'total_received' => '',
-					);
+					$hardError = true;
 				}
 				break;
 			}
@@ -2251,10 +2284,7 @@ class NMM_Blockchain {
 
 			if (!isset($body->result) || !is_array($body->result)) {
 				if ($page === 0) {
-					return array(
-						'result' => 'error',
-						'message' => 'No transactions found',
-					);
+					$hardError = true;
 				}
 				break;
 			}
@@ -2285,7 +2315,7 @@ class NMM_Blockchain {
 				}
 
 				$candidates[] = $entry;
-				if (count($candidates) >= $inspectBudget) {
+				if (count($candidates) >= $sweepBudget) {
 					$hitBudget = true;
 					break;
 				}
@@ -2307,65 +2337,116 @@ class NMM_Blockchain {
 			}
 		}
 
-		// Phase 2: fetch each candidate transaction.
-		$transactions = array();
-
+		// Phase 2: inspect this tick's sweep candidates. A candidate whose detail
+		// lookup fails is added to the retry queue (Phase 0 next tick), so the
+		// already-advanced cursor never drops it.
 		foreach ($candidates as $entry) {
-			$txResponse = self::api_post($rpc, array(
-				'headers' => array('Content-Type' => 'application/json'),
-				'body' => json_encode(array(
-					'jsonrpc' => '2.0',
-					'id' => 1,
-					'method' => 'getTransaction',
-					'params' => array($entry->signature, array(
-						'encoding' => 'jsonParsed',
-						'maxSupportedTransactionVersion' => 0,
-						'commitment' => 'finalized',
-					)),
-				)),
-			));
-
-			if (is_wp_error($txResponse) || $txResponse['response']['code'] !== 200) {
-				continue; // do not mark inspected; retry next tick
+			list($ok, $tx) = self::sol_inspect_signature($rpc, $entry->signature, $address);
+			if (!$ok) {
+				$retryQueue[] = $entry->signature;
 			}
-
-			$tx = json_decode($txResponse['body']);
-
-			if (!isset($tx->result->transaction->message->accountKeys) || !isset($tx->result->meta->preBalances)) {
-				continue;
-			}
-
-			// lamports received = balance delta of our address in this transaction
-			foreach ($tx->result->transaction->message->accountKeys as $index => $accountKey) {
-				if (isset($accountKey->pubkey) && $accountKey->pubkey === $address) {
-					$delta = $tx->result->meta->postBalances[$index] - $tx->result->meta->preBalances[$index];
-
-					if ($delta > 0) {
-						$transactions[] = new NMM_Transaction($delta,
-															  10000,
-															  isset($tx->result->blockTime) ? $tx->result->blockTime : time(),
-															  $entry->signature);
-					}
-
-					break;
-				}
+			elseif ($tx !== null) {
+				$transactions[] = $tx;
 			}
 		}
 
 		// Persist the sweep cursor: clear it when the sweep finished so the next
 		// tick restarts from the newest signature (catching new arrivals);
 		// otherwise remember where to resume so progress stays monotonic.
-		if ($sweepComplete) {
-			delete_transient($cursorKey);
+		if (!$sweepComplete && $before !== null) {
+			set_transient($cursorKey, $before, 6 * HOUR_IN_SECONDS);
 		}
 		else {
-			set_transient($cursorKey, $before, 6 * HOUR_IN_SECONDS);
+			delete_transient($cursorKey);
+		}
+
+		// Persist the bounded retry queue (drop the oldest if it overflows; they
+		// will be re-reached when the sweep next restarts).
+		if (count($retryQueue) > $retryCap) {
+			$retryQueue = array_slice($retryQueue, -$retryCap);
+		}
+		if (!empty($retryQueue)) {
+			set_transient($retryKey, $retryQueue, 6 * HOUR_IN_SECONDS);
+		}
+		else {
+			delete_transient($retryKey);
+		}
+
+		// Only report a hard error when we truly have nothing; otherwise return
+		// what we found (a retry recovery or a partial sweep) as success so the
+		// caller does not throw the recovered transactions away.
+		if ($hardError && empty($transactions)) {
+			return array(
+				'result' => 'error',
+				'total_received' => '',
+			);
 		}
 
 		return array(
 			'result' => 'success',
 			'transactions' => $transactions,
 		);
+	}
+
+	// Fetch and interpret a single Solana transaction. Returns
+	// array($inspected, $transactionOrNull): $inspected is false when the detail
+	// lookup failed or came back unusable in a way that could be transient (the
+	// caller should retry it), and true when we got a usable finalized result;
+	// the second element is an NMM_Transaction when the tx credited $address,
+	// otherwise null.
+	private static function sol_inspect_signature($rpc, $signature, $address) {
+		$txResponse = self::api_post($rpc, array(
+			'headers' => array('Content-Type' => 'application/json'),
+			'body' => json_encode(array(
+				'jsonrpc' => '2.0',
+				'id' => 1,
+				'method' => 'getTransaction',
+				'params' => array($signature, array(
+					'encoding' => 'jsonParsed',
+					'maxSupportedTransactionVersion' => 0,
+					'commitment' => 'finalized',
+				)),
+			)),
+		));
+
+		if (is_wp_error($txResponse) || $txResponse['response']['code'] !== 200) {
+			return array(false, null); // HTTP failure (incl. rate limit); retry
+		}
+
+		$tx = json_decode($txResponse['body']);
+
+		if (!is_object($tx) || isset($tx->error)) {
+			return array(false, null); // truncated body or RPC error object; retry
+		}
+
+		if (!isset($tx->result) || $tx->result === null) {
+			return array(false, null); // not yet available at this node; retry
+		}
+
+		if (!isset($tx->result->transaction->message->accountKeys) || !isset($tx->result->meta->preBalances)) {
+			// Finalized but we cannot read balances (e.g. an unsupported tx
+			// version). This will not improve on retry, so treat it as inspected
+			// with no credit rather than looping on it forever.
+			return array(true, null);
+		}
+
+		// lamports received = balance delta of our address in this transaction
+		foreach ($tx->result->transaction->message->accountKeys as $index => $accountKey) {
+			if (isset($accountKey->pubkey) && $accountKey->pubkey === $address) {
+				$delta = $tx->result->meta->postBalances[$index] - $tx->result->meta->preBalances[$index];
+
+				if ($delta > 0) {
+					return array(true, new NMM_Transaction($delta,
+														  10000,
+														  isset($tx->result->blockTime) ? $tx->result->blockTime : time(),
+														  $signature));
+				}
+
+				return array(true, null); // inspected, no credit to us
+			}
+		}
+
+		return array(true, null); // inspected, our address is not a party
 	}
 
 	private static function get_user_agent_string() {
