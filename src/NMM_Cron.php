@@ -76,6 +76,13 @@ function NMM_do_cron_job() {
 		NMM_Payment::check_all_addresses_for_matching_payment($autoPaymentTransactionLifetimeSec);
 		NMM_Payment::cancel_expired_payments();
 
+		// Reclaim durable Solana retry rows for addresses no longer scanned at all
+		// (SOL disabled, or a carousel address removed/replaced) once they are far
+		// past any matching window. Per-address expiry never revisits those, so
+		// this bounded global pass prevents unbounded growth across config changes.
+		$solGlobalRetention = apply_filters('nmm_sol_retry_global_retention_seconds', 7 * DAY_IN_SECONDS);
+		NMM_Sol_Retry_Repo::delete_stale_globally(time() - (int) $solGlobalRetention, 500);
+
 		NMM_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMM_get_time_passed($startTime));
 	}
 	finally {

@@ -15,6 +15,14 @@ if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb'])) {
 	return;
 }
 
+// The classes are only auto-loaded when WooCommerce is active; require them
+// directly so this test runs against just WordPress + a database.
+$nmmSrc = dirname(__DIR__) . '/src/';
+require_once $nmmSrc . 'NMM_Util.php';
+require_once $nmmSrc . 'NMM_Transaction.php';
+require_once $nmmSrc . 'NMM_Sol_Retry_Repo.php';
+require_once $nmmSrc . 'NMM_Blockchain.php';
+
 $wpdb = $GLOBALS['wpdb'];
 $t = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
 NMM_create_sol_retry_table();
@@ -195,20 +203,30 @@ rok('  cursor still held behind the unstored signature', $heldF === 'sigP', var_
 // ---------- 6. Schema repair: maybe_create adds missing indexes ----------
 $wpdb->suppress_errors(true);
 $wpdb->query("ALTER TABLE `$t` DROP INDEX addr_due");
-delete_option('nmm_sol_retry_table_created');
+delete_option('nmm_sol_retry_schema');
 NMM_maybe_create_sol_retry_table();
 rok('missing addr_due index is repaired', count($wpdb->get_results("SHOW INDEX FROM `$t` WHERE Key_name='addr_due'")) > 0);
-rok('option recorded only after repair completes', get_option('nmm_sol_retry_table_created') === 'yes');
+rok('schema version recorded only after repair completes', get_option('nmm_sol_retry_schema') === '2');
+rok('new expiry indexes present after repair', count($wpdb->get_results("SHOW INDEX FROM `$t` WHERE Key_name IN ('addr_block_time','addr_first_failed','first_failed')")) >= 3);
 
 // Unique key repair must de-duplicate first (a table that ran without it could
 // have accumulated duplicate (address, signature) rows).
 $wpdb->query("ALTER TABLE `$t` DROP INDEX addr_sig");
 $wpdb->query("INSERT INTO `$t` (address,signature,first_failed_at,attempts,next_retry_at,block_time) VALUES ('RREP','dup',1,1,1,0),('RREP','dup',1,1,1,0)");
-delete_option('nmm_sol_retry_table_created');
+delete_option('nmm_sol_retry_schema');
 NMM_maybe_create_sol_retry_table();
 $dupCount = (int) $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='RREP' AND signature='dup'");
 rok('unique key repaired after de-duplicating', count($wpdb->get_results("SHOW INDEX FROM `$t` WHERE Key_name='addr_sig'")) > 0 && $dupCount === 1, "dups=$dupCount");
 $wpdb->suppress_errors(false);
+
+// ---------- 7. Global cleanup reclaims rows for no-longer-scanned addresses ----------
+$wpdb->query("DELETE FROM `$t`");
+$stale = $now - (10 * 24 * 60 * 60); // 10 days ago (past a 7-day global retention)
+$wpdb->query($wpdb->prepare("INSERT INTO `$t` (address,signature,first_failed_at,attempts,next_retry_at,block_time) VALUES ('GONEADDR','oldsig',%d,3,%d,0)", $stale, $stale));
+$wpdb->query($wpdb->prepare("INSERT INTO `$t` (address,signature,first_failed_at,attempts,next_retry_at,block_time) VALUES ('LIVEADDR','freshsig',%d,1,%d,0)", $now - 60, $now));
+$removed = NMM_Sol_Retry_Repo::delete_stale_globally($now - (7 * 24 * 60 * 60), 500);
+rok('global cleanup removes stale row for unscanned address', $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='GONEADDR'") == 0, "removed=$removed");
+rok('global cleanup keeps a recent row', $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='LIVEADDR'") == 1);
 
 $wpdb->query("DELETE FROM `$t`");
 echo $pass ? "\nSOL-RETRY (durable queue) CHECKS PASSED\n" : "\nSOL-RETRY CHECKS FAILED\n";

@@ -105,26 +105,62 @@ class NMM_Sol_Retry_Repo {
 		return true;
 	}
 
-	// Delete entries conclusively outside the matching period: their block time is
-	// older than the payment window. Entries with an unknown block time (0) are
-	// NOT expired on that basis - only the retention safety net (failing longer
-	// than the retention bound) can remove them, so a still-live payment whose
-	// block time we never learned is never dropped early. Returns the number of
-	// rows removed so the caller can log a final expiry (-1 on database error).
-	public static function delete_expired($address, $windowCutoffBlockTime, $retentionCutoffFirstFailed) {
+	// Delete entries for an address that are conclusively outside the matching
+	// period. Run as TWO range deletes so each uses its own composite index
+	// instead of scanning every queued row for the address (an OR across two
+	// ranges cannot): one on (address, block_time) for signatures whose block
+	// time is older than the payment window, one on (address, first_failed_at)
+	// as the retention safety net. Entries with an unknown block time (0) are
+	// never expired on the block-time basis - only by retention - so a still-live
+	// payment whose block time we never learned is not dropped early. Each delete
+	// is LIMIT-bounded so a huge backlog is cleared over several ticks rather than
+	// in one long statement. Returns rows removed (-1 on database error).
+	public static function delete_expired($address, $windowCutoffBlockTime, $retentionCutoffFirstFailed, $limit = 500) {
+		if (!self::available()) {
+			return 0;
+		}
+		global $wpdb;
+		$t = self::table();
+
+		$byBlock = $wpdb->query($wpdb->prepare(
+			"DELETE FROM `$t` WHERE `address` = %s AND `block_time` > 0 AND `block_time` < %d LIMIT %d",
+			$address, (int) $windowCutoffBlockTime, (int) $limit
+		));
+		if ($byBlock === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry block-time expiry failed for ' . $address . ': ' . $wpdb->last_error);
+			return -1;
+		}
+
+		$byRetention = $wpdb->query($wpdb->prepare(
+			"DELETE FROM `$t` WHERE `address` = %s AND `first_failed_at` < %d LIMIT %d",
+			$address, (int) $retentionCutoffFirstFailed, (int) $limit
+		));
+		if ($byRetention === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry retention expiry failed for ' . $address . ': ' . $wpdb->last_error);
+			return -1;
+		}
+
+		return (int) $byBlock + (int) $byRetention;
+	}
+
+	// Global cleanup, independent of any configured address: remove entries whose
+	// first failure is older than a conservative global retention, in a bounded
+	// batch. This reclaims rows for addresses that are no longer scanned at all -
+	// e.g. after SOL Autopay is disabled, or a carousel address is removed or
+	// replaced - which per-address expiry would otherwise never revisit. Uses the
+	// (first_failed_at) index. Returns rows removed (-1 on database error).
+	public static function delete_stale_globally($cutoffFirstFailed, $limit) {
 		if (!self::available()) {
 			return 0;
 		}
 		global $wpdb;
 		$t = self::table();
 		$result = $wpdb->query($wpdb->prepare(
-			"DELETE FROM `$t`
-			 WHERE `address` = %s
-			 AND ( (`block_time` > 0 AND `block_time` < %d) OR `first_failed_at` < %d )",
-			$address, (int) $windowCutoffBlockTime, (int) $retentionCutoffFirstFailed
+			"DELETE FROM `$t` WHERE `first_failed_at` < %d LIMIT %d",
+			(int) $cutoffFirstFailed, (int) $limit
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry expiry sweep failed for ' . $address . ': ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry global cleanup failed: ' . $wpdb->last_error);
 			return -1;
 		}
 		return (int) $result;

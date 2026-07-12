@@ -218,10 +218,12 @@ function NMM_activate() {
     NMM_maybe_create_sol_retry_table();
 }
 
-// Create the durable Solana retry-queue table once (gated by an option so the
-// CREATE does not run on every load), verifying it exists before recording it.
+// Create/repair the durable Solana retry-queue table (gated by a schema version
+// so it does not run on every load, but DOES re-run to add new indexes when the
+// schema is bumped), confirming columns and indexes before recording success.
 function NMM_maybe_create_sol_retry_table() {
-    if (get_option('nmm_sol_retry_table_created') === 'yes') {
+    $schemaVersion = '2'; // bump when the retry table's columns/indexes change
+    if (get_option('nmm_sol_retry_schema') === $schemaVersion) {
         return;
     }
 
@@ -245,9 +247,11 @@ function NMM_maybe_create_sol_retry_table() {
     // (address, signature) rows first (a table that ran without it could have
     // accumulated them), keeping the lowest id, or the ADD would fail.
     $indexDefs = array(
-        'addr_sig'   => 'ADD UNIQUE KEY `addr_sig` (`address`, `signature`)',
-        'addr_due'   => 'ADD KEY `addr_due` (`address`, `next_retry_at`)',
-        'block_time' => 'ADD KEY `block_time` (`block_time`)',
+        'addr_sig'          => 'ADD UNIQUE KEY `addr_sig` (`address`, `signature`)',
+        'addr_due'          => 'ADD KEY `addr_due` (`address`, `next_retry_at`)',
+        'addr_block_time'   => 'ADD KEY `addr_block_time` (`address`, `block_time`)',
+        'addr_first_failed' => 'ADD KEY `addr_first_failed` (`address`, `first_failed_at`)',
+        'first_failed'      => 'ADD KEY `first_failed` (`first_failed_at`)',
     );
     $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2); // Key_name
     foreach ($indexDefs as $name => $def) {
@@ -270,7 +274,8 @@ function NMM_maybe_create_sol_retry_table() {
     // Record success only once the schema is fully present, so a partial or
     // failed repair retries next load instead of being masked as complete.
     if ($columnsOk && $indexesOk) {
-        update_option('nmm_sol_retry_table_created', 'yes');
+        update_option('nmm_sol_retry_schema', $schemaVersion);
+        delete_option('nmm_sol_retry_table_created'); // retire the pre-versioned flag
     }
     else {
         NMM_Util::log(__FILE__, __LINE__, 'Solana retry schema incomplete (' . $wpdb->last_error . '); will retry next load.');
@@ -294,7 +299,9 @@ function NMM_create_sol_retry_table() {
             PRIMARY KEY (`id`),
             UNIQUE KEY `addr_sig` (`address`, `signature`),
             KEY `addr_due` (`address`, `next_retry_at`),
-            KEY `block_time` (`block_time`)
+            KEY `addr_block_time` (`address`, `block_time`),
+            KEY `addr_first_failed` (`address`, `first_failed_at`),
+            KEY `first_failed` (`first_failed_at`)
         );";
 
     $wpdb->query($query);
@@ -325,6 +332,7 @@ function NMM_drop_sol_retry_table() {
         foreach ($blogIds as $blogId) {
             switch_to_blog($blogId);
             $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+            delete_option('nmm_sol_retry_schema');
             delete_option('nmm_sol_retry_table_created');
             restore_current_blog();
         }
@@ -332,6 +340,7 @@ function NMM_drop_sol_retry_table() {
     }
 
     $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+    delete_option('nmm_sol_retry_schema');
     delete_option('nmm_sol_retry_table_created');
 }
 
