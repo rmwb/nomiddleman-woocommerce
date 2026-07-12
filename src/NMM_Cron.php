@@ -29,7 +29,7 @@ function NMM_do_cron_job() {
 	// is unavailable on this host; degrade to running unlocked rather than never
 	// running, matching the pre-lock behaviour.
 	if ($lockAcquired !== '1') {
-		NMM_Util::log(__FILE__, __LINE__, 'Advisory lock unavailable on this host; running cron without overlap protection.');
+		NMM_Util::log(__FILE__, __LINE__, 'Advisory lock unavailable on this host; running cron without overlap protection.', 'warning');
 	}
 
 	try {

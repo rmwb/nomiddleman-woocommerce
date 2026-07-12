@@ -91,7 +91,7 @@ class NMM_Blockchain {
 			// 60s, 120s, 240s ... capped at 30 minutes
 			$backoff = min(60 * pow(2, $failures - 1), 30 * MINUTE_IN_SECONDS);
 			set_transient('nmm_backoff_' . md5($host), 1, $backoff);
-			NMM_Util::log(__FILE__, __LINE__, 'API host ' . $host . ' failing (http ' . $code . '), backing off ' . $backoff . 's');
+			NMM_Util::log(__FILE__, __LINE__, 'API host ' . $host . ' failing (http ' . $code . '), backing off ' . $backoff . 's', 'warning');
 		}
 		elseif ($code === 200) {
 			delete_transient('nmm_apifail_' . md5($host));
@@ -2250,7 +2250,7 @@ class NMM_Blockchain {
 				$attempts = (int) $row['attempts'] + 1;
 				NMM_Sol_Retry_Repo::reschedule($address, $sig, $attempts, $nowTs + self::sol_retry_backoff($attempts, $retryBaseSec, $retryMaxSec));
 				if ($attempts % 10 === 0) {
-					NMM_Util::log(__FILE__, __LINE__, 'Solana signature ' . $sig . ' still failing detail lookup after ' . $attempts . ' attempts (' . ($nowTs - (int) $row['first_failed_at']) . 's).');
+					NMM_Util::log(__FILE__, __LINE__, 'Solana signature ' . $sig . ' still failing detail lookup after ' . $attempts . ' attempts (' . ($nowTs - (int) $row['first_failed_at']) . 's).', 'warning');
 				}
 			}
 		}
@@ -2379,7 +2379,7 @@ class NMM_Blockchain {
 				continue;
 			}
 
-			NMM_Util::log(__FILE__, __LINE__, 'Could not durably enqueue Solana retry for ' . $entry->signature . '; holding the sweep cursor behind it so it is retried.');
+			NMM_Util::log(__FILE__, __LINE__, 'Could not durably enqueue Solana retry for ' . $entry->signature . '; holding the sweep cursor behind it so it is retried.', 'error');
 			$enqueueFailed = true;
 			break;
 		}
