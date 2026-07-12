@@ -48,7 +48,45 @@ mok('multisite blocks link-local meta', !allowed('http://169.254.169.254/latest/
 mok('multisite blocks IPv6 loopback',   !allowed('http://[::1]:18082'));
 mok('multisite still allows public',    allowed('http://8.8.8.8:18082'));
 
+// --- validate_rpc_url now reports literal / private shape ---
+$GLOBALS['nmm_is_ms'] = false;
+$pubLiteral = NMM_Monero::validate_rpc_url('http://8.8.8.8:18082');
+mok('public literal: is_literal true',  $pubLiteral['is_literal'] === true);
+mok('public literal: is_private false', $pubLiteral['is_private'] === false);
+mok('public literal: ip pinned',        $pubLiteral['ip'] === '8.8.8.8');
+$loopLiteral = NMM_Monero::validate_rpc_url('http://127.0.0.1:18082');
+mok('loopback literal: is_literal true',  $loopLiteral['is_literal'] === true);
+mok('loopback literal: is_private true',  $loopLiteral['is_private'] === true);
+
+// --- plan_request: transport must never resolve away from the vetted address ---
+function plan($target, $curl, $creds) { return NMM_Monero::plan_request($target, $curl, $creds); }
+
+$publicLiteral  = array('host' => '8.8.8.8',            'port' => 18082, 'ip' => '8.8.8.8',       'is_literal' => true,  'is_private' => false);
+$publicHost     = array('host' => 'wallet.example.com','port' => 443,   'ip' => '93.184.216.34', 'is_literal' => false, 'is_private' => false);
+$privateLiteral = array('host' => '127.0.0.1',         'port' => 18082, 'ip' => '127.0.0.1',     'is_literal' => true,  'is_private' => true);
+$privateHost    = array('host' => 'localhost',         'port' => 18082, 'ip' => '127.0.0.1',     'is_literal' => false, 'is_private' => true);
+$unresolvable   = array('host' => 'nope.invalid',      'port' => 80,    'ip' => '',              'is_literal' => false, 'is_private' => true);
+
+// cURL available: always pin, regardless of host or privacy.
+mok('curl pins public literal',      plan($publicLiteral, true, false)['transport'] === 'curl');
+mok('curl pins public hostname',     plan($publicHost,    true, false)['transport'] === 'curl');
+mok('curl pins private hostname',    plan($privateHost,   true, false)['transport'] === 'curl');
+mok('curl digest off without creds', plan($publicLiteral, true, false)['digest'] === false);
+mok('curl digest on with creds',     plan($publicLiteral, true, true)['digest']  === true);
+
+// No cURL: IP literals are safe (no DNS), public hostnames go via safe transport.
+mok('no-curl ip literal -> wp_remote',   plan($publicLiteral,  false, false)['transport'] === 'wp_remote');
+mok('no-curl private literal -> wp_remote', plan($privateLiteral, false, false)['transport'] === 'wp_remote');
+mok('no-curl public host -> wp_safe',    plan($publicHost,     false, false)['transport'] === 'wp_safe');
+
+// No cURL: a private/unresolvable hostname we cannot pin must be refused.
+mok('no-curl private host -> reject',    plan($privateHost,    false, false)['transport'] === 'reject');
+mok('no-curl unresolvable -> reject',    plan($unresolvable,   false, false)['transport'] === 'reject');
+// Even with cURL, nothing to pin (no ip) must not fall through to an unpinned send.
+mok('curl but no ip -> reject',          plan($unresolvable,   true,  false)['transport'] === 'reject');
+
 // --- explicit opt-in constant permits private on multisite ---
+$GLOBALS['nmm_is_ms'] = true;
 define('NMM_XMR_ALLOW_PRIVATE_RPC', true);
 mok('constant opt-in allows private on multisite', allowed('http://127.0.0.1:18082/json_rpc'));
 

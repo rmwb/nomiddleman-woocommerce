@@ -10,8 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * transfers are read over JSON-RPC - fully non-custodial, and the view key
  * never leaves the merchant's infrastructure.
  *
+ * Every request goes through validate_rpc_url() + plan_request(): when cURL is
+ * available the connection is pinned to the validated IP (CURLOPT_RESOLVE) so a
+ * hostname cannot be rebound to a private target between validation and connect.
  * monero-wallet-rpc uses HTTP digest auth when --rpc-login is set, which
- * WordPress's HTTP API does not speak; in that case we fall back to curl.
+ * WordPress's HTTP API does not speak, so digest is layered onto that cURL path.
  */
 class NMM_Monero {
 
@@ -42,8 +45,13 @@ class NMM_Monero {
 		$user = $settings->get_xmr_rpc_user();
 		$pass = $settings->get_xmr_rpc_password();
 
-		if ($user !== '' && function_exists('curl_init')) {
-			// digest auth path
+		$plan = self::plan_request($target, function_exists('curl_init'), $user !== '');
+
+		if ($plan['transport'] === 'reject') {
+			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: it resolves to a private address but the connection cannot be pinned (no cURL). Use an IP-literal RPC URL, or enable the cURL PHP extension.');
+		}
+
+		if ($plan['transport'] === 'curl') {
 			$ch = curl_init($url);
 			$curlOpts = array(
 				CURLOPT_RETURNTRANSFER => true,
@@ -52,12 +60,16 @@ class NMM_Monero {
 				CURLOPT_POST => true,
 				CURLOPT_POSTFIELDS => $payload,
 				CURLOPT_HTTPHEADER => array('Content-Type: application/json'),
-				CURLOPT_HTTPAUTH => CURLAUTH_DIGEST,
-				CURLOPT_USERPWD => $user . ':' . $pass,
 				// Restrict to HTTP(S) and never follow a redirect (which could be
 				// steered to a file:// or internal target).
 				CURLOPT_FOLLOWLOCATION => false,
 			);
+			// Digest auth only when the merchant configured credentials; the RPC
+			// is otherwise open and WordPress's HTTP API cannot speak digest.
+			if ($plan['digest']) {
+				$curlOpts[CURLOPT_HTTPAUTH] = CURLAUTH_DIGEST;
+				$curlOpts[CURLOPT_USERPWD] = $user . ':' . $pass;
+			}
 			if (defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
 				$curlOpts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
 				$curlOpts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
@@ -71,18 +83,26 @@ class NMM_Monero {
 			curl_setopt_array($ch, $curlOpts);
 			$body = curl_exec($ch);
 			$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+			curl_close($ch);
 
 			if ($body === false || $code !== 200) {
 				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable (http ' . $code . ').');
 			}
 		}
 		else {
-			$response = wp_remote_post($url, array(
+			// No cURL. wp_safe_remote_post re-validates the resolved address and
+			// refuses private targets (public-hostname case); wp_remote_post is
+			// only chosen for IP-literal targets, where there is no DNS to rebind.
+			$args = array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => $payload,
 				'timeout' => 20,
 				'redirection' => 0, // never follow a redirect to another target
-			));
+			);
+
+			$response = ($plan['transport'] === 'wp_safe')
+				? wp_safe_remote_post($url, $args)
+				: wp_remote_post($url, $args);
 
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
 				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable.');
@@ -135,7 +155,8 @@ class NMM_Monero {
 
 		$host = $parts['host'];
 		$port = isset($parts['port']) ? (int) $parts['port'] : (strtolower($parts['scheme']) === 'https' ? 443 : 80);
-		$ip = filter_var($host, FILTER_VALIDATE_IP) ? $host : gethostbyname($host);
+		$isLiteral = (bool) filter_var($host, FILTER_VALIDATE_IP);
+		$ip = $isLiteral ? $host : gethostbyname($host);
 
 		$isPrivate = (strtolower($host) === 'localhost') || self::is_private_or_reserved_ip($ip);
 		if ($isPrivate) {
@@ -146,7 +167,50 @@ class NMM_Monero {
 			}
 		}
 
-		return array('host' => $host, 'port' => $port, 'ip' => filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '');
+		return array(
+			'host' => $host,
+			'port' => $port,
+			'ip' => filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '',
+			// is_literal: the URL host is already an IP, so there is no DNS to
+			// rebind. is_private: resolves into private/loopback/reserved space.
+			'is_literal' => $isLiteral,
+			'is_private' => $isPrivate,
+		);
+	}
+
+	/**
+	 * Decide how to send an RPC request to an already-validated target so the
+	 * connection cannot be steered to a different address than the one we vetted
+	 * (DNS rebinding). Pure and side-effect free so it can be unit-tested.
+	 *
+	 * Returns array( 'transport' => 'curl'|'wp_safe'|'wp_remote'|'reject',
+	 *                'digest' => bool, 'reason' => string ).
+	 *
+	 * - curl:      cURL is available and we have a concrete IP to pin with
+	 *              CURLOPT_RESOLVE - the only transport immune to rebinding.
+	 *              Digest auth is layered on only when credentials exist.
+	 * - wp_remote: no cURL, but the host is an IP literal - there is no DNS to
+	 *              rebind, so a plain request reaches exactly the vetted address.
+	 * - wp_safe:   no cURL and a public hostname - wp_safe_remote_post re-validates
+	 *              the resolved IP and refuses private targets at request time.
+	 * - reject:    no cURL and a private (or unresolvable) hostname we cannot pin -
+	 *              wp_safe_remote_post would block it and wp_remote_post could be
+	 *              rebound into private space, so we refuse rather than risk it.
+	 */
+	public static function plan_request($target, $hasCurl, $hasCreds) {
+		if ($hasCurl && $target['ip'] !== '') {
+			return array('transport' => 'curl', 'digest' => (bool) $hasCreds, 'reason' => 'pinned');
+		}
+
+		if (!empty($target['is_literal'])) {
+			return array('transport' => 'wp_remote', 'digest' => false, 'reason' => 'ip-literal');
+		}
+
+		if (!empty($target['is_private'])) {
+			return array('transport' => 'reject', 'digest' => false, 'reason' => 'unpinnable-private');
+		}
+
+		return array('transport' => 'wp_safe', 'digest' => false, 'reason' => 'public-hostname');
 	}
 
 	// True for loopback / private / link-local (incl. 169.254.169.254 cloud
