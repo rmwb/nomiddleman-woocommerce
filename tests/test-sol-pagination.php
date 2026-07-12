@@ -296,4 +296,51 @@ ok('backed-off entry retained but not fetched', isset($mapF['BACKOFFSIG']) && !i
 ok('due entry was retried', in_array('DUESIG', $GLOBALS['nmm_gettx_calls'], true));
 ok('  due entry re-queued with backoff after failing', isset($mapF['DUESIG']) && $mapF['DUESIG']['attempts'] === 2 && $mapF['DUESIG']['next'] > $now);
 
+// ---- Scenario G: retry-queue overflow must not evict a live signature ----
+// The map is already full (50). A valid payment sits among the OLDEST entries,
+// and 25 further failing signatures press in from the sweep. The old code kept
+// only the newest 50 and silently dropped the oldest (the payment among them);
+// backpressure must instead keep every in-window failure and refuse to collect
+// past the map's headroom.
+$ADDR7 = 'OVERFLOW7777777777777777777777777777777777777';
+$now = time();
+$seed = array();
+$seed['PAYOLD'] = array('first' => $now - 2000, 'attempts' => 3, 'next' => $now - 10);   // oldest + due -> retried, succeeds
+for ($i = 0; $i < 49; $i++) {
+	$seed[sprintf('seed%02d', $i)] = array('first' => $now - 1900 + $i, 'attempts' => 3, 'next' => $now + 99999); // not due
+}
+set_transient('nmm_sol_retry_' . md5($ADDR7), $seed, 6 * 3600);
+
+$GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) use ($ADDR7, $now) {
+	$req = json_decode($postBody, true);
+	if ($req['method'] === 'getSignaturesForAddress') {
+		$out = array();
+		for ($n = 0; $n < 25; $n++) { $out[] = array('signature' => sprintf('new%02d', $n), 'blockTime' => $now - 5, 'err' => null); }
+		return array('body' => json_encode(array('result' => $out)), 'response' => array('code' => 200));
+	}
+	$sig = $req['params'][0];
+	$GLOBALS['nmm_gettx_calls'][] = $sig;
+	if ($sig === 'PAYOLD') {
+		return array('body' => json_encode(array('result' => array(
+			'blockTime' => $now, 'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => $ADDR7)))),
+			'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000 + 8800000))))), 'response' => array('code' => 200));
+	}
+	return array('body' => json_encode(array('result' => null)), 'response' => array('code' => 200)); // new* fail
+};
+$GLOBALS['nmm_gettx_calls'] = array();
+$rG = NMM_Blockchain::get_sol_address_transactions($ADDR7, $LIFE);
+$mapG = get_transient('nmm_sol_retry_' . md5($ADDR7));
+if (!is_array($mapG)) { $mapG = array(); }
+
+$paidFound = false;
+foreach ($rG['transactions'] as $tx) { if ($tx->get_hash() === 'PAYOLD') { $paidFound = $tx->get_amount(); } }
+$seedsRetained = 0;
+for ($i = 0; $i < 49; $i++) { if (isset($mapG[sprintf('seed%02d', $i)])) { $seedsRetained++; } }
+$newFetched = count(array_filter($GLOBALS['nmm_gettx_calls'], function ($s) { return strpos($s, 'new') === 0; }));
+
+ok('valid payment among oldest is retried and found', $paidFound !== false, $paidFound ? 'amt=' . $paidFound : '');
+ok('  no live entry evicted (all 49 seeds retained)', $seedsRetained === 49, "($seedsRetained/49)");
+ok('  retry map never exceeds cap (<=50)', count($mapG) <= 50, '(' . count($mapG) . ')');
+ok('  new candidates throttled to headroom (not 25)', $newFetched <= 1, "($newFetched)");
+
 exit($failed ? 1 : 0);

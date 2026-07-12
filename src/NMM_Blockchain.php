@@ -2278,8 +2278,16 @@ class NMM_Blockchain {
 		}
 
 		// Phase 1: from the cursor, page older and collect the remaining budget of
-		// signatures to inspect this tick.
-		$sweepBudget = max(0, $inspectBudget - $retriesUsed);
+		// signatures to inspect this tick - but never collect more than the retry
+		// map can still hold. Every collected candidate that fails must be
+		// remembered (the cursor advances past it), so if we collected past the
+		// map's headroom a failure would have to be dropped, and a dropped
+		// signature is only re-reached on the next full sweep - which on a busy
+		// address can exceed the matching window. When the map is full we collect
+		// nothing and leave the cursor put, applying backpressure until retries
+		// succeed or expire and free space, so a live failure is never evicted.
+		$retryHeadroom = max(0, $retryCap - count($retryMap));
+		$sweepBudget = min(max(0, $inspectBudget - $retriesUsed), $retryHeadroom);
 		$candidates = array();
 		$sweepComplete = false;
 		$hitBudget = false;
@@ -2394,10 +2402,12 @@ class NMM_Blockchain {
 			delete_transient($cursorKey);
 		}
 
-		// Persist the bounded retry map. On overflow keep the NEWEST failures
-		// (largest first_failed_at) - they are the most likely to still be inside
-		// the matching window; the oldest are closest to expiry anyway.
+		// The Phase-1 backpressure keeps the map from exceeding $retryCap, so this
+		// is only a defensive backstop. If it ever trips, log loudly and keep the
+		// newest (most likely still in-window) failures - silently dropping an
+		// in-window signature is exactly the failure mode we are guarding against.
 		if (count($retryMap) > $retryCap) {
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry map exceeded ' . $retryCap . ' for ' . $address . ' despite backpressure; dropping ' . (count($retryMap) - $retryCap) . ' oldest - please investigate.');
 			uasort($retryMap, function ($a, $b) { return $b['first'] - $a['first']; });
 			$retryMap = array_slice($retryMap, 0, $retryCap, true);
 		}
