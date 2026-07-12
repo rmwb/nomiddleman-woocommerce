@@ -146,13 +146,43 @@ $GLOBALS['sol_sigs'] = array(
 	array('signature' => 'sigC', 'blockTime' => $now - 7),
 );
 $GLOBALS['sol_tx'] = array('sigA' => 0, 'sigB' => 'fail', 'sigC' => 0);
+$GLOBALS['sol_addr'] = $E;
+
+// Tick 1: table dropped so sigB's enqueue fails; the cursor must stop at sigA.
 $wpdb->suppress_errors(true);                             // the dropped-table errors below are expected
-$wpdb->query("DROP TABLE IF EXISTS `$t`");                 // make enqueue() fail
+$wpdb->query("DROP TABLE IF EXISTS `$t`");
+$GLOBALS['sol_gettx'] = array();
 NMM_Blockchain::get_sol_address_transactions($E, $LIFE);
 $heldCursor = get_transient('nmm_sol_cursor_' . md5($E));
-NMM_create_sol_retry_table();                             // restore for later runs
-$wpdb->suppress_errors(false);
 rok('cursor holds at last safely-handled sig (before failed enqueue)', $heldCursor === 'sigA', var_export($heldCursor, true));
+
+// Tick 2: table restored; resuming from sigA must re-encounter sigB and now
+// durably store it - proving the failed signature is not lost.
+NMM_create_sol_retry_table();
+$wpdb->query("DELETE FROM `$t`");
+$wpdb->suppress_errors(false);
+$GLOBALS['sol_gettx'] = array();
+NMM_Blockchain::get_sol_address_transactions($E, $LIFE); // cursor still points at sigA
+rok('failed signature is re-encountered on the next tick', in_array('sigB', $GLOBALS['sol_gettx'], true));
+rok('  and is now durably enqueued', NMM_Sol_Retry_Repo::count_for($E) >= 1);
+
+// ---------- 6. Schema repair: maybe_create adds missing indexes ----------
+$wpdb->suppress_errors(true);
+$wpdb->query("ALTER TABLE `$t` DROP INDEX addr_due");
+delete_option('nmm_sol_retry_table_created');
+NMM_maybe_create_sol_retry_table();
+rok('missing addr_due index is repaired', count($wpdb->get_results("SHOW INDEX FROM `$t` WHERE Key_name='addr_due'")) > 0);
+rok('option recorded only after repair completes', get_option('nmm_sol_retry_table_created') === 'yes');
+
+// Unique key repair must de-duplicate first (a table that ran without it could
+// have accumulated duplicate (address, signature) rows).
+$wpdb->query("ALTER TABLE `$t` DROP INDEX addr_sig");
+$wpdb->query("INSERT INTO `$t` (address,signature,first_failed_at,attempts,next_retry_at,block_time) VALUES ('RREP','dup',1,1,1,0),('RREP','dup',1,1,1,0)");
+delete_option('nmm_sol_retry_table_created');
+NMM_maybe_create_sol_retry_table();
+$dupCount = (int) $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='RREP' AND signature='dup'");
+rok('unique key repaired after de-duplicating', count($wpdb->get_results("SHOW INDEX FROM `$t` WHERE Key_name='addr_sig'")) > 0 && $dupCount === 1, "dups=$dupCount");
+$wpdb->suppress_errors(false);
 
 $wpdb->query("DELETE FROM `$t`");
 echo $pass ? "\nSOL-RETRY (durable queue) CHECKS PASSED\n" : "\nSOL-RETRY CHECKS FAILED\n";

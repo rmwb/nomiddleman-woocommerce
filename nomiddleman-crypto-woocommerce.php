@@ -229,22 +229,51 @@ function NMM_maybe_create_sol_retry_table() {
     NMM_create_sol_retry_table();
 
     $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
-    $tableExists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) === $tableName;
-
-    // Record success only once the table AND every index the queue relies on
-    // exist, so a partial creation retries next load instead of being masked.
-    $requiredIndexes = array('addr_sig', 'addr_due', 'block_time');
-    $haveIndexes = false;
-    if ($tableExists) {
-        $present = $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2); // Key_name column
-        $haveIndexes = count(array_intersect($requiredIndexes, (array) $present)) === count($requiredIndexes);
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) !== $tableName) {
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table not created (' . $wpdb->last_error . '); will retry next load.');
+        return;
     }
 
-    if ($tableExists && $haveIndexes) {
+    // CREATE TABLE IF NOT EXISTS will not repair a pre-existing table that is
+    // missing a column or index, so check and fix those explicitly. A missing
+    // addr_sig unique key in particular would break the idempotent upsert.
+    $columns = (array) $wpdb->get_col("SHOW COLUMNS FROM `$tableName`", 0); // Field
+    $requiredColumns = array('id', 'address', 'signature', 'first_failed_at', 'attempts', 'next_retry_at', 'block_time');
+    $columnsOk = count(array_intersect($requiredColumns, $columns)) === count($requiredColumns);
+
+    // Add any missing required index. For the unique key, collapse any duplicate
+    // (address, signature) rows first (a table that ran without it could have
+    // accumulated them), keeping the lowest id, or the ADD would fail.
+    $indexDefs = array(
+        'addr_sig'   => 'ADD UNIQUE KEY `addr_sig` (`address`, `signature`)',
+        'addr_due'   => 'ADD KEY `addr_due` (`address`, `next_retry_at`)',
+        'block_time' => 'ADD KEY `block_time` (`block_time`)',
+    );
+    $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2); // Key_name
+    foreach ($indexDefs as $name => $def) {
+        if (in_array($name, $present, true)) {
+            continue;
+        }
+        if ($name === 'addr_sig') {
+            $wpdb->query(
+                "DELETE t1 FROM `$tableName` t1
+                 INNER JOIN `$tableName` t2
+                 ON t1.address = t2.address AND t1.signature = t2.signature AND t1.id > t2.id"
+            );
+        }
+        $wpdb->query("ALTER TABLE `$tableName` $def");
+    }
+
+    $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2);
+    $indexesOk = count(array_intersect(array_keys($indexDefs), $present)) === count($indexDefs);
+
+    // Record success only once the schema is fully present, so a partial or
+    // failed repair retries next load instead of being masked as complete.
+    if ($columnsOk && $indexesOk) {
         update_option('nmm_sol_retry_table_created', 'yes');
     }
     else {
-        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table/indexes not fully created (' . $wpdb->last_error . '); will retry next load.');
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry schema incomplete (' . $wpdb->last_error . '); will retry next load.');
     }
 }
 

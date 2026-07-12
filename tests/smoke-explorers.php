@@ -19,9 +19,13 @@ nmm_test_require_plugin(array(
 	'src/NMM_Transaction.php',
 	'src/NMM_Cryptocurrency.php',
 	'src/NMM_Cryptocurrencies.php',
+	'src/NMM_Sol_Retry_Repo.php',
 	'src/NMM_Blockchain.php',
 	'src/NMM_Exchange.php',
 ));
+
+// SOL verification touches the durable retry store; offline it no-ops (no $wpdb).
+if (!defined('NMM_SOL_RETRY_TABLE')) { define('NMM_SOL_RETRY_TABLE', 'nmmpro_sol_retry'); }
 
 $failures = array();
 
