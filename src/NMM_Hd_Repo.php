@@ -173,8 +173,11 @@ class NMM_Hd_Repo {
 		return $results;
 	}
 
-	// Addresses awaiting quarantine verification before they may be reused.
-	public function get_quarantined() {
+	// The oldest-due batch of addresses awaiting quarantine verification. Ordered
+	// by last_checked so the most-overdue are processed first, and LIMITed so a
+	// large abandonment burst cannot fire thousands of explorer requests (each
+	// row costs one) in a single cron tick under the global lock.
+	public function get_quarantined($limit = 25) {
 		global $wpdb;
 
 		$results = $wpdb->get_results($wpdb->prepare(
@@ -182,8 +185,10 @@ class NMM_Hd_Repo {
 			 WHERE `mpk` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
-			 AND (`status` = 'quarantine' OR `status` = 'quarantine_verified')",
-			$this->mpk, $this->cryptoId, $this->hdMode
+			 AND (`status` = 'quarantine' OR `status` = 'quarantine_verified')
+			 ORDER BY `last_checked` ASC
+			 LIMIT %d",
+			$this->mpk, $this->cryptoId, $this->hdMode, $limit
 		), ARRAY_A);
 
 		return $results;

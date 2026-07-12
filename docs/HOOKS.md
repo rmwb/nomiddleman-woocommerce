@@ -122,6 +122,19 @@ whichever is larger). Raise it to be more conservative.
 apply_filters( 'nmm_hd_quarantine_seconds', $seconds, $cryptoId );
 ```
 
+### `nmm_hd_quarantine_batch`
+
+The maximum number of quarantined addresses re-checked per coin per cron tick
+(default `25`). Each one costs a fresh explorer request, so this bounds the
+external work a large abandonment burst can trigger under the background job's
+lock. The oldest-due addresses are processed first; the rest wait for later
+ticks. Raise it if you have a big backlog and headroom, lower it to be gentler
+on explorers.
+
+```php
+apply_filters( 'nmm_hd_quarantine_batch', $limit, $cryptoId );
+```
+
 Reusing a **pristine, never-used** address is deliberate: it keeps a long run of
 abandoned checkouts from pushing a later *paid* address beyond your wallet's
 **gap limit** (the number of consecutive unused addresses a wallet scans from

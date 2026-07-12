@@ -68,7 +68,8 @@ function NMM_do_cron_job() {
 				// payment expiry, before any are recycled. Filterable so a
 				// merchant can lengthen the wait.
 				$hdQuarantinePeriodSec = apply_filters('nmm_hd_quarantine_seconds', max($hdOrderCancellationTimeSec, 6 * HOUR_IN_SECONDS), $cryptoId);
-				NMM_Hd::process_quarantined_addresses($cryptoId, $mpk, $hdRequiredConfirmations, $hdMode, $hdQuarantinePeriodSec);
+				$hdQuarantineBatch = (int) apply_filters('nmm_hd_quarantine_batch', 25, $cryptoId);
+				NMM_Hd::process_quarantined_addresses($cryptoId, $mpk, $hdRequiredConfirmations, $hdMode, $hdQuarantinePeriodSec, $hdQuarantineBatch);
 			}
 		}
 

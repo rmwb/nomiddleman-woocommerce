@@ -349,10 +349,10 @@ class NMM_Hd {
 	 * any address that turns out to have received funds is retired and any that
 	 * cannot be verified stays quarantined.
 	 */
-	public static function process_quarantined_addresses($cryptoId, $mpk, $requiredConfirmations, $hdMode, $quarantinePeriodSec) {
+	public static function process_quarantined_addresses($cryptoId, $mpk, $requiredConfirmations, $hdMode, $quarantinePeriodSec, $batchLimit = 25) {
 		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 
-		foreach ($hdRepo->get_quarantined() as $record) {
+		foreach ($hdRepo->get_quarantined($batchLimit) as $record) {
 			$address = $record['address'];
 			$status = $record['status'];
 			$lastChecked = (int) $record['last_checked'];

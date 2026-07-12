@@ -274,6 +274,7 @@ function NMM_create_hd_mpk_address_table() {
             PRIMARY KEY (`id`),
             UNIQUE KEY `hd_address` (`cryptocurrency`, `address`),
             KEY `status` (`status`),
+            KEY `status_checked` (`status`, `last_checked`),
             KEY `mpk_index` (`mpk_index`),
             KEY `mpk` (`mpk`)
         );";
@@ -334,6 +335,24 @@ function NMM_update_hd_table() {
         }
         else {
             NMM_Util::log(__FILE__, __LINE__, 'HD unique-key migration did not complete (' . $wpdb->last_error . '); leaving version at 1.1 to retry.');
+        }
+    }
+
+    // 1.2 -> 1.3: add a (status, last_checked) index so the quarantine batch
+    // query - WHERE status IN (...) ORDER BY last_checked LIMIT N - stays fast
+    // when a burst of abandoned checkouts leaves many rows awaiting re-checks.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.2') {
+        $existing = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'");
+        if (empty($existing)) {
+            $wpdb->query("ALTER TABLE `$tableName` ADD KEY `status_checked` (`status`, `last_checked`)");
+        }
+
+        $confirm = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'");
+        if (!empty($confirm)) {
+            update_option('nmm_hd_table_version', '1.3');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD status_checked index migration did not complete (' . $wpdb->last_error . '); leaving version at 1.2 to retry.');
         }
     }
 
