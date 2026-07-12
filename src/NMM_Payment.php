@@ -76,17 +76,29 @@ class NMM_Payment {
 
 			foreach ($paymentRecords as $record) {
 				$paymentAmount = $record['order_amount'];
-				$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());				
-				
+				$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());
+
 				$autoPaymentPercent = apply_filters('nmm_autopay_percent', $nmmSettings->get_autopay_processing_percent($cryptoId), $paymentAmount, $cryptoId, $address);
 
-				$percentDifference = abs($transactionAmount - $paymentAmountSmallestUnit) / $transactionAmount;
-
-				if ($percentDifference <= (1 - $autoPaymentPercent)) {
-					$matchingPaymentRecords[] = $record;
+				// Guard against a zero (or unparseable) expected amount so we
+				// never divide by zero, and treat any overpayment as a match:
+				// the shortfall tolerance only applies to UNDER-payment.
+				if ($paymentAmountSmallestUnit <= 0) {
+					continue;
 				}
 
-				NMM_Util::log(__FILE__, __LINE__, '---CryptoId, paymentAmount, paymentAmountSmallestUnit, transactionAmount, percentDifference:' . $cryptoId . ',' . $paymentAmount .',' . $paymentAmountSmallestUnit . ',' .  $transactionAmount . ',' .  $percentDifference);
+				if ($transactionAmount >= $paymentAmountSmallestUnit) {
+					$matchingPaymentRecords[] = $record;
+				}
+				else {
+					$percentShortfall = ($paymentAmountSmallestUnit - $transactionAmount) / $paymentAmountSmallestUnit;
+
+					if ($percentShortfall <= (1 - $autoPaymentPercent)) {
+						$matchingPaymentRecords[] = $record;
+					}
+				}
+
+				NMM_Util::log(__FILE__, __LINE__, '---CryptoId, paymentAmount, paymentAmountSmallestUnit, transactionAmount:' . $cryptoId . ',' . $paymentAmount .',' . $paymentAmountSmallestUnit . ',' .  $transactionAmount);
 			}
 
 			// Transaction does not match any order payment
