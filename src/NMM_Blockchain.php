@@ -2264,6 +2264,7 @@ class NMM_Blockchain {
 		$candidates = array();
 		$sweepComplete = false;
 		$hitBudget = false;
+		$sweepStartCursor = $before; // where the persisted cursor may safely advance from
 
 		for ($page = 0; $page < $maxPages && count($candidates) < $sweepBudget; $page++) {
 			$sigParams = array('limit' => $pageSize, 'commitment' => 'finalized');
@@ -2350,25 +2351,49 @@ class NMM_Blockchain {
 			}
 		}
 
-		// Phase 2: inspect this tick's sweep candidates. A candidate whose detail
-		// lookup fails is recorded durably (retry phase next tick) BEFORE we let
-		// the cursor stay advanced past it, so it can never be dropped.
+		// Phase 2: inspect this tick's sweep candidates - queue first, cursor
+		// second. The persisted resume cursor advances past a candidate only once
+		// that candidate is conclusively handled: inspected successfully, or (if
+		// its lookup failed) durably recorded in the retry queue. If an enqueue
+		// fails (table unavailable / database error) we stop advancing right
+		// there, so the cursor stays behind the un-stored signature and next tick
+		// re-collects and re-attempts it. This gives at-least-once processing; the
+		// unique (address, signature) key makes any duplicate collection harmless.
+		$resumeCursor = $sweepStartCursor;
+		$enqueueFailed = false;
 		foreach ($candidates as $entry) {
 			list($ok, $tx) = self::sol_inspect_signature($rpc, $entry->signature, $address);
-			if (!$ok) {
-				$blockTime = (isset($entry->blockTime) && $entry->blockTime !== null) ? (int) $entry->blockTime : 0;
-				NMM_Sol_Retry_Repo::enqueue($address, $entry->signature, $blockTime, $nowTs);
+			if ($ok) {
+				if ($tx !== null) {
+					$transactions[] = $tx;
+				}
+				$resumeCursor = $entry->signature; // resolved; safe to move past
+				continue;
 			}
-			elseif ($tx !== null) {
-				$transactions[] = $tx;
+
+			// Retryable failure: it MUST be durably queued before the cursor may
+			// move past it.
+			$blockTime = (isset($entry->blockTime) && $entry->blockTime !== null) ? (int) $entry->blockTime : 0;
+			if (NMM_Sol_Retry_Repo::enqueue($address, $entry->signature, $blockTime, $nowTs)) {
+				$resumeCursor = $entry->signature; // durably stored; safe to move past
+				continue;
 			}
+
+			NMM_Util::log(__FILE__, __LINE__, 'Could not durably enqueue Solana retry for ' . $entry->signature . '; holding the sweep cursor behind it so it is retried.');
+			$enqueueFailed = true;
+			break;
 		}
 
-		// Persist the sweep cursor: clear it when the sweep finished so the next
-		// tick restarts from the newest signature (catching new arrivals);
-		// otherwise remember where to resume so progress stays monotonic.
-		if (!$sweepComplete && $before !== null) {
-			set_transient($cursorKey, $before, 6 * HOUR_IN_SECONDS);
+		// Persist the resume cursor. Only clear it (restart from the newest
+		// signature next tick) when the sweep genuinely reached the end of the
+		// window AND every candidate was safely handled. Otherwise resume from the
+		// last safely-handled signature so nothing is skipped; a null resume
+		// cursor means restart fresh.
+		if ($sweepComplete && !$enqueueFailed) {
+			delete_transient($cursorKey);
+		}
+		elseif ($resumeCursor !== null) {
+			set_transient($cursorKey, $resumeCursor, 6 * HOUR_IN_SECONDS);
 		}
 		else {
 			delete_transient($cursorKey);

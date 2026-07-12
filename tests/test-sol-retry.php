@@ -133,5 +133,26 @@ rok('entry with block_time outside window expired', $wpdb->get_var($wpdb->prepar
 rok('entry past retention safety net expired', $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `$t` WHERE address=%s AND signature='exp_ret'", $D)) == 0);
 rok('in-window entry retained through expiry', $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `$t` WHERE address=%s AND signature='keep_in'", $D)) == 1);
 
+// ---------- 5. Queue-first, cursor-second: enqueue failure holds the cursor ----------
+// sigA (success), sigB (fails inspection AND its enqueue fails because the table
+// is gone), sigC. The persisted cursor must stop at sigA - never advance past
+// sigB - so sigB is re-collected next tick (at-least-once).
+$E = 'RINV5555555555555555555555555555555555555555';
+delete_transient('nmm_sol_cursor_' . md5($E));
+$GLOBALS['sol_addr'] = $E;
+$GLOBALS['sol_sigs'] = array(
+	array('signature' => 'sigA', 'blockTime' => $now - 5),
+	array('signature' => 'sigB', 'blockTime' => $now - 6),
+	array('signature' => 'sigC', 'blockTime' => $now - 7),
+);
+$GLOBALS['sol_tx'] = array('sigA' => 0, 'sigB' => 'fail', 'sigC' => 0);
+$wpdb->suppress_errors(true);                             // the dropped-table errors below are expected
+$wpdb->query("DROP TABLE IF EXISTS `$t`");                 // make enqueue() fail
+NMM_Blockchain::get_sol_address_transactions($E, $LIFE);
+$heldCursor = get_transient('nmm_sol_cursor_' . md5($E));
+NMM_create_sol_retry_table();                             // restore for later runs
+$wpdb->suppress_errors(false);
+rok('cursor holds at last safely-handled sig (before failed enqueue)', $heldCursor === 'sigA', var_export($heldCursor, true));
+
 $wpdb->query("DELETE FROM `$t`");
 echo $pass ? "\nSOL-RETRY (durable queue) CHECKS PASSED\n" : "\nSOL-RETRY CHECKS FAILED\n";

@@ -229,11 +229,22 @@ function NMM_maybe_create_sol_retry_table() {
     NMM_create_sol_retry_table();
 
     $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
-    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) === $tableName) {
+    $tableExists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) === $tableName;
+
+    // Record success only once the table AND every index the queue relies on
+    // exist, so a partial creation retries next load instead of being masked.
+    $requiredIndexes = array('addr_sig', 'addr_due', 'block_time');
+    $haveIndexes = false;
+    if ($tableExists) {
+        $present = $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2); // Key_name column
+        $haveIndexes = count(array_intersect($requiredIndexes, (array) $present)) === count($requiredIndexes);
+    }
+
+    if ($tableExists && $haveIndexes) {
         update_option('nmm_sol_retry_table_created', 'yes');
     }
     else {
-        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table creation did not complete (' . $wpdb->last_error . '); will retry next load.');
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table/indexes not fully created (' . $wpdb->last_error . '); will retry next load.');
     }
 }
 
@@ -273,13 +284,26 @@ function NMM_uninstall() {
     NMM_drop_payment_table();
     NMM_drop_carousel_table();
     NMM_drop_sol_retry_table();
-    delete_option('nmm_sol_retry_table_created');
 }
 
+// The retry table is created per site (each blog has its own prefix), so drop it
+// per site on a network uninstall; otherwise sub-site tables would be orphaned.
 function NMM_drop_sol_retry_table() {
     global $wpdb;
-    $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
-    $wpdb->query("DROP TABLE IF EXISTS `$tableName`");
+
+    if (is_multisite()) {
+        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
+        foreach ($blogIds as $blogId) {
+            switch_to_blog($blogId);
+            $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+            delete_option('nmm_sol_retry_table_created');
+            restore_current_blog();
+        }
+        return;
+    }
+
+    $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+    delete_option('nmm_sol_retry_table_created');
 }
 
 function NMM_drop_mpk_address_table() {
