@@ -150,18 +150,24 @@ class NMM_Hd {
 			return $primaryResult['total_received'];
 		}
 
-		$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
+		// The mempool.space / blockstream address summaries report confirmed
+		// (>=1 conf) totals only - they cannot express "N confirmations". Use
+		// them only when a single confirmation is acceptable; otherwise wait
+		// for the primary source rather than under-counting the requirement.
+		if ($requiredConfirmations <= 1) {
+			$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
-		if ($secondaryResult['result'] === 'success') {			
-			return $secondaryResult['total_received'];
+			if ($secondaryResult['result'] === 'success') {
+				return $secondaryResult['total_received'];
+			}
+
+			$fallbackResult = NMM_Blockchain::get_blockstream_total_received_for_btc_address($address);
+
+			if ($fallbackResult['result'] === 'success') {
+				return $fallbackResult['total_received'];
+			}
 		}
 
-		$fallbackResult = NMM_Blockchain::get_blockstream_total_received_for_btc_address($address);
-
-		if ($fallbackResult['result'] === 'success') {
-			return $fallbackResult['total_received'];
-		}
-		
 		throw new \Exception("Unable to get BTC HD address information from external sources.");
 	}
 
@@ -172,10 +178,15 @@ class NMM_Hd {
 			return $primaryResult['total_received'];
 		}
 
-		$secondaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
+		// litecoinspace's address summary reports confirmed (>=1 conf) totals
+		// only and cannot express "N confirmations"; only use it as a fallback
+		// when a single confirmation is acceptable.
+		if ($requiredConfirmations <= 1) {
+			$secondaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
 
-		if ($secondaryResult['result'] === 'success') {
-			return $secondaryResult['total_received'];
+			if ($secondaryResult['result'] === 'success') {
+				return $secondaryResult['total_received'];
+			}
 		}
 
 		throw new \Exception("Unable to get LTC HD address information from external sources.");
