@@ -283,14 +283,25 @@ function NMM_create_hd_mpk_address_table() {
 
 function NMM_update_hd_table() {
     global $wpdb;
-    
-    if (get_option('nmm_hd_table_version', '1.0') === '1.0') {
-        update_option('nmm_hd_table_version', '1.1');
 
-        $tableName = $wpdb->prefix . NMM_HD_TABLE;
-        
-        $query = "ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'";
-        $wpdb->query($query);
+    $tableName = $wpdb->prefix . NMM_HD_TABLE;
+
+    // 1.0 -> 1.1: add the hd_mode column. Advance the version only after
+    // confirming the column exists, so a failed ALTER (timeout, privileges)
+    // retries on the next run instead of being masked by a bumped version.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.0') {
+        $hasColumn = $wpdb->get_results("SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'");
+        if (empty($hasColumn)) {
+            $wpdb->query("ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'");
+        }
+
+        $confirmColumn = $wpdb->get_results("SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'");
+        if (!empty($confirmColumn)) {
+            update_option('nmm_hd_table_version', '1.1');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD hd_mode migration did not complete (' . $wpdb->last_error . '); leaving version at 1.0 to retry.');
+        }
     }
 
     // 1.1 -> 1.2: guarantee no two rows share a (cryptocurrency, address) pair.
@@ -298,8 +309,6 @@ function NMM_update_hd_table() {
     // without it, a concurrent-derivation race could insert the same derived
     // address twice and hand it to two different orders.
     if (get_option('nmm_hd_table_version', '1.0') === '1.1') {
-        $tableName = $wpdb->prefix . NMM_HD_TABLE;
-
         // Collapse any pre-existing duplicates before adding the constraint,
         // keeping the lowest id for each (cryptocurrency, address) pair.
         $wpdb->query(
@@ -316,7 +325,17 @@ function NMM_update_hd_table() {
             $wpdb->query("ALTER TABLE `$tableName` ADD UNIQUE KEY `hd_address` (`cryptocurrency`, `address`)");
         }
 
-        update_option('nmm_hd_table_version', '1.2');
+        // Advance the version only once the unique key is actually present, so
+        // a failed dedupe/ALTER (timeout, privileges, a duplicate left behind
+        // by an error) retries next run instead of permanently recording
+        // success and leaving the concurrency guarantee unenforced.
+        $confirmIndex = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'");
+        if (!empty($confirmIndex)) {
+            update_option('nmm_hd_table_version', '1.2');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD unique-key migration did not complete (' . $wpdb->last_error . '); leaving version at 1.1 to retry.');
+        }
     }
 
 }
