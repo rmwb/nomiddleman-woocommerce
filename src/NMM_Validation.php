@@ -37,6 +37,13 @@ class NMM_Validation {
 		// Keys not present in the submitted form must survive the save
 		$newValues = array_merge((array) $oldValues, $newValues);
 
+		// The gateway title is printed by WooCommerce without escaping, so it
+		// must be plain text. Strip all markup here (site admins on multisite
+		// lack unfiltered_html and must not be able to inject <script>).
+		if (isset($newValues['payment_label'])) {
+			$newValues['payment_label'] = sanitize_text_field($newValues['payment_label']);
+		}
+
 		return self::validate($newValues, (array) $oldValues);
 	}
 

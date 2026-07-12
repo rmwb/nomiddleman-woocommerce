@@ -20,7 +20,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
         $this->id = 'nmmpro_gateway';
         $this->icon = apply_filters('nmm_gateway_icon', NMM_PLUGIN_DIR . '/assets/img/bitcoin_logo_small.png');        
-        $this->title = $nmmSettings->get_customer_gateway_message();
+        $this->title = sanitize_text_field($nmmSettings->get_customer_gateway_message());
         $this->has_fields = true;
         $this->method_title = __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce');
         $this->method_description = __('Allow customers to pay using cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce');
