@@ -66,7 +66,8 @@ class NMM_Payment {
 			}
 
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
-				NMM_Util::log(__FILE__, __LINE__, '---Collision occurred for old transaction, skipping....', 'warning');
+				// Ordinary: we have already processed this tx. Expected, not a warning.
+				NMM_Util::log(__FILE__, __LINE__, 'Already-consumed transaction skipped: ' . $txHash);
 				continue;
 			}
 
@@ -107,14 +108,23 @@ class NMM_Payment {
 			}
 			if (count($matchingPaymentRecords) > 1) {
 				// We have a collision, send admin note to each order
+				$collidingOrderIds = array();
 				foreach ($matchingPaymentRecords as $matchingRecord) {
 					$orderId = $matchingRecord['order_id'];
-					$order = new WC_Order($orderId);
+					$collidingOrderIds[] = $orderId;
+					$order = wc_get_order($orderId);
+					if (!$order) {
+						continue;
+					}
 					/* translators: 1: cryptocurrency ticker, 2: transaction hash */
 					$order->add_order_note(sprintf(__('This order has a matching %1$s transaction but we cannot verify it due to other orders with similar payment totals. Please reconcile manually. Transaction Hash: %2$s', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoId, $txHash));
 				}
-				
-				
+
+				// A genuine payment collision needs a human: surface it as a
+				// warning naming the affected orders and the tx that could not
+				// be auto-assigned. (Ordinary already-consumed skips stay debug.)
+				NMM_Util::log(__FILE__, __LINE__, 'Autopay collision: ' . $cryptoId . ' transaction ' . $txHash . ' matches multiple unpaid orders (' . implode(', ', $collidingOrderIds) . '); left for manual reconciliation.', 'warning');
+
 				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 			}
 			if (count($matchingPaymentRecords) == 1) {
