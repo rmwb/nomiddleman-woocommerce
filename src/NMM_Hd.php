@@ -255,17 +255,41 @@ class NMM_Hd {
 			$address = $record['address'];
 			$orderId = $record['order_id'];
 
-			// Never cancel an order that is already paid or has moved past the
-			// awaiting-payment state (e.g. the merchant verified payment
-			// out-of-band while an explorer outage kept total_received at 0).
+			// Reconcile the address against the live order instead of leaving
+			// it stuck in 'assigned'. An address only returns to the ready pool
+			// when its order is genuinely dead AND it never saw funds; anything
+			// that received money is retired ('dirty') so a late or replayed
+			// payment can never be credited to whoever is assigned the address
+			// next.
 			$order = $orderId ? wc_get_order($orderId) : false;
+
 			if (!$order) {
-				// The order was deleted; recycle the dangling address safely.
-				$hdRepo->set_status($address, 'ready');
-				$hdRepo->set_order_amount($address, 0.0);
+				// The order was deleted. Recycle only if nothing was received;
+				// otherwise the address carries payment history - retire it.
+				self::release_or_retire_hd_address($hdRepo, $address, $totalReceived);
 				continue;
 			}
-			if ($order->is_paid() || !$order->has_status(array('on-hold', 'pending'))) {
+
+			if ($order->is_paid()) {
+				// Paid, possibly out-of-band (e.g. the merchant verified during
+				// an explorer outage so the verifier never marked it complete).
+				// The address has been used; retire it, never recycle.
+				$hdRepo->set_status($address, 'complete');
+				continue;
+			}
+
+			if ($order->has_status(array('cancelled', 'failed'))) {
+				// Terminal non-paid state reached through some other path (a
+				// customer/admin cancellation, or the checkout catch-block
+				// failing the order after it claimed an address). Without this
+				// the address would sit 'assigned' forever and slowly exhaust
+				// the ready buffer.
+				self::release_or_retire_hd_address($hdRepo, $address, $totalReceived);
+				continue;
+			}
+
+			if (!$order->has_status(array('on-hold', 'pending'))) {
+				// Some other non-terminal, non-awaiting state; leave it be.
 				continue;
 			}
 
@@ -290,6 +314,24 @@ class NMM_Hd {
 				
 				NMM_Util::log(__FILE__, __LINE__, 'Cancelled order: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
 			}
+		}
+	}
+
+	/**
+	 * Return an orphaned HD address to the ready pool only if it never saw
+	 * funds; otherwise retire it as 'dirty' so it is never handed out again.
+	 * total_received reflects the explorer, so any non-zero value (including
+	 * dust or a payment recorded just before the order died) means the address
+	 * must not be reused.
+	 */
+	private static function release_or_retire_hd_address($hdRepo, $address, $totalReceived) {
+		if ($totalReceived == 0) {
+			$hdRepo->set_status($address, 'ready');
+			$hdRepo->set_order_amount($address, 0.0);
+		}
+		else {
+			$hdRepo->set_status($address, 'dirty');
+			NMM_Util::log(__FILE__, __LINE__, 'Retiring HD address ' . $address . ' (dirty): order gone but ' . $totalReceived . ' received.');
 		}
 	}
 
