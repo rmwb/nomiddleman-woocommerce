@@ -10,12 +10,27 @@ function NMM_do_cron_job() {
 	// Never run two cycles at once. A slow cycle - e.g. explorers rate-limiting
 	// the HD address checks - must not stack a second PHP process on top; a few
 	// stacked cycles exhaust memory, trigger swap/page-faults, and pin the CPU.
-	// The lock auto-expires so a crashed run can't wedge the cron permanently.
-	if (get_transient('nmm_cron_running') !== false) {
+	//
+	// A get-then-set transient is not atomic: two ticks firing together can both
+	// see "free" and both proceed. Use a MySQL advisory lock instead - GET_LOCK
+	// is atomic across connections, owned by the acquiring connection, and is
+	// released automatically if that PHP process dies, so a crashed run can
+	// never wedge the cron. The lock name is scoped to this database so sites
+	// sharing a MySQL server do not block one another.
+	$lockName = substr('nmm_cron_' . DB_NAME, 0, 64);
+	$lockAcquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName));
+
+	if ($lockAcquired === '0') {
+		// Definitively held by another live connection; skip this tick.
 		NMM_Util::log(__FILE__, __LINE__, 'Previous cron cycle still running; skipping this tick.');
 		return;
 	}
-	set_transient('nmm_cron_running', 1, 5 * MINUTE_IN_SECONDS);
+	// $lockAcquired === '1' -> we own it. Any other value (null) means GET_LOCK
+	// is unavailable on this host; degrade to running unlocked rather than never
+	// running, matching the pre-lock behaviour.
+	if ($lockAcquired !== '1') {
+		NMM_Util::log(__FILE__, __LINE__, 'Advisory lock unavailable on this host; running cron without overlap protection.');
+	}
 
 	try {
 		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
@@ -56,7 +71,12 @@ function NMM_do_cron_job() {
 		NMM_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMM_get_time_passed($startTime));
 	}
 	finally {
-		delete_transient('nmm_cron_running');
+		// Release only the lock we actually acquired. RELEASE_LOCK is a no-op
+		// for any connection that does not own it, but we guard anyway so a
+		// degraded (unlocked) run never touches another connection's lock.
+		if ($lockAcquired === '1') {
+			$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockName));
+		}
 	}
 }
 
