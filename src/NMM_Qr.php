@@ -23,9 +23,46 @@ class NMM_Qr {
 			return '0';
 		}
 
-		$units = bcmul($amount, bcpow('10', (string) (int) $precision, 0), 0);
+		$precision = (int) $precision;
 
-		return ltrim($units, '+');
+		// bcmath when present (gmp-only hosts are supported too); otherwise a
+		// pure-string scaling that is correct with neither extension and never
+		// loses precision to float rounding.
+		if (function_exists('bcmul')) {
+			$units = bcmul($amount, bcpow('10', (string) $precision, 0), 0);
+			return ltrim($units, '+');
+		}
+
+		return self::decimal_to_base_units_string($amount, $precision);
+	}
+
+	// Scale a decimal string by 10^precision using string ops only, so it is
+	// correct with no bcmath/gmp and never loses precision to float rounding.
+	private static function decimal_to_base_units_string($amount, $precision) {
+		$negative = false;
+		if (strpos($amount, '-') === 0) {
+			$negative = true;
+			$amount = substr($amount, 1);
+		}
+
+		$parts = explode('.', $amount, 2);
+		$intPart = $parts[0] === '' ? '0' : $parts[0];
+		$fracPart = isset($parts[1]) ? $parts[1] : '';
+
+		// Pad or truncate the fractional part to exactly $precision digits.
+		if (strlen($fracPart) < $precision) {
+			$fracPart = str_pad($fracPart, $precision, '0');
+		}
+		else {
+			$fracPart = substr($fracPart, 0, $precision);
+		}
+
+		$digits = ltrim($intPart . $fracPart, '0');
+		if ($digits === '') {
+			$digits = '0';
+		}
+
+		return ($negative && $digits !== '0') ? '-' . $digits : $digits;
 	}
 
 	/**

@@ -74,6 +74,26 @@ ok('uri: SOL solana pay', NMM_Qr::payment_uri($cryptos['SOL'], 'So11111111111111
 	=== 'solana:So11111111111111111111111111111111111111112?amount=0.25');
 ok('uri: XMR tx_amount', NMM_Qr::payment_uri($cryptos['XMR'], '44AFFq', '1.5') === 'monero:44AFFq?tx_amount=1.5');
 
+// --- to_base_units: bcmath path (must match the pure-string fallback exactly) ---
+ok('base_units: 1.5 @18', NMM_Qr::to_base_units('1.5', 18) === '1500000000000000000');
+ok('base_units: 0.000001 @6', NMM_Qr::to_base_units('0.000001', 6) === '1');
+ok('base_units: 0 @8', NMM_Qr::to_base_units('0', 8) === '0');
+ok('base_units: 12 @0', NMM_Qr::to_base_units('12', 0) === '12');
+
+// --- to_base_units: force the pure-string fallback and assert it matches bcmath ---
+$reflection = new ReflectionMethod('NMM_Qr', 'decimal_to_base_units_string');
+$reflection->setAccessible(true);
+$strScale = function ($amount, $precision) use ($reflection) {
+	return $reflection->invoke(null, $amount, (int) $precision);
+};
+ok('str base_units: 1.5 @18', $strScale('1.5', 18) === '1500000000000000000');
+ok('str base_units: 0.000001 @6', $strScale('0.000001', 6) === '1');
+ok('str base_units: 0 @8', $strScale('0', 8) === '0');
+ok('str base_units: 12 @0', $strScale('12', 0) === '12');
+ok('str base_units: 0.1 @8', $strScale('0.1', 8) === '10000000');
+ok('str base_units: 12.34 @2', $strScale('12.34', 2) === '1234');
+ok('str base_units: truncates extra frac', $strScale('1.239', 2) === '123');
+
 // --- content round-trip (when a decoder is available) ---
 exec('command -v zbarimg 2>/dev/null', $out, $noZbar);
 if ($noZbar === 0) {
