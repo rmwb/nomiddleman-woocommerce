@@ -27,6 +27,11 @@ class NMM_Monero {
 			return new WP_Error('nmm_xmr', 'Monero wallet RPC is not configured.');
 		}
 
+		$target = self::validate_rpc_url($url);
+		if (is_wp_error($target)) {
+			return $target;
+		}
+
 		$payload = json_encode(array(
 			'jsonrpc' => '2.0',
 			'id' => '0',
@@ -40,15 +45,30 @@ class NMM_Monero {
 		if ($user !== '' && function_exists('curl_init')) {
 			// digest auth path
 			$ch = curl_init($url);
-			curl_setopt_array($ch, array(
+			$curlOpts = array(
 				CURLOPT_RETURNTRANSFER => true,
 				CURLOPT_TIMEOUT => 20,
+				CURLOPT_CONNECTTIMEOUT => 10,
 				CURLOPT_POST => true,
 				CURLOPT_POSTFIELDS => $payload,
 				CURLOPT_HTTPHEADER => array('Content-Type: application/json'),
 				CURLOPT_HTTPAUTH => CURLAUTH_DIGEST,
 				CURLOPT_USERPWD => $user . ':' . $pass,
-			));
+				// Restrict to HTTP(S) and never follow a redirect (which could be
+				// steered to a file:// or internal target).
+				CURLOPT_FOLLOWLOCATION => false,
+			);
+			if (defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
+				$curlOpts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+				$curlOpts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+			}
+			// Pin the connection to the exact IP we validated, so a hostname that
+			// re-resolves to a private address between validation and connect
+			// (DNS rebinding) cannot redirect us there.
+			if (defined('CURLOPT_RESOLVE') && $target['ip'] !== '') {
+				$curlOpts[CURLOPT_RESOLVE] = array($target['host'] . ':' . $target['port'] . ':' . $target['ip']);
+			}
+			curl_setopt_array($ch, $curlOpts);
 			$body = curl_exec($ch);
 			$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
@@ -61,6 +81,7 @@ class NMM_Monero {
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => $payload,
 				'timeout' => 20,
+				'redirection' => 0, // never follow a redirect to another target
 			));
 
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
@@ -89,6 +110,52 @@ class NMM_Monero {
 		}
 
 		return $decoded->result;
+	}
+
+	/**
+	 * Vet the merchant-configured Monero RPC URL before we request it, to stop a
+	 * settings value (a manage_options user, or a site admin on multisite who is
+	 * NOT a host admin) from steering the server at internal services, cloud
+	 * metadata, loopback, or non-HTTP schemes (SSRF). Returns an array
+	 * { host, port, ip } on success or a WP_Error to abort.
+	 *
+	 * Monero wallet RPC legitimately runs on localhost or a private LAN, so
+	 * private targets are permitted for single-site installs (the merchant owns
+	 * the server). On multisite they require an explicit opt-in - the
+	 * NMM_XMR_ALLOW_PRIVATE_RPC constant or the nmm_xmr_allow_private_rpc filter.
+	 */
+	public static function validate_rpc_url($url) {
+		$parts = wp_parse_url(trim((string) $url));
+		if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+			return new WP_Error('nmm_xmr', 'Monero wallet RPC URL is malformed.');
+		}
+		if (!in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
+			return new WP_Error('nmm_xmr', 'Monero wallet RPC URL must use http or https.');
+		}
+
+		$host = $parts['host'];
+		$port = isset($parts['port']) ? (int) $parts['port'] : (strtolower($parts['scheme']) === 'https' ? 443 : 80);
+		$ip = filter_var($host, FILTER_VALIDATE_IP) ? $host : gethostbyname($host);
+
+		$isPrivate = (strtolower($host) === 'localhost') || self::is_private_or_reserved_ip($ip);
+		if ($isPrivate) {
+			$allow = defined('NMM_XMR_ALLOW_PRIVATE_RPC') ? (bool) NMM_XMR_ALLOW_PRIVATE_RPC : !is_multisite();
+			$allow = (bool) apply_filters('nmm_xmr_allow_private_rpc', $allow, $url, $host, $ip);
+			if (!$allow) {
+				return new WP_Error('nmm_xmr', 'Monero wallet RPC points at a private or loopback address, which is not permitted here. Define NMM_XMR_ALLOW_PRIVATE_RPC or use the nmm_xmr_allow_private_rpc filter to allow it.');
+			}
+		}
+
+		return array('host' => $host, 'port' => $port, 'ip' => filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '');
+	}
+
+	// True for loopback / private / link-local (incl. 169.254.169.254 cloud
+	// metadata) / reserved addresses, and for anything that will not resolve.
+	private static function is_private_or_reserved_ip($ip) {
+		if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+			return true;
+		}
+		return !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
 	}
 
 	// Fresh subaddress for an order; throws so the existing checkout
