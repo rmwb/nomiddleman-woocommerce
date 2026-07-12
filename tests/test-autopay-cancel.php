@@ -102,6 +102,23 @@ NMM_Payment::cancel_expired_payments(); // no unpaid rows -> order stays pending
 aok('order left pending (claim lost)',          ord_status($oClaimed) === 'pending');
 aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) === 'paid');
 
+// --- Mutual exclusion: both sides of the race use the same conditional claim ---
+// The verifier's claim_for_payment and the cron's claim_for_cancellation both
+// transition only WHERE status='unpaid'. Exactly one can win a given row.
+$wpdb->query("DELETE FROM `$pt`");
+$oRow = mkorder('pending'); $ins($oRow, $expired);
+$rp = new NMM_Payment_Repo();
+aok('verifier claim_for_payment wins unpaid row', $rp->claim_for_payment($oRow, '0.00100000') === true);
+aok('  row is now paid',                          rec_status($wpdb,$pt,$oRow) === 'paid');
+aok('cron claim then loses (row not unpaid)',     $rp->claim_for_cancellation($oRow, '0.00100000') === false);
+
+// Opposite order: cron wins first, verifier must lose and would abort completion.
+$wpdb->query("DELETE FROM `$pt`");
+$oRow2 = mkorder('pending'); $ins($oRow2, $expired);
+aok('cron claim_for_cancellation wins unpaid row', $rp->claim_for_cancellation($oRow2, '0.00100000') === true);
+aok('  row is now cancelled',                      rec_status($wpdb,$pt,$oRow2) === 'cancelled');
+aok('verifier then loses (row not unpaid)',        $rp->claim_for_payment($oRow2, '0.00100000') === false);
+
 // --- Index: the expiry query must range-scan unpaid_expiry, not read every row ---
 // Seed a realistic distribution - many recent unpaid checkouts, a few old ones -
 // and assert the exact production query (WHERE status='unpaid' AND ordered_at <

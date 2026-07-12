@@ -130,12 +130,30 @@ class NMM_Payment {
 			if (count($matchingPaymentRecords) == 1) {
 				// We have validated a transaction: update database to paid, update order to processing, add transaction to consumed transactions
 				$orderId = $matchingPaymentRecords[0]['order_id'];
-				$orderAmount = $matchingPaymentRecords[0]['order_amount'];				
+				$orderAmount = $matchingPaymentRecords[0]['order_amount'];
 
-				$paymentRepo->set_status($orderId, $orderAmount, 'paid');
+				// Atomically claim the row for payment. The expiry cron races us
+				// with the opposite claim (unpaid -> cancelled); because both sides
+				// go through the same conditional update, exactly one wins. If we
+				// lose, the row was already cancelled/paid out from under us - do
+				// NOT complete the order (that would split-brain the order against
+				// its payment record). Surface a warning so a payment that arrived
+				// right at the expiry boundary can be reconciled by hand.
+				if (!$paymentRepo->claim_for_payment($orderId, $orderAmount)) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
+					continue;
+				}
+
 				$paymentRepo->set_hash($orderId, $orderAmount, $txHash);
 
 				$order = wc_get_order($orderId);
+				if (!$order) {
+					// Row is claimed 'paid' (so it stops matching), but the order is
+					// gone - nothing to complete. Record the tx as consumed and move on.
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hash: ' . $txHash, 'warning');
+					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
+					continue;
+				}
 				$orderNote = sprintf(
 						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time, 4: transaction hash */
 						__('Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),

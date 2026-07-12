@@ -106,31 +106,44 @@ class NMM_Payment_Repo {
 	}
 
 	/**
-	 * Atomically claim an unpaid payment row for cancellation. Flips the row to
-	 * 'cancelled' only WHERE it is still 'unpaid', so the expiry cron and the
-	 * payment verifier (which flips 'unpaid' -> 'paid') cannot both act on the
-	 * same row. Returns true only if this call was the one that transitioned the
-	 * row; false if another worker already moved it out of 'unpaid' (or on a DB
-	 * error, which is logged), in which case the caller must not cancel the order.
+	 * Atomically transition a payment row out of 'unpaid' to $toStatus, only
+	 * WHERE it is still 'unpaid'. The expiry cron (unpaid -> cancelled) and the
+	 * payment verifier (unpaid -> paid) race for the same row; because BOTH go
+	 * through this conditional update, exactly one wins and the loser sees zero
+	 * affected rows and must not apply its side effect (cancel the order, or
+	 * complete it). Returns true only if this call was the one that moved the
+	 * row; false if another worker already moved it, or on a logged DB error.
 	 */
-	public function claim_for_cancellation($orderId, $orderAmount) {
+	private function claim_from_unpaid($orderId, $orderAmount, $toStatus) {
 		global $wpdb;
 
 		$affected = $wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName`
-			 SET `status` = 'cancelled'
+			 SET `status` = %s
 			 WHERE `order_amount` = %s
 			 AND `order_id` = %d
 			 AND `status` = 'unpaid'",
-			$orderAmount, $orderId
+			$toStatus, $orderAmount, $orderId
 		));
 
 		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'claim_for_cancellation DB error for order ' . $orderId . ': ' . $wpdb->last_error, 'error');
+			NMM_Util::log(__FILE__, __LINE__, 'claim to ' . $toStatus . ' DB error for order ' . $orderId . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 
 		return $affected > 0;
+	}
+
+	// Expiry cron's side of the race: claim the row for cancellation.
+	public function claim_for_cancellation($orderId, $orderAmount) {
+		return $this->claim_from_unpaid($orderId, $orderAmount, 'cancelled');
+	}
+
+	// Verifier's side of the race: claim the row for payment. If this returns
+	// false the row was already cancelled/paid by another worker and the caller
+	// must NOT complete the order.
+	public function claim_for_payment($orderId, $orderAmount) {
+		return $this->claim_from_unpaid($orderId, $orderAmount, 'paid');
 	}
 
 	public function set_hash($orderId, $orderAmount, $hash) {
