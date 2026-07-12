@@ -10,12 +10,27 @@ function NMM_do_cron_job() {
 	// Never run two cycles at once. A slow cycle - e.g. explorers rate-limiting
 	// the HD address checks - must not stack a second PHP process on top; a few
 	// stacked cycles exhaust memory, trigger swap/page-faults, and pin the CPU.
-	// The lock auto-expires so a crashed run can't wedge the cron permanently.
-	if (get_transient('nmm_cron_running') !== false) {
+	//
+	// A get-then-set transient is not atomic: two ticks firing together can both
+	// see "free" and both proceed. Use a MySQL advisory lock instead - GET_LOCK
+	// is atomic across connections, owned by the acquiring connection, and is
+	// released automatically if that PHP process dies, so a crashed run can
+	// never wedge the cron. The lock name is scoped to this database so sites
+	// sharing a MySQL server do not block one another.
+	$lockName = substr('nmm_cron_' . DB_NAME, 0, 64);
+	$lockAcquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName));
+
+	if ($lockAcquired === '0') {
+		// Definitively held by another live connection; skip this tick.
 		NMM_Util::log(__FILE__, __LINE__, 'Previous cron cycle still running; skipping this tick.');
 		return;
 	}
-	set_transient('nmm_cron_running', 1, 5 * MINUTE_IN_SECONDS);
+	// $lockAcquired === '1' -> we own it. Any other value (null) means GET_LOCK
+	// is unavailable on this host; degrade to running unlocked rather than never
+	// running, matching the pre-lock behaviour.
+	if ($lockAcquired !== '1') {
+		NMM_Util::log(__FILE__, __LINE__, 'Advisory lock unavailable on this host; running cron without overlap protection.');
+	}
 
 	try {
 		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
@@ -47,16 +62,42 @@ function NMM_do_cron_job() {
 
 				NMM_Hd::buffer_ready_addresses($cryptoId, $mpk, $hdBufferAddressCount, $hdMode);
 				NMM_Hd::cancel_expired_addresses($cryptoId, $mpk, $hdOrderCancellationTimeSec, $hdMode);
+
+				// Re-verify quarantined (abandoned, unpaid) addresses with fresh
+				// explorer checks spaced at least this far apart, and past the
+				// payment expiry, before any are recycled. Filterable so a
+				// merchant can lengthen the wait.
+				$hdQuarantinePeriodSec = apply_filters('nmm_hd_quarantine_seconds', max($hdOrderCancellationTimeSec, 6 * HOUR_IN_SECONDS), $cryptoId);
+				$hdQuarantineBatch = (int) apply_filters('nmm_hd_quarantine_batch', 25, $cryptoId);
+				NMM_Hd::process_quarantined_addresses($cryptoId, $mpk, $hdRequiredConfirmations, $hdMode, $hdQuarantinePeriodSec, $hdQuarantineBatch);
 			}
 		}
 
 		NMM_Payment::check_all_addresses_for_matching_payment($autoPaymentTransactionLifetimeSec);
 		NMM_Payment::cancel_expired_payments();
 
+		// Reclaim durable Solana retry rows for addresses no longer scanned at all
+		// (SOL disabled, or a carousel address removed/replaced) once they are far
+		// past any matching window. Per-address expiry never revisits those, so
+		// this bounded global pass prevents unbounded growth across config changes.
+		// A seven-day retention needs no minute-by-minute checking, so gate it to
+		// run at most hourly; run_global_cleanup() clamps the retention to a safe
+		// minimum and drains in bounded batches when there is work.
+		if (get_transient('nmm_sol_global_cleanup_ran') === false) {
+			$solGlobalRetention = (int) apply_filters('nmm_sol_retry_global_retention_seconds', 7 * DAY_IN_SECONDS);
+			NMM_Sol_Retry_Repo::run_global_cleanup($solGlobalRetention, $autoPaymentTransactionLifetimeSec + 30 * MINUTE_IN_SECONDS);
+			set_transient('nmm_sol_global_cleanup_ran', 1, HOUR_IN_SECONDS);
+		}
+
 		NMM_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMM_get_time_passed($startTime));
 	}
 	finally {
-		delete_transient('nmm_cron_running');
+		// Release only the lock we actually acquired. RELEASE_LOCK is a no-op
+		// for any connection that does not own it, but we guard anyway so a
+		// degraded (unlocked) run never touches another connection's lock.
+		if ($lockAcquired === '1') {
+			$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockName));
+		}
 	}
 }
 

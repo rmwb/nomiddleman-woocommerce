@@ -23,6 +23,12 @@ function is_wp_error($thing) {
 }
 
 function nmm_test_http($url, $method = 'GET', $postBody = null, $headers = array(), $ua = 'nmm-test-suite') {
+	// Offline tests can install a fixture handler to answer HTTP without a
+	// network. Default behaviour (real curl) is unchanged when none is set.
+	if (isset($GLOBALS['nmm_http_handler']) && is_callable($GLOBALS['nmm_http_handler'])) {
+		return call_user_func($GLOBALS['nmm_http_handler'], $url, $method, $postBody, $headers);
+	}
+
 	$ch = curl_init($url);
 	curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 	curl_setopt($ch, CURLOPT_TIMEOUT, 25);

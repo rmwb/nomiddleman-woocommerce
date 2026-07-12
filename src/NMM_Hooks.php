@@ -45,7 +45,7 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 	$paymentAmount = $order->get_meta('crypto_amount');
 
 	// this order was not made by us
-	if ($paymentAmount === 0.0 || !$paymentAmount) {
+	if (empty($paymentAmount)) {
 		return;
 	}
 	
@@ -111,68 +111,6 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
 		$paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
 	}
-
-  // WC PREFIX
-  // If admin updates from needs-payment to has-payment, stop looking for matching transactions
-  if ($oldOrderStatus === 'wc-pending' && $newOrderStatus === 'wc-processing') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'paid');
-  }
-  if ($oldOrderStatus === 'wc-pending' && $newOrderStatus === 'wc-completed') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'paid');
-  }
-  if ($oldOrderStatus === 'wc-on-hold' && $newOrderStatus === 'wc-processing') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'paid');
-  }
-  if ($oldOrderStatus === 'wc-on-hold' && $newOrderStatus === 'wc-completed') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'paid');
-  }
-  
-
-  // If admin updates from has-payment to needs-payment, start looking for matching transactions
-  if ($oldOrderStatus === 'wc-processing' && $newOrderStatus === 'wc-pending') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-  }
-  if ($oldOrderStatus === 'wc-processing' && $newOrderStatus === 'wc-on-hold') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-  }
-  if ($oldOrderStatus === 'wc-completed' && $newOrderStatus === 'wc-pending') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-  }
-  if ($oldOrderStatus === 'wc-completed' && $newOrderStatus === 'wc-on-hold') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-  }
-
-  // If admin updates from needs-payment to cancelled, stop looking for matching transactions
-  if ($oldOrderStatus === 'wc-pending' && $newOrderStatus === 'wc-cancelled') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-  }
-  if ($oldOrderStatus === 'wc-pending' && $newOrderStatus === 'wc-failed') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-  }
-  if ($oldOrderStatus === 'wc-on-hold' && $newOrderStatus === 'wc-cancelled') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-  }
-  if ($oldOrderStatus === 'wc-on-hold' && $newOrderStatus === 'wc-failed') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-  }
-
-  // If admin updates from cancelled to needs-payment, start looking for matching transactions
-  if ($oldOrderStatus === 'wc-cancelled' && $newOrderStatus === 'wc-on-hold') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-    $paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
-  }
-  if ($oldOrderStatus === 'wc-cancelled' && $newOrderStatus === 'wc-pending') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-    $paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
-  }
-  if ($oldOrderStatus === 'wc-failed' && $newOrderStatus === 'wc-on-hold') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-    $paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
-  }
-  if ($oldOrderStatus === 'wc-failed' && $newOrderStatus === 'wc-pending') {
-    $paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
-    $paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
-  }
 }
 
 // Order-key-authenticated payment status for the thank-you page poller.
@@ -232,8 +170,8 @@ function NMM_first_mpk_address_ajax() {
 
 		$mpk = sanitize_text_field($_POST['mpk']);
 		$cryptoId = sanitize_text_field($_POST['cryptoId']);
-		$hdMode = sanitize_text_field($_POST['hdMode']);		
-		
+		$hdMode = isset($_POST['hdMode']) ? sanitize_text_field($_POST['hdMode']) : '0';
+
 		if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
 			return;
 		}
@@ -269,7 +207,9 @@ function NMM_filter_gateways($gateways){
     }
     
     if (is_checkout()) {
-	    unset($gateways['NMM_Gateway']);
+	    $gateways = array_values(array_filter($gateways, function ($g) {
+	        return $g !== 'NMM_Gateway';
+	    }));
 	}
 	else {
 		$gateways[] = 'NMM_Gateway';

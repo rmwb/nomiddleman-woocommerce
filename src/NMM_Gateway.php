@@ -20,7 +20,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
         $this->id = 'nmmpro_gateway';
         $this->icon = apply_filters('nmm_gateway_icon', NMM_PLUGIN_DIR . '/assets/img/bitcoin_logo_small.png');        
-        $this->title = $nmmSettings->get_customer_gateway_message();
+        $this->title = sanitize_text_field($nmmSettings->get_customer_gateway_message());
         $this->has_fields = true;
         $this->method_title = __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce');
         $this->method_description = __('Allow customers to pay using cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce');
@@ -73,7 +73,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
         $validCryptos = $nmmSettings->get_valid_selected_cryptos();
-        
+        $excludedCryptoIds = array();
+
         foreach ($validCryptos as $crypto) {
             $cryptoId = $crypto->get_id();
 
@@ -91,13 +92,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     }
                     catch ( \Exception $e) {
                         NMM_Util::log(__FILE__, __LINE__, 'UNABLE TO GENERATE HD ADDRESS FOR ' . $crypto->get_name() . ' ADMIN MUST BE NOTIFIED. REMOVING CRYPTO FROM PAYMENT OPTIONS' . $e->getTraceAsString());
-                        unset($validCryptos[$cryptoId]);
+                        $excludedCryptoIds[] = $cryptoId;
                     }
                 }
             }
         }
-        
-        $selectOptions = $this->get_select_options_for_valid_cryptos($validCryptos);
+
+        $selectOptions = $this->get_select_options_for_valid_cryptos($excludedCryptoIds);
 
         woocommerce_form_field(
             'nmm_currency_id', array(
@@ -121,6 +122,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
             }
             try {
                 $chosenCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
+                if (!array_key_exists($chosenCryptoId, $this->cryptos)) {
+                    wc_add_notice(__('Please choose a valid cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
+                    return;
+                }
                 $crypto = $this->cryptos[$chosenCryptoId];
                 $curr = get_woocommerce_currency();
                 $cryptoPerUsd = $this->get_crypto_value_in_usd($crypto->get_id(), $crypto->get_update_interval());
@@ -152,6 +157,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $selectedCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
         // phpcs:enable
         WC()->session->set('chosen_crypto_id', $selectedCryptoId);
+        $order->update_meta_data('nmm_chosen_crypto_id', $selectedCryptoId);
+        $order->save();
 
         return array(
                       'result' => 'success',
@@ -188,6 +195,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     return;
                 }
 
+                // Do not re-display payment instructions for an order that is no
+                // longer awaiting payment. Its address may have been recycled to
+                // a different order, so a late payment would credit someone else.
+                if ($order->has_status(array('cancelled', 'failed'))) {
+                    echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+                    return;
+                }
+
                 $this->handle_thank_you_refresh(
                     $order->get_meta('crypto_type_id'),
                     $existingWalletAddress,
@@ -199,7 +214,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
             $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
-            $chosenCryptoId = WC()->session->get('chosen_crypto_id');
+            $chosenCryptoId = $order->get_meta('nmm_chosen_crypto_id');
+            if (empty($chosenCryptoId)) {
+                $chosenCryptoId = WC()->session->get('chosen_crypto_id');
+            }
+
+            if (empty($chosenCryptoId) || !array_key_exists($chosenCryptoId, $this->cryptos)) {
+                throw new \Exception(esc_html__('We could not determine which cryptocurrency you selected. Please return to checkout and place the order again.', 'nomiddleman-crypto-payments-for-woocommerce'));
+            }
+
             $crypto = $this->cryptos[$chosenCryptoId];
             $cryptoId = $crypto->get_id();
 
@@ -243,28 +266,26 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 $hdMode = $nmmSettings->get_hd_mode($cryptoId);
                 $hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 
-                // get fresh hd wallet
-                $orderWalletAddress = $hdRepo->get_oldest_ready();
-                
-                // if we couldnt find a fresh one, force a new one
+                // Atomically claim the oldest ready address for this order.
+                $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
+
+                // if none was available, derive one and try to claim again
                 if (!$orderWalletAddress) {
-                    
                     try {
                         NMM_Hd::force_new_address($cryptoId, $mpk, $hdMode);
-                        $orderWalletAddress = $hdRepo->get_oldest_ready();
+                        $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
                     }
                     catch ( \Exception $e) {
                         throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($e->getMessage()));
                     }
                 }
 
-                // set hd wallet address to get later
-                WC()->session->set('hd_wallet_address', $orderWalletAddress);
+                if (!$orderWalletAddress) {
+                    throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                }
 
-                // update the database
-                $hdRepo->set_status($orderWalletAddress, 'assigned');
-                $hdRepo->set_order_id($orderWalletAddress, $order_id);
-                $hdRepo->set_order_amount($orderWalletAddress, $formattedCryptoTotal);
+                // keep the session copy other code paths still read
+                WC()->session->set('hd_wallet_address', $orderWalletAddress);
 
                 $orderNote = sprintf(
                     /* translators: 1: wallet address, 2: amount, 3: cryptocurrency ticker */
@@ -333,7 +354,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
     }
 
     public function additional_email_details($order, $sent_to_admin, $plain_text, $email) {
-        $chosenCrypto = WC()->session->get('chosen_crypto_id');
+        $chosenCrypto = $order->get_meta('nmm_chosen_crypto_id');
+        if (empty($chosenCrypto)) {
+            $chosenCrypto = WC()->session->get('chosen_crypto_id');
+        }
+        if (empty($chosenCrypto) || !array_key_exists($chosenCrypto, $this->cryptos)) {
+            return; // nothing reliable to attach; the order note still has details
+        }
         $crypto =  $this->cryptos[$chosenCrypto];
         $orderCryptoTotal = WC()->session->get($crypto->get_id() . '_amount');
         $orderWalletAddress = $order->get_meta('wallet_address');
@@ -382,16 +409,20 @@ class NMM_Gateway extends WC_Payment_Gateway {
         <?php
     }
 
-    // convert array of cryptos to option array
-    private function get_select_options_for_valid_cryptos() {
+    // convert array of cryptos to option array, excluding any coin IDs we know
+    // cannot currently accept payment (e.g. HD address generation failed)
+    private function get_select_options_for_valid_cryptos($excludedCryptoIds = array()) {
         $selectOptionArray = array();
 
         $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
-        
+
         foreach (NMM_Cryptocurrencies::get_alpha() as $crypto) {
+            if (in_array($crypto->get_id(), $excludedCryptoIds, true)) {
+                continue;
+            }
             if ($nmmSettings->crypto_selected_and_valid($crypto->get_id())) {
                 $selectOptionArray[$crypto->get_id()] = $crypto->get_name();
-            }            
+            }
         }
 
         return $selectOptionArray;
@@ -473,7 +504,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </button>
                 <p id="nmm-wallet-msg" aria-live="polite"></p>
             <?php elseif ($crypto->get_id() === 'SOL') : ?>
-                <p><a class="button alt" href="<?php echo esc_url($qrData); ?>"><?php esc_html_e('Open in Solana wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a></p>
+                <p><a class="button alt" href="<?php echo esc_url($qrData, array('solana')); ?>"><?php esc_html_e('Open in Solana wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a></p>
             <?php endif; ?>
 
             <p id="nmm-payment-status" class="nmm-payment-status"

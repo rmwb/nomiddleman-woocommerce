@@ -106,6 +106,60 @@ payment — e.g. to turn it into an explorer link.
 apply_filters( 'nmm_order_txhash', $txHash, $cryptoId );
 ```
 
+### `nmm_hd_quarantine_seconds`
+
+Privacy Mode (HD) only. When an order dies without paying (cancelled, failed,
+expired, or deleted), its derived address is not reused immediately. Instead it
+is **quarantined** and re-checked against the block explorer; only an address
+that is confirmed to have *no* on-chain history after two successful fresh
+checks — spaced at least this many seconds apart, and past the payment expiry —
+is returned to the ready pool for reuse. Anything that received funds (or that
+cannot be verified) is never reused. This filter sets the minimum spacing
+between those checks (default: the coin's order-cancellation window, or 6 hours,
+whichever is larger). Raise it to be more conservative.
+
+```php
+apply_filters( 'nmm_hd_quarantine_seconds', $seconds, $cryptoId );
+```
+
+### `nmm_hd_quarantine_batch`
+
+The maximum number of quarantined addresses re-checked per coin per cron tick
+(default `25`). Each one costs a fresh explorer request, so this bounds the
+external work a large abandonment burst can trigger under the background job's
+lock. The oldest-due addresses are processed first; the rest wait for later
+ticks. Raise it if you have a big backlog and headroom, lower it to be gentler
+on explorers.
+
+```php
+apply_filters( 'nmm_hd_quarantine_batch', $limit, $cryptoId );
+```
+
+Reusing a **pristine, never-used** address is deliberate: it keeps a long run of
+abandoned checkouts from pushing a later *paid* address beyond your wallet's
+**gap limit** (the number of consecutive unused addresses a wallet scans from
+the seed — 20 by default in Electrum). See the "gap limit" note in the FAQ for
+the recommended wallet-side safeguard.
+
+### `nmm_sol_retry_global_retention_seconds`
+
+How long a durable Solana retry entry is kept before a global cleanup pass may
+delete it, measured from its first failed detail lookup (default: 7 days). This
+pass reclaims rows for addresses that are no longer scanned at all — after SOL
+Autopay is disabled, or a carousel address is removed or replaced — which the
+per-address expiry would otherwise never revisit. The cleanup runs at most once
+an hour.
+
+```php
+apply_filters( 'nmm_sol_retry_global_retention_seconds', $seconds );
+```
+
+For safety the effective value is clamped to at least the Autopay transaction
+lifetime plus 30 minutes, so a filter returning zero, a negative number, or a
+value shorter than the payment window can never delete a still-live retry entry.
+Use it to lengthen retention (e.g. to keep evidence for longer), not to shorten
+it below the matching window.
+
 ## Appearance
 
 ### `nmm_gateway_icon`

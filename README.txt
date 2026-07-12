@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.2
+Stable Tag: 2.9.3
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -177,7 +177,26 @@ Note that this filter currently covers blockchain verification requests only, no
 
 Yes. Filters are available for redirecting verification requests, customizing the customer payment message, adjusting Autopay matching tolerances, changing the checkout icon, and white-labeling the settings page. The full reference with code examples is at https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
 
+= Privacy Mode (HD): should I raise my wallet's gap limit? =
+
+Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
+
 == Changelog ==
+
+= 2.9.3 =
+* Privacy Mode (HD): payment addresses are now claimed atomically at checkout, so two customers checking out at the same moment can never be handed the same address
+* Privacy Mode (HD): the background job no longer cancels an order that was already paid or verified out-of-band (e.g. during a block-explorer outage), and a cancelled order's order-received page no longer re-displays a payment address that may have been recycled to another order
+* Privacy Mode (HD): an abandoned checkout's address is now quarantined and re-verified with fresh block-explorer checks before it can be reused - it returns to the pool only if it never received anything on-chain, and any address that saw funds is retired permanently, so a late payment can never be credited to the wrong order (see the FAQ note about your wallet's gap limit)
+* Autopay: overpayments are now correctly recognised as paid (the match tolerance previously divided by the received amount, rejecting anything more than a fraction over the expected total), and a zero-value inbound transaction can no longer abort the verification cycle on PHP 8 (zero/dust TRC-20 transfers are now also ignored at the source)
+* Autopay (Solana): payments are no longer missed when the carousel address has more recent activity than a single lookup returned - the signature history is now paged back through the payment window instead of only the 12 most recent signatures, and any transaction whose detail lookup fails transiently (rate limit, timeout) is retried from a durable queue until it succeeds or ages out of the window, so a temporary RPC hiccup can no longer drop a payment
+* Reliability: the background job's overlap guard is now an atomic MySQL advisory lock instead of a non-atomic transient, so two ticks firing together can no longer both run, and a crashed run releases the lock automatically (no stale lock can wedge the cron)
+* Privacy Mode (HD): during a primary block-explorer outage, fallback explorers are no longer allowed to confirm a payment on fewer confirmations than the merchant requires (BTC/LTC); verification pauses until the primary source recovers instead
+* EVM/ERC-20 orders now render correctly on servers that have gmp but not bcmath (amount conversion no longer calls bcmath unconditionally)
+* The thank-you page now shows a clear message instead of a fatal error if the selected cryptocurrency cannot be determined (e.g. a lost session); the chosen coin is also stored on the order so a lost session cannot orphan a checkout
+* Security: the payment label (gateway title) is now sanitised on save and on output, preventing a site admin without unfiltered_html from injecting markup at checkout
+* Checkout: a coin whose address generation is currently failing is now correctly removed from the payment dropdown instead of only failing later
+* Fixed the "Open in Solana wallet" button, whose solana: link was being stripped by URL escaping
+* Internal hardening and dead-code removal in the admin status-change and gateway-filter hooks
 
 = 2.9.2 =
 * Fixed repeated PHP warnings ("Undefined property: stdClass::$last") when HitBTC, Gate.io, or Binance doesn't list a selected coin: those APIs answer HTTP 200 with an error object, which is now handled silently (prices were never affected - the empty result was already discarded before averaging)

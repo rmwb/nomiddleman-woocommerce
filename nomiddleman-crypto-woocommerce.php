@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.2
+Version: 2.9.3
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -52,8 +52,9 @@ register_activation_hook(__FILE__, 'NMM_activate');
 register_deactivation_hook(__FILE__, 'NMM_deactivate');
 register_uninstall_hook(__FILE__, 'NMM_uninstall');
 define('NMM_HD_TABLE', 'nmmpro_hd_addresses');
-define('NMM_PAYMENT_TABLE', 'nmmpro_payments');  
+define('NMM_PAYMENT_TABLE', 'nmmpro_payments');
 define('NMM_CAROUSEL_TABLE', 'nmmpro_carousel');
+define('NMM_SOL_RETRY_TABLE', 'nmmpro_sol_retry');
 define('NMM_LOGFILE_NAME', 'nmm.log');
 define('NMM_REDUX_ID', 'nmmpro_redux_options');
 define('NMM_EXTENSION_KEY', 'nmm_registered_extensions');
@@ -70,7 +71,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.2');
+    define('NMM_VERSION', '2.9.3');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -108,6 +109,7 @@ function NMM_init_gateways(){
     require_once(plugin_basename('src/NMM_Carousel_Repo.php'));
     require_once(plugin_basename('src/NMM_Hd_Repo.php'));
     require_once(plugin_basename('src/NMM_Payment_Repo.php'));
+    require_once(plugin_basename('src/NMM_Sol_Retry_Repo.php'));
 
     // Simple Objects
     require_once(plugin_basename('src/NMM_Cryptocurrency.php'));
@@ -149,6 +151,7 @@ function NMM_init_gateways(){
 
     NMM_Register_Extensions();
     NMM_update_hd_table();
+    NMM_maybe_create_sol_retry_table();
 
     add_action('init', 'NMM_schedule_payment_checks');
     add_action('admin_init', 'NMM_cleanup_legacy_qr_files');
@@ -212,6 +215,96 @@ function NMM_activate() {
     delete_option('nmm_flash_notices');
     NMM_create_payment_table();
     NMM_create_carousel_table();
+    NMM_maybe_create_sol_retry_table();
+}
+
+// Create/repair the durable Solana retry-queue table (gated by a schema version
+// so it does not run on every load, but DOES re-run to add new indexes when the
+// schema is bumped), confirming columns and indexes before recording success.
+function NMM_maybe_create_sol_retry_table() {
+    $schemaVersion = '2'; // bump when the retry table's columns/indexes change
+    if (get_option('nmm_sol_retry_schema') === $schemaVersion) {
+        return;
+    }
+
+    global $wpdb;
+    NMM_create_sol_retry_table();
+
+    $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) !== $tableName) {
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table not created (' . $wpdb->last_error . '); will retry next load.');
+        return;
+    }
+
+    // CREATE TABLE IF NOT EXISTS will not repair a pre-existing table that is
+    // missing a column or index, so check and fix those explicitly. A missing
+    // addr_sig unique key in particular would break the idempotent upsert.
+    $columns = (array) $wpdb->get_col("SHOW COLUMNS FROM `$tableName`", 0); // Field
+    $requiredColumns = array('id', 'address', 'signature', 'first_failed_at', 'attempts', 'next_retry_at', 'block_time');
+    $columnsOk = count(array_intersect($requiredColumns, $columns)) === count($requiredColumns);
+
+    // Add any missing required index. For the unique key, collapse any duplicate
+    // (address, signature) rows first (a table that ran without it could have
+    // accumulated them), keeping the lowest id, or the ADD would fail.
+    $indexDefs = array(
+        'addr_sig'          => 'ADD UNIQUE KEY `addr_sig` (`address`, `signature`)',
+        'addr_due'          => 'ADD KEY `addr_due` (`address`, `next_retry_at`)',
+        'addr_block_time'   => 'ADD KEY `addr_block_time` (`address`, `block_time`)',
+        'addr_first_failed' => 'ADD KEY `addr_first_failed` (`address`, `first_failed_at`)',
+        'first_failed'      => 'ADD KEY `first_failed` (`first_failed_at`)',
+    );
+    $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2); // Key_name
+    foreach ($indexDefs as $name => $def) {
+        if (in_array($name, $present, true)) {
+            continue;
+        }
+        if ($name === 'addr_sig') {
+            $wpdb->query(
+                "DELETE t1 FROM `$tableName` t1
+                 INNER JOIN `$tableName` t2
+                 ON t1.address = t2.address AND t1.signature = t2.signature AND t1.id > t2.id"
+            );
+        }
+        $wpdb->query("ALTER TABLE `$tableName` $def");
+    }
+
+    $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2);
+    $indexesOk = count(array_intersect(array_keys($indexDefs), $present)) === count($indexDefs);
+
+    // Record success only once the schema is fully present, so a partial or
+    // failed repair retries next load instead of being masked as complete.
+    if ($columnsOk && $indexesOk) {
+        update_option('nmm_sol_retry_schema', $schemaVersion);
+        delete_option('nmm_sol_retry_table_created'); // retire the pre-versioned flag
+    }
+    else {
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry schema incomplete (' . $wpdb->last_error . '); will retry next load.');
+    }
+}
+
+function NMM_create_sol_retry_table() {
+    global $wpdb;
+    $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+
+    $query = "CREATE TABLE IF NOT EXISTS `$tableName`
+        (
+            `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            `address` char(64) NOT NULL,
+            `signature` char(96) NOT NULL,
+            `first_failed_at` bigint(20) NOT NULL DEFAULT '0',
+            `attempts` int(11) NOT NULL DEFAULT '0',
+            `next_retry_at` bigint(20) NOT NULL DEFAULT '0',
+            `block_time` bigint(20) NOT NULL DEFAULT '0',
+
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `addr_sig` (`address`, `signature`),
+            KEY `addr_due` (`address`, `next_retry_at`),
+            KEY `addr_block_time` (`address`, `block_time`),
+            KEY `addr_first_failed` (`address`, `first_failed_at`),
+            KEY `first_failed` (`first_failed_at`)
+        );";
+
+    $wpdb->query($query);
 }
 
 function NMM_deactivate() {
@@ -226,6 +319,29 @@ function NMM_uninstall() {
     NMM_drop_mpk_address_table();
     NMM_drop_payment_table();
     NMM_drop_carousel_table();
+    NMM_drop_sol_retry_table();
+}
+
+// The retry table is created per site (each blog has its own prefix), so drop it
+// per site on a network uninstall; otherwise sub-site tables would be orphaned.
+function NMM_drop_sol_retry_table() {
+    global $wpdb;
+
+    if (is_multisite()) {
+        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
+        foreach ($blogIds as $blogId) {
+            switch_to_blog($blogId);
+            $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+            delete_option('nmm_sol_retry_schema');
+            delete_option('nmm_sol_retry_table_created');
+            restore_current_blog();
+        }
+        return;
+    }
+
+    $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+    delete_option('nmm_sol_retry_schema');
+    delete_option('nmm_sol_retry_table_created');
 }
 
 function NMM_drop_mpk_address_table() {
@@ -274,6 +390,7 @@ function NMM_create_hd_mpk_address_table() {
             PRIMARY KEY (`id`),
             UNIQUE KEY `hd_address` (`cryptocurrency`, `address`),
             KEY `status` (`status`),
+            KEY `status_checked` (`status`, `last_checked`),
             KEY `mpk_index` (`mpk_index`),
             KEY `mpk` (`mpk`)
         );";
@@ -283,16 +400,139 @@ function NMM_create_hd_mpk_address_table() {
 
 function NMM_update_hd_table() {
     global $wpdb;
-    
-    if (get_option('nmm_hd_table_version', '1.0') === '1.0') {
-        update_option('nmm_hd_table_version', '1.1');
 
-        $tableName = $wpdb->prefix . NMM_HD_TABLE;
-        
-        $query = "ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'";
-        $wpdb->query($query);        
+    $tableName = $wpdb->prefix . NMM_HD_TABLE;
+
+    // 1.0 -> 1.1: add the hd_mode column. Advance the version only after
+    // confirming the column exists, so a failed ALTER (timeout, privileges)
+    // retries on the next run instead of being masked by a bumped version.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.0') {
+        $hasColumn = $wpdb->get_results("SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'");
+        if (empty($hasColumn)) {
+            $wpdb->query("ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'");
+        }
+
+        $confirmColumn = $wpdb->get_results("SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'");
+        if (!empty($confirmColumn)) {
+            update_option('nmm_hd_table_version', '1.1');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD hd_mode migration did not complete (' . $wpdb->last_error . '); leaving version at 1.0 to retry.');
+        }
     }
 
+    // 1.1 -> 1.2: guarantee no two rows share a (cryptocurrency, address) pair.
+    // Older installs predate the UNIQUE KEY now in NMM_create_hd_mpk_address_table();
+    // without it, a concurrent-derivation race could insert the same derived
+    // address twice and hand it to two different orders.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.1') {
+        // Collapse any pre-existing duplicates before adding the constraint.
+        // Do NOT blindly keep the lowest id: a higher-id duplicate may be the
+        // one actually assigned to a live order or holding received funds.
+        // Reconcile each duplicate group and keep the most operationally
+        // important row (funds first, then an active/assigned row, then order
+        // association, then most recent), logging any dropped row that carried
+        // an order or funds so a human can follow up.
+        NMM_reconcile_duplicate_hd_addresses($tableName);
+
+        // Add the unique key only if it is not already present.
+        $existing = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'");
+        if (empty($existing)) {
+            $wpdb->query("ALTER TABLE `$tableName` ADD UNIQUE KEY `hd_address` (`cryptocurrency`, `address`)");
+        }
+
+        // Advance the version only once the unique key is actually present, so
+        // a failed dedupe/ALTER (timeout, privileges, a duplicate left behind
+        // by an error) retries next run instead of permanently recording
+        // success and leaving the concurrency guarantee unenforced.
+        $confirmIndex = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'");
+        if (!empty($confirmIndex)) {
+            update_option('nmm_hd_table_version', '1.2');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD unique-key migration did not complete (' . $wpdb->last_error . '); leaving version at 1.1 to retry.');
+        }
+    }
+
+    // 1.2 -> 1.3: add a (status, last_checked) index so the quarantine batch
+    // query - WHERE status IN (...) ORDER BY last_checked LIMIT N - stays fast
+    // when a burst of abandoned checkouts leaves many rows awaiting re-checks.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.2') {
+        $existing = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'");
+        if (empty($existing)) {
+            $wpdb->query("ALTER TABLE `$tableName` ADD KEY `status_checked` (`status`, `last_checked`)");
+        }
+
+        $confirm = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'");
+        if (!empty($confirm)) {
+            update_option('nmm_hd_table_version', '1.3');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD status_checked index migration did not complete (' . $wpdb->last_error . '); leaving version at 1.2 to retry.');
+        }
+    }
+
+}
+
+// Collapse duplicate (cryptocurrency, address) rows down to one, choosing the
+// keeper by operational importance rather than by id, so the migration to a
+// UNIQUE KEY can never silently discard the row an order actually depends on.
+function NMM_reconcile_duplicate_hd_addresses($tableName) {
+    global $wpdb;
+
+    $dupes = $wpdb->get_results(
+        "SELECT cryptocurrency, address FROM `$tableName`
+         GROUP BY cryptocurrency, address HAVING COUNT(*) > 1"
+    );
+
+    foreach ((array) $dupes as $dupe) {
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, status, order_id, total_received FROM `$tableName`
+             WHERE cryptocurrency = %s AND address = %s",
+            $dupe->cryptocurrency, $dupe->address
+        ));
+
+        if (count($rows) < 2) {
+            continue;
+        }
+
+        // Rank so the most important row sorts first: funded, then an active
+        // status (assigned/underpaid/complete), then any order association,
+        // then the most recently derived (highest id).
+        usort($rows, 'NMM_compare_hd_rows_for_keep');
+        $keeper = array_shift($rows);
+
+        foreach ($rows as $loser) {
+            if (!empty($loser->order_id) || (float) $loser->total_received > 0) {
+                NMM_Util::log(__FILE__, __LINE__, sprintf(
+                    'HD dedupe: dropping duplicate %s address %s row id %d (order %s, received %s) in favour of row id %d; manual review may be needed.',
+                    $dupe->cryptocurrency, $dupe->address, $loser->id,
+                    $loser->order_id, $loser->total_received, $keeper->id
+                ));
+            }
+            $wpdb->delete($tableName, array('id' => $loser->id), array('%d'));
+        }
+    }
+}
+
+// Sort comparator: returns the more important HD row first.
+function NMM_compare_hd_rows_for_keep($a, $b) {
+    $rank = function ($row) {
+        return array(
+            ((float) $row->total_received > 0) ? 1 : 0,                              // funded wins
+            in_array($row->status, array('assigned', 'underpaid', 'complete'), true) ? 1 : 0, // active state
+            !empty($row->order_id) ? 1 : 0,                                          // has an order
+            (int) $row->id,                                                          // most recent
+        );
+    };
+    $ra = $rank($a);
+    $rb = $rank($b);
+    foreach ($ra as $i => $va) {
+        if ($va !== $rb[$i]) {
+            return ($va > $rb[$i]) ? -1 : 1; // higher rank sorts first
+        }
+    }
+    return 0;
 }
 
 function NMM_create_payment_table() {
@@ -429,5 +669,17 @@ function NMM_site_health_hd_math() {
 }
 
 add_filter('woocommerce_payment_gateways', 'NMM_filter_gateways');
+
+// Allow the wallet URI schemes the plugin emits so esc_url() does not strip
+// them from "open in wallet" links (solana:, ethereum:, monero:, bitcoin: ...).
+function NMM_allowed_uri_protocols($protocols) {
+    foreach (array('bitcoin', 'litecoin', 'ethereum', 'monero', 'solana', 'dogecoin', 'bitcoincash') as $scheme) {
+        if (!in_array($scheme, $protocols, true)) {
+            $protocols[] = $scheme;
+        }
+    }
+    return $protocols;
+}
+add_filter('kses_allowed_protocols', 'NMM_allowed_uri_protocols');
 
 ?>
