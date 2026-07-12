@@ -59,7 +59,8 @@ mok('loopback literal: is_literal true',  $loopLiteral['is_literal'] === true);
 mok('loopback literal: is_private true',  $loopLiteral['is_private'] === true);
 
 // --- plan_request: transport must never resolve away from the vetted address ---
-function plan($target, $curl, $creds) { return NMM_Monero::plan_request($target, $curl, $creds); }
+// plan($target, $hasCurl, $canPin, $hasCreds)
+function plan($target, $curl, $canPin, $creds) { return NMM_Monero::plan_request($target, $curl, $canPin, $creds); }
 
 $publicLiteral  = array('host' => '8.8.8.8',            'port' => 18082, 'ip' => '8.8.8.8',       'is_literal' => true,  'is_private' => false);
 $publicHost     = array('host' => 'wallet.example.com','port' => 443,   'ip' => '93.184.216.34', 'is_literal' => false, 'is_private' => false);
@@ -67,24 +68,32 @@ $privateLiteral = array('host' => '127.0.0.1',         'port' => 18082, 'ip' => 
 $privateHost    = array('host' => 'localhost',         'port' => 18082, 'ip' => '127.0.0.1',     'is_literal' => false, 'is_private' => true);
 $unresolvable   = array('host' => 'nope.invalid',      'port' => 80,    'ip' => '',              'is_literal' => false, 'is_private' => true);
 
-// cURL available: always pin, regardless of host or privacy.
-mok('curl pins public literal',      plan($publicLiteral, true, false)['transport'] === 'curl');
-mok('curl pins public hostname',     plan($publicHost,    true, false)['transport'] === 'curl');
-mok('curl pins private hostname',    plan($privateHost,   true, false)['transport'] === 'curl');
-mok('curl digest off without creds', plan($publicLiteral, true, false)['digest'] === false);
-mok('curl digest on with creds',     plan($publicLiteral, true, true)['digest']  === true);
+// cURL that can pin: pin every host, public or private.
+mok('curl pins public literal',      plan($publicLiteral, true, true, false)['transport'] === 'curl');
+mok('curl pins public hostname',     plan($publicHost,    true, true, false)['transport'] === 'curl');
+mok('curl pins private hostname',    plan($privateHost,   true, true, false)['transport'] === 'curl');
+mok('curl digest off without creds', plan($publicLiteral, true, true, false)['digest'] === false);
+mok('curl digest on with creds',     plan($publicLiteral, true, true, true)['digest']  === true);
+
+// cURL present but the build CANNOT pin (no CURLOPT_RESOLVE): a hostname must be
+// refused (it would send unpinned), while an IP literal is still safe over cURL
+// - no DNS to rebind - and keeps digest auth working.
+mok('curl no-pin public host -> reject',   plan($publicHost,    true, false, false)['transport'] === 'reject');
+mok('curl no-pin private host -> reject',  plan($privateHost,   true, false, false)['transport'] === 'reject');
+mok('curl no-pin ip literal -> curl',      plan($publicLiteral, true, false, false)['transport'] === 'curl');
+mok('curl no-pin ip literal keeps digest', plan($privateLiteral, true, false, true)['digest'] === true);
 
 // No cURL: only IP literals are safe (no DNS to rebind).
-mok('no-curl ip literal -> wp_remote',   plan($publicLiteral,  false, false)['transport'] === 'wp_remote');
-mok('no-curl private literal -> wp_remote', plan($privateLiteral, false, false)['transport'] === 'wp_remote');
+mok('no-curl ip literal -> wp_remote',      plan($publicLiteral,  false, false, false)['transport'] === 'wp_remote');
+mok('no-curl private literal -> wp_remote', plan($privateLiteral, false, false, false)['transport'] === 'wp_remote');
 
 // No cURL: EVERY hostname is refused - a public host is just as rebindable as a
 // private one because the resolved IP at connect time cannot be pinned.
-mok('no-curl public host -> reject',     plan($publicHost,     false, false)['transport'] === 'reject');
-mok('no-curl private host -> reject',    plan($privateHost,    false, false)['transport'] === 'reject');
-mok('no-curl unresolvable -> reject',    plan($unresolvable,   false, false)['transport'] === 'reject');
-// Even with cURL, nothing to pin (no ip) must not fall through to an unpinned send.
-mok('curl but no ip -> reject',          plan($unresolvable,   true,  false)['transport'] === 'reject');
+mok('no-curl public host -> reject',     plan($publicHost,     false, false, false)['transport'] === 'reject');
+mok('no-curl private host -> reject',    plan($privateHost,    false, false, false)['transport'] === 'reject');
+mok('no-curl unresolvable -> reject',    plan($unresolvable,   false, false, false)['transport'] === 'reject');
+// Can pin in principle, but no ip to pin and not a literal: must not fall through.
+mok('curl but no ip -> reject',          plan($unresolvable,   true,  true,  false)['transport'] === 'reject');
 
 // --- explicit opt-in constant permits private on multisite ---
 $GLOBALS['nmm_is_ms'] = true;

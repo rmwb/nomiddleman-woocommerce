@@ -45,7 +45,11 @@ class NMM_Monero {
 		$user = $settings->get_xmr_rpc_user();
 		$pass = $settings->get_xmr_rpc_password();
 
-		$plan = self::plan_request($target, function_exists('curl_init'), $user !== '');
+		// Pinning needs both cURL and the CURLOPT_RESOLVE option; a build missing
+		// the latter has cURL but cannot pin a hostname, so treat it as unpinnable.
+		$hasCurl = function_exists('curl_init');
+		$canPin = $hasCurl && defined('CURLOPT_RESOLVE');
+		$plan = self::plan_request($target, $hasCurl, $canPin, $user !== '');
 
 		if ($plan['transport'] === 'reject') {
 			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: without the cURL extension the connection cannot be pinned to the validated address, so a hostname could be rebound to a private target. Use an IP-literal RPC URL, or enable the cURL PHP extension.');
@@ -178,27 +182,33 @@ class NMM_Monero {
 	 * connection cannot be steered to a different address than the one we vetted
 	 * (DNS rebinding). Pure and side-effect free so it can be unit-tested.
 	 *
+	 * $hasCurl is whether curl_init() exists; $canPin is whether the cURL build
+	 * can actually pin a hostname to a vetted IP (curl_init AND CURLOPT_RESOLVE).
+	 * The two are distinct: an ancient libcurl without CURLOPT_RESOLVE has cURL
+	 * but cannot pin, and must not be allowed to send an unpinned hostname
+	 * request. IP literals never need pinning (there is no DNS to rebind).
+	 *
 	 * Returns array( 'transport' => 'curl'|'wp_remote'|'reject',
 	 *                'digest' => bool, 'reason' => string ).
 	 *
-	 * - curl:      cURL is available and we have a concrete IP to pin with
-	 *              CURLOPT_RESOLVE - the only transport immune to rebinding.
-	 *              Digest auth is layered on only when credentials exist.
+	 * - curl:      the host is an IP literal (safe on any cURL build), or it is a
+	 *              hostname and the build can pin it to the validated IP. The only
+	 *              rebinding-immune transport; digest auth is added only with creds.
 	 * - wp_remote: no cURL, but the host is an IP literal - there is no DNS to
 	 *              rebind, so a plain request reaches exactly the vetted address.
-	 * - reject:    no cURL and a hostname (public OR private) we cannot pin. Even
-	 *              a public host is unsafe: wp_safe_remote_post validates the name
-	 *              but re-resolves at connect time, so it could resolve publicly
-	 *              during validation and privately during the request (rebinding).
-	 *              Without CURLOPT_RESOLVE the only safe host is an IP literal, so
-	 *              we refuse any hostname rather than reopen the SSRF path.
+	 * - reject:    a hostname (public OR private) we cannot pin - no cURL, or a
+	 *              cURL build without CURLOPT_RESOLVE. Even a public host is unsafe
+	 *              because it re-resolves at connect time and could land in private
+	 *              space (rebinding), so we refuse rather than reopen the SSRF path.
 	 */
-	public static function plan_request($target, $hasCurl, $hasCreds) {
-		if ($hasCurl && $target['ip'] !== '') {
-			return array('transport' => 'curl', 'digest' => (bool) $hasCreds, 'reason' => 'pinned');
+	public static function plan_request($target, $hasCurl, $canPin, $hasCreds) {
+		$isLiteral = !empty($target['is_literal']);
+
+		if ($hasCurl && ($isLiteral || ($canPin && $target['ip'] !== ''))) {
+			return array('transport' => 'curl', 'digest' => (bool) $hasCreds, 'reason' => $isLiteral ? 'ip-literal-curl' : 'pinned');
 		}
 
-		if (!empty($target['is_literal'])) {
+		if ($isLiteral) {
 			return array('transport' => 'wp_remote', 'digest' => false, 'reason' => 'ip-literal');
 		}
 
