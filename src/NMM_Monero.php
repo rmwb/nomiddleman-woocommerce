@@ -52,7 +52,7 @@ class NMM_Monero {
 		$plan = self::plan_request($target, $hasCurl, $canPin, $user !== '');
 
 		if ($plan['transport'] === 'reject') {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: without the cURL extension the connection cannot be pinned to the validated address, so a hostname could be rebound to a private target. Use an IP-literal RPC URL, or enable the cURL PHP extension.');
+			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: without a pinning-capable cURL installation (the cURL extension with CURLOPT_RESOLVE) the connection cannot be pinned to the validated address, so a hostname could be rebound to a private target. Use an IP-literal RPC URL, or install a pinning-capable cURL.');
 		}
 
 		if ($plan['transport'] === 'curl') {
