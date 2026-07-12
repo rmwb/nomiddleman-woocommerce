@@ -243,28 +243,26 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 $hdMode = $nmmSettings->get_hd_mode($cryptoId);
                 $hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 
-                // get fresh hd wallet
-                $orderWalletAddress = $hdRepo->get_oldest_ready();
-                
-                // if we couldnt find a fresh one, force a new one
+                // Atomically claim the oldest ready address for this order.
+                $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
+
+                // if none was available, derive one and try to claim again
                 if (!$orderWalletAddress) {
-                    
                     try {
                         NMM_Hd::force_new_address($cryptoId, $mpk, $hdMode);
-                        $orderWalletAddress = $hdRepo->get_oldest_ready();
+                        $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
                     }
                     catch ( \Exception $e) {
                         throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($e->getMessage()));
                     }
                 }
 
-                // set hd wallet address to get later
-                WC()->session->set('hd_wallet_address', $orderWalletAddress);
+                if (!$orderWalletAddress) {
+                    throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                }
 
-                // update the database
-                $hdRepo->set_status($orderWalletAddress, 'assigned');
-                $hdRepo->set_order_id($orderWalletAddress, $order_id);
-                $hdRepo->set_order_amount($orderWalletAddress, $formattedCryptoTotal);
+                // keep the session copy other code paths still read
+                WC()->session->set('hd_wallet_address', $orderWalletAddress);
 
                 $orderNote = sprintf(
                     /* translators: 1: wallet address, 2: amount, 3: cryptocurrency ticker */

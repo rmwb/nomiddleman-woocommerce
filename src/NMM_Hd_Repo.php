@@ -94,6 +94,55 @@ class NMM_Hd_Repo {
 		return $address;
 	}
 
+	/**
+	 * Atomically claim the oldest ready address for an order and return it.
+	 *
+	 * Selection + status flip + order binding happen as a guarded UPDATE, so
+	 * two concurrent checkouts can never be handed the same address: the
+	 * WHERE status = 'ready' clause means only one UPDATE affects a given row.
+	 * Returns the claimed address string, or null if none is available.
+	 */
+	public function claim_oldest_ready($orderId, $orderAmount) {
+		global $wpdb;
+
+		// A few attempts absorbs the rare case where our chosen id was claimed
+		// by a competing request between our SELECT and our UPDATE.
+		for ($attempt = 0; $attempt < 5; $attempt++) {
+			$id = $wpdb->get_var($wpdb->prepare(
+				"SELECT `id` FROM `$this->tableName`
+				 WHERE `status` = 'ready'
+				 AND `mpk` = %s
+				 AND `cryptocurrency` = %s
+				 AND `hd_mode` = %d
+				 ORDER BY `mpk_index`
+				 LIMIT 1",
+				$this->mpk, $this->cryptoId, $this->hdMode
+			));
+
+			if ($id === null) {
+				return null; // no ready addresses left
+			}
+
+			$affected = $wpdb->query($wpdb->prepare(
+				"UPDATE `$this->tableName`
+				 SET `status` = 'assigned', `assigned_at` = %d, `order_id` = %d, `order_amount` = %s
+				 WHERE `id` = %d AND `status` = 'ready'",
+				time(), $orderId, $orderAmount, $id
+			));
+
+			if ($affected === 1) {
+				return $wpdb->get_var($wpdb->prepare(
+					"SELECT `address` FROM `$this->tableName` WHERE `id` = %d",
+					$id
+				));
+			}
+			// affected === 0: another request claimed this id first; retry.
+		}
+
+		NMM_Util::log(__FILE__, __LINE__, 'claim_oldest_ready exhausted retries for ' . $this->cryptoId);
+		return null;
+	}
+
 	public function get_pending() {
 		global $wpdb;
 
