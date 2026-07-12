@@ -74,12 +74,13 @@ mok('curl pins private hostname',    plan($privateHost,   true, false)['transpor
 mok('curl digest off without creds', plan($publicLiteral, true, false)['digest'] === false);
 mok('curl digest on with creds',     plan($publicLiteral, true, true)['digest']  === true);
 
-// No cURL: IP literals are safe (no DNS), public hostnames go via safe transport.
+// No cURL: only IP literals are safe (no DNS to rebind).
 mok('no-curl ip literal -> wp_remote',   plan($publicLiteral,  false, false)['transport'] === 'wp_remote');
 mok('no-curl private literal -> wp_remote', plan($privateLiteral, false, false)['transport'] === 'wp_remote');
-mok('no-curl public host -> wp_safe',    plan($publicHost,     false, false)['transport'] === 'wp_safe');
 
-// No cURL: a private/unresolvable hostname we cannot pin must be refused.
+// No cURL: EVERY hostname is refused - a public host is just as rebindable as a
+// private one because the resolved IP at connect time cannot be pinned.
+mok('no-curl public host -> reject',     plan($publicHost,     false, false)['transport'] === 'reject');
 mok('no-curl private host -> reject',    plan($privateHost,    false, false)['transport'] === 'reject');
 mok('no-curl unresolvable -> reject',    plan($unresolvable,   false, false)['transport'] === 'reject');
 // Even with cURL, nothing to pin (no ip) must not fall through to an unpinned send.

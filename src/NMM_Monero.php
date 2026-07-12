@@ -48,7 +48,7 @@ class NMM_Monero {
 		$plan = self::plan_request($target, function_exists('curl_init'), $user !== '');
 
 		if ($plan['transport'] === 'reject') {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: it resolves to a private address but the connection cannot be pinned (no cURL). Use an IP-literal RPC URL, or enable the cURL PHP extension.');
+			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: without the cURL extension the connection cannot be pinned to the validated address, so a hostname could be rebound to a private target. Use an IP-literal RPC URL, or enable the cURL PHP extension.');
 		}
 
 		if ($plan['transport'] === 'curl') {
@@ -89,19 +89,15 @@ class NMM_Monero {
 			}
 		}
 		else {
-			// No cURL. wp_safe_remote_post re-validates the resolved address and
-			// refuses private targets (public-hostname case); wp_remote_post is
-			// only chosen for IP-literal targets, where there is no DNS to rebind.
-			$args = array(
+			// No cURL: plan_request only reaches here for an IP-literal target,
+			// where there is no DNS to rebind and the request goes to exactly the
+			// address we validated. (Hostnames are rejected above.)
+			$response = wp_remote_post($url, array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => $payload,
 				'timeout' => 20,
 				'redirection' => 0, // never follow a redirect to another target
-			);
-
-			$response = ($plan['transport'] === 'wp_safe')
-				? wp_safe_remote_post($url, $args)
-				: wp_remote_post($url, $args);
+			));
 
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
 				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable.');
@@ -182,7 +178,7 @@ class NMM_Monero {
 	 * connection cannot be steered to a different address than the one we vetted
 	 * (DNS rebinding). Pure and side-effect free so it can be unit-tested.
 	 *
-	 * Returns array( 'transport' => 'curl'|'wp_safe'|'wp_remote'|'reject',
+	 * Returns array( 'transport' => 'curl'|'wp_remote'|'reject',
 	 *                'digest' => bool, 'reason' => string ).
 	 *
 	 * - curl:      cURL is available and we have a concrete IP to pin with
@@ -190,11 +186,12 @@ class NMM_Monero {
 	 *              Digest auth is layered on only when credentials exist.
 	 * - wp_remote: no cURL, but the host is an IP literal - there is no DNS to
 	 *              rebind, so a plain request reaches exactly the vetted address.
-	 * - wp_safe:   no cURL and a public hostname - wp_safe_remote_post re-validates
-	 *              the resolved IP and refuses private targets at request time.
-	 * - reject:    no cURL and a private (or unresolvable) hostname we cannot pin -
-	 *              wp_safe_remote_post would block it and wp_remote_post could be
-	 *              rebound into private space, so we refuse rather than risk it.
+	 * - reject:    no cURL and a hostname (public OR private) we cannot pin. Even
+	 *              a public host is unsafe: wp_safe_remote_post validates the name
+	 *              but re-resolves at connect time, so it could resolve publicly
+	 *              during validation and privately during the request (rebinding).
+	 *              Without CURLOPT_RESOLVE the only safe host is an IP literal, so
+	 *              we refuse any hostname rather than reopen the SSRF path.
 	 */
 	public static function plan_request($target, $hasCurl, $hasCreds) {
 		if ($hasCurl && $target['ip'] !== '') {
@@ -205,11 +202,7 @@ class NMM_Monero {
 			return array('transport' => 'wp_remote', 'digest' => false, 'reason' => 'ip-literal');
 		}
 
-		if (!empty($target['is_private'])) {
-			return array('transport' => 'reject', 'digest' => false, 'reason' => 'unpinnable-private');
-		}
-
-		return array('transport' => 'wp_safe', 'digest' => false, 'reason' => 'public-hostname');
+		return array('transport' => 'reject', 'digest' => false, 'reason' => 'unpinnable-hostname');
 	}
 
 	// True for loopback / private / link-local (incl. 169.254.169.254 cloud
