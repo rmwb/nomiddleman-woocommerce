@@ -83,7 +83,6 @@ class NMM_Monero {
 			curl_setopt_array($ch, $curlOpts);
 			$body = curl_exec($ch);
 			$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-			curl_close($ch);
 
 			if ($body === false || $code !== 200) {
 				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable (http ' . $code . ').');
