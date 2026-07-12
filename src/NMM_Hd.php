@@ -257,18 +257,21 @@ class NMM_Hd {
 
 			// Reconcile the address against the live order instead of leaving it
 			// stuck in 'assigned'. A HD address is only ever handed to one order,
-			// so once that order is dead we retire the address rather than
-			// recycling it: total_received reflects the explorer, which may have
-			// failed or lagged right before the order became terminal (exactly
-			// the outage case this cron guards against), so a cached zero cannot
-			// prove no funds arrived. Retiring ('dirty') removes it from the
-			// pool for good; the ready buffer is refilled by derivation, so this
-			// costs a fresh address, never a mis-credited payment.
+			// so once that order is dead the address must leave the assigned
+			// state. But we must not simply retire every one of them: on
+			// Electrum-backed HD wallets, a long run of retired-but-never-paid
+			// addresses (abandoned checkouts) pushes a later paid address beyond
+			// the wallet's gap limit, where it is not automatically discovered
+			// from the seed. So a dead order whose cached total_received is zero
+			// goes to QUARANTINE - verified by fresh explorer checks over time
+			// before it may be recycled - and only an address that actually
+			// received funds is retired ('dirty') outright. See
+			// process_quarantined_addresses().
 			$order = $orderId ? wc_get_order($orderId) : false;
 
 			if (!$order) {
-				// Order deleted - retire the orphaned address.
-				self::retire_hd_address($hdRepo, $address, 'order deleted');
+				// Order deleted - quarantine (or retire if it already saw funds).
+				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'order deleted');
 				continue;
 			}
 
@@ -282,9 +285,8 @@ class NMM_Hd {
 			if ($order->has_status(array('cancelled', 'failed'))) {
 				// Terminal non-paid state reached through some other path (a
 				// customer/admin cancellation, or the checkout catch-block
-				// failing the order after it claimed an address). Retire the
-				// address so it never sits 'assigned' forever and is never reused.
-				self::retire_hd_address($hdRepo, $address, 'order ' . $order->get_status());
+				// failing the order after it claimed an address).
+				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'order ' . $order->get_status());
 				continue;
 			}
 
@@ -296,10 +298,10 @@ class NMM_Hd {
 			$assignedFor = time() - $assignedAt;
 			NMM_Util::log(__FILE__, __LINE__, 'address ' . $address . ' has been assigned for ' . $assignedFor . '... cancel time: ' . $orderCancellationTimeSec);
 			if ($assignedFor > $orderCancellationTimeSec && $totalReceived == 0) {
-				// Cancel the unpaid, expired order and retire its address. We do
-				// not recycle it: a payment could have landed after the last
-				// (possibly failed) explorer check that left total_received at 0.
-				self::retire_hd_address($hdRepo, $address, 'expired unpaid');
+				// Cancel the unpaid, expired order and quarantine its address for
+				// fresh-check verification before any reuse - a payment could
+				// have landed after the last (possibly failed) explorer check.
+				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'expired unpaid');
 
 				$orderNote = sprintf(
 					/* translators: 1: cryptocurrency ticker, 2: number of hours */
@@ -319,14 +321,78 @@ class NMM_Hd {
 	}
 
 	/**
-	 * Permanently retire a HD address whose order is dead. Marked 'dirty' so it
-	 * is excluded from the ready pool, get_pending and get_assigned, and can
-	 * never be claimed again - a HD address is single-use, and a cached
-	 * total_received cannot prove a late/unseen payment did not land on it.
+	 * Handle a HD address whose order is dead. If the cached total_received is
+	 * already non-zero the address definitely saw funds, so retire it ('dirty')
+	 * - never reuse an address money touched. Otherwise the cached zero cannot
+	 * be trusted (the explorer may have failed/lagged), so quarantine it: the
+	 * cron re-verifies it with fresh explorer checks before it may return to the
+	 * pool, which keeps pristine unused addresses reusable (so a run of
+	 * abandoned checkouts does not blow the wallet's gap limit) without ever
+	 * recycling one that received a late payment.
 	 */
-	private static function retire_hd_address($hdRepo, $address, $reason) {
-		$hdRepo->set_status($address, 'dirty');
-		NMM_Util::log(__FILE__, __LINE__, 'Retiring HD address ' . $address . ' (dirty): ' . $reason . '.');
+	private static function quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, $reason) {
+		if ((float) $totalReceived > 0) {
+			$hdRepo->set_status($address, 'dirty');
+			NMM_Util::log(__FILE__, __LINE__, 'Retiring HD address ' . $address . ' (dirty): ' . $reason . ', received ' . $totalReceived . '.');
+		}
+		else {
+			$hdRepo->set_quarantine($address, 'quarantine', time());
+			NMM_Util::log(__FILE__, __LINE__, 'Quarantining HD address ' . $address . ': ' . $reason . ' (fresh explorer checks will decide reuse).');
+		}
+	}
+
+	/**
+	 * Verify quarantined addresses with fresh explorer checks, spaced in time,
+	 * before deciding their fate. Requires two successful clean checks
+	 * ('quarantine' -> 'quarantine_verified' -> 'ready') so a pristine unused
+	 * address is returned to the pool (preserving the wallet gap limit), while
+	 * any address that turns out to have received funds is retired and any that
+	 * cannot be verified stays quarantined.
+	 */
+	public static function process_quarantined_addresses($cryptoId, $mpk, $requiredConfirmations, $hdMode, $quarantinePeriodSec) {
+		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
+
+		foreach ($hdRepo->get_quarantined() as $record) {
+			$address = $record['address'];
+			$status = $record['status'];
+			$lastChecked = (int) $record['last_checked'];
+
+			// Space fresh checks apart in time (and past the payment expiry).
+			if (time() - $lastChecked < $quarantinePeriodSec) {
+				continue;
+			}
+
+			try {
+				$freshReceived = self::get_total_received_for_address($cryptoId, $address, $requiredConfirmations);
+			}
+			catch (\Exception $e) {
+				$freshReceived = null; // explorer failure
+			}
+
+			if ($freshReceived === null) {
+				// Could not verify (explorer down, or coin has no checker) - keep
+				// it quarantined and try again after another interval.
+				$hdRepo->set_quarantine($address, $status, time());
+				continue;
+			}
+
+			if ($freshReceived > 0) {
+				// It received funds after all - retire permanently, never reuse.
+				$hdRepo->set_status($address, 'dirty');
+				NMM_Util::log(__FILE__, __LINE__, 'Quarantine: retiring ' . $address . ' (fresh check found ' . $freshReceived . ' received).');
+				continue;
+			}
+
+			// A clean fresh check. Require a second, later one before reuse.
+			if ($status === 'quarantine') {
+				$hdRepo->set_quarantine($address, 'quarantine_verified', time());
+			}
+			else {
+				$hdRepo->set_status($address, 'ready');
+				$hdRepo->set_order_amount($address, 0.0);
+				NMM_Util::log(__FILE__, __LINE__, 'Quarantine: recycling pristine unused address ' . $address . ' after two clean fresh checks.');
+			}
+		}
 	}
 
 	private static function is_dirty_address($cryptoId, $address) {

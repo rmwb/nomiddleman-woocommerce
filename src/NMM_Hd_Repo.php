@@ -173,6 +173,32 @@ class NMM_Hd_Repo {
 		return $results;
 	}
 
+	// Addresses awaiting quarantine verification before they may be reused.
+	public function get_quarantined() {
+		global $wpdb;
+
+		$results = $wpdb->get_results($wpdb->prepare(
+			"SELECT `order_id`, `address`, `status`, `last_checked`, `total_received` FROM `$this->tableName`
+			 WHERE `mpk` = %s
+			 AND `cryptocurrency` = %s
+			 AND `hd_mode` = %d
+			 AND (`status` = 'quarantine' OR `status` = 'quarantine_verified')",
+			$this->mpk, $this->cryptoId, $this->hdMode
+		), ARRAY_A);
+
+		return $results;
+	}
+
+	// Set a quarantine status and stamp the time of this check (last_checked),
+	// so the cron can space successive fresh explorer checks apart in time.
+	public function set_quarantine($address, $status, $checkedAt) {
+		global $wpdb;
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName` SET `status` = %s, `last_checked` = %d WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d",
+			$status, $checkedAt, $address, $this->cryptoId, $this->hdMode
+		));
+	}
+
 	public function set_total_received($address, $totalReceived) {
 		global $wpdb;
 		NMM_Util::log(__FILE__, __LINE__, 'Updating total received at ' . $address .' to: ' . $totalReceived);

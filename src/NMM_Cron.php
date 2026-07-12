@@ -62,6 +62,13 @@ function NMM_do_cron_job() {
 
 				NMM_Hd::buffer_ready_addresses($cryptoId, $mpk, $hdBufferAddressCount, $hdMode);
 				NMM_Hd::cancel_expired_addresses($cryptoId, $mpk, $hdOrderCancellationTimeSec, $hdMode);
+
+				// Re-verify quarantined (abandoned, unpaid) addresses with fresh
+				// explorer checks spaced at least this far apart, and past the
+				// payment expiry, before any are recycled. Filterable so a
+				// merchant can lengthen the wait.
+				$hdQuarantinePeriodSec = apply_filters('nmm_hd_quarantine_seconds', max($hdOrderCancellationTimeSec, 6 * HOUR_IN_SECONDS), $cryptoId);
+				NMM_Hd::process_quarantined_addresses($cryptoId, $mpk, $hdRequiredConfirmations, $hdMode, $hdQuarantinePeriodSec);
 			}
 		}
 

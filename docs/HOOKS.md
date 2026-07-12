@@ -106,6 +106,28 @@ payment — e.g. to turn it into an explorer link.
 apply_filters( 'nmm_order_txhash', $txHash, $cryptoId );
 ```
 
+### `nmm_hd_quarantine_seconds`
+
+Privacy Mode (HD) only. When an order dies without paying (cancelled, failed,
+expired, or deleted), its derived address is not reused immediately. Instead it
+is **quarantined** and re-checked against the block explorer; only an address
+that is confirmed to have *no* on-chain history after two successful fresh
+checks — spaced at least this many seconds apart, and past the payment expiry —
+is returned to the ready pool for reuse. Anything that received funds (or that
+cannot be verified) is never reused. This filter sets the minimum spacing
+between those checks (default: the coin's order-cancellation window, or 6 hours,
+whichever is larger). Raise it to be more conservative.
+
+```php
+apply_filters( 'nmm_hd_quarantine_seconds', $seconds, $cryptoId );
+```
+
+Reusing a **pristine, never-used** address is deliberate: it keeps a long run of
+abandoned checkouts from pushing a later *paid* address beyond your wallet's
+**gap limit** (the number of consecutive unused addresses a wallet scans from
+the seed — 20 by default in Electrum). See the "gap limit" note in the FAQ for
+the recommended wallet-side safeguard.
+
 ## Appearance
 
 ### `nmm_gateway_icon`
