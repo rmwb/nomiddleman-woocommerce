@@ -2156,6 +2156,13 @@ class NMM_Blockchain {
 				continue;
 			}
 
+			// Ignore zero/dust transfers. A 0-value TRC-20 transfer is valid
+			// on-chain and anyone can push one; it must never become a
+			// zero-amount transaction the matcher then has to reason about.
+			if (!is_numeric($transfer->quant) || (float) $transfer->quant <= 0) {
+				continue;
+			}
+
 			// quant is already in 1e-6 USDT units; Tron finality is fast, so
 			// confirmed transfers get the no-confirmation-tracking sentinel
 			$transactions[] = new NMM_Transaction($transfer->quant,
