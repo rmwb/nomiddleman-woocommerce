@@ -290,7 +290,33 @@ function NMM_update_hd_table() {
         $tableName = $wpdb->prefix . NMM_HD_TABLE;
         
         $query = "ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'";
-        $wpdb->query($query);        
+        $wpdb->query($query);
+    }
+
+    // 1.1 -> 1.2: guarantee no two rows share a (cryptocurrency, address) pair.
+    // Older installs predate the UNIQUE KEY now in NMM_create_hd_mpk_address_table();
+    // without it, a concurrent-derivation race could insert the same derived
+    // address twice and hand it to two different orders.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.1') {
+        $tableName = $wpdb->prefix . NMM_HD_TABLE;
+
+        // Collapse any pre-existing duplicates before adding the constraint,
+        // keeping the lowest id for each (cryptocurrency, address) pair.
+        $wpdb->query(
+            "DELETE t1 FROM `$tableName` t1
+             INNER JOIN `$tableName` t2
+             ON t1.cryptocurrency = t2.cryptocurrency
+             AND t1.address = t2.address
+             AND t1.id > t2.id"
+        );
+
+        // Add the unique key only if it is not already present.
+        $existing = $wpdb->get_results("SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'");
+        if (empty($existing)) {
+            $wpdb->query("ALTER TABLE `$tableName` ADD UNIQUE KEY `hd_address` (`cryptocurrency`, `address`)");
+        }
+
+        update_option('nmm_hd_table_version', '1.2');
     }
 
 }
