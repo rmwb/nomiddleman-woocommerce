@@ -456,4 +456,16 @@ function NMM_site_health_hd_math() {
 
 add_filter('woocommerce_payment_gateways', 'NMM_filter_gateways');
 
+// Allow the wallet URI schemes the plugin emits so esc_url() does not strip
+// them from "open in wallet" links (solana:, ethereum:, monero:, bitcoin: ...).
+function NMM_allowed_uri_protocols($protocols) {
+    foreach (array('bitcoin', 'litecoin', 'ethereum', 'monero', 'solana', 'dogecoin', 'bitcoincash') as $scheme) {
+        if (!in_array($scheme, $protocols, true)) {
+            $protocols[] = $scheme;
+        }
+    }
+    return $protocols;
+}
+add_filter('kses_allowed_protocols', 'NMM_allowed_uri_protocols');
+
 ?>

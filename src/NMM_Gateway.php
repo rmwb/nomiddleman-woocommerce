@@ -504,7 +504,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </button>
                 <p id="nmm-wallet-msg" aria-live="polite"></p>
             <?php elseif ($crypto->get_id() === 'SOL') : ?>
-                <p><a class="button alt" href="<?php echo esc_url($qrData); ?>"><?php esc_html_e('Open in Solana wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a></p>
+                <p><a class="button alt" href="<?php echo esc_url($qrData, array('solana')); ?>"><?php esc_html_e('Open in Solana wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a></p>
             <?php endif; ?>
 
             <p id="nmm-payment-status" class="nmm-payment-status"
