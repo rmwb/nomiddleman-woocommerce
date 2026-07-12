@@ -67,5 +67,40 @@ aok('  its record cancelled',                  rec_status($wpdb,$pt,$oExpPending
 aok('expired on-hold order cancelled',         ord_status($oExpOnHold) === 'cancelled');
 aok('  its record cancelled',                  rec_status($wpdb,$pt,$oExpOnHold) === 'cancelled');
 
+// --- Concurrency: order completes AFTER the claim, right before cancellation ---
+// The nmm_before_autopay_cancel hook fires immediately after the row is claimed
+// and before the final re-fetch. Completing the order there simulates a merchant
+// or verifier winning the race in that window; the re-fetch must catch it and
+// reconcile to paid instead of cancelling a now-paid order.
+$wpdb->query("DELETE FROM `$pt`");
+$oRace = mkorder('pending'); $ins($oRace, $expired);
+$raceFired = 0;
+$raceHook = function($orderId, $cryptoId, $address) use ($oRace, &$raceFired) {
+	if ($orderId != $oRace) { return; }
+	$raceFired++;
+	$o = wc_get_order($orderId);   // complete the order mid-transition
+	$o->payment_complete();
+	$o->save();
+};
+add_action('nmm_before_autopay_cancel', $raceHook, 10, 3);
+NMM_Payment::cancel_expired_payments();
+remove_action('nmm_before_autopay_cancel', $raceHook, 10);
+
+aok('race hook fired for claimed order',        $raceFired === 1, 'fired=' . $raceFired);
+aok('order paid mid-transition NOT cancelled',  ord_status($oRace) !== 'cancelled', 'status=' . ord_status($oRace));
+aok('  its record reconciled to paid',          rec_status($wpdb,$pt,$oRace) === 'paid');
+
+// --- Conditional claim: a row already moved out of 'unpaid' is not re-cancelled ---
+// Simulates the verifier having flipped the row to 'paid' before the cron runs;
+// claim_for_cancellation must report zero rows and the order must be left alone.
+$wpdb->query("DELETE FROM `$pt`");
+$oClaimed = mkorder('pending'); $ins($oClaimed, $expired);
+$wpdb->query($wpdb->prepare("UPDATE `$pt` SET status='paid' WHERE order_id=%d", $oClaimed));
+$repo = new NMM_Payment_Repo();
+aok('claim on already-paid row returns false',  $repo->claim_for_cancellation($oClaimed, '0.00100000') === false);
+NMM_Payment::cancel_expired_payments(); // no unpaid rows -> order stays pending
+aok('order left pending (claim lost)',          ord_status($oClaimed) === 'pending');
+aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) === 'paid');
+
 $wpdb->query("DELETE FROM `$pt`");
 echo $pass ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

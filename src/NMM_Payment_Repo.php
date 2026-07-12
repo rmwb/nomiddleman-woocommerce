@@ -84,6 +84,34 @@ class NMM_Payment_Repo {
 		));
 	}
 
+	/**
+	 * Atomically claim an unpaid payment row for cancellation. Flips the row to
+	 * 'cancelled' only WHERE it is still 'unpaid', so the expiry cron and the
+	 * payment verifier (which flips 'unpaid' -> 'paid') cannot both act on the
+	 * same row. Returns true only if this call was the one that transitioned the
+	 * row; false if another worker already moved it out of 'unpaid' (or on a DB
+	 * error, which is logged), in which case the caller must not cancel the order.
+	 */
+	public function claim_for_cancellation($orderId, $orderAmount) {
+		global $wpdb;
+
+		$affected = $wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = 'cancelled'
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d
+			 AND `status` = 'unpaid'",
+			$orderAmount, $orderId
+		));
+
+		if ($affected === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'claim_for_cancellation DB error for order ' . $orderId . ': ' . $wpdb->last_error, 'error');
+			return false;
+		}
+
+		return $affected > 0;
+	}
+
 	public function set_hash($orderId, $orderAmount, $hash) {
 		global $wpdb;
 

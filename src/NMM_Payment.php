@@ -312,9 +312,9 @@ class NMM_Payment {
 				$order = $orderId ? wc_get_order($orderId) : false;
 
 				if (!$order) {
-					// Order deleted - retire the orphaned payment record without
-					// constructing a WC_Order on a bad id.
-					$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
+					// Order deleted - retire the orphaned payment record. Claim it
+					// conditionally so a concurrent verifier still wins the row.
+					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
 					continue;
 				}
@@ -329,11 +329,45 @@ class NMM_Payment {
 				if (!$order->has_status(array('pending', 'on-hold'))) {
 					// Terminal non-paid or otherwise not awaiting payment - reconcile
 					// the record but leave the order alone.
-					$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
+					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
 					continue;
 				}
 
-				$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
+				// Atomically claim this row for cancellation. The verifier flips a
+				// matched row 'unpaid' -> 'paid'; this flips 'unpaid' -> 'cancelled'
+				// only while it is still 'unpaid'. If the claim affects zero rows the
+				// verifier already took the row and we must not cancel the order.
+				if (!$paymentRepo->claim_for_cancellation($orderId, $orderAmount)) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: cancellation claim lost for order ' . $orderId . '; another worker transitioned it first. Not cancelling.');
+					continue;
+				}
+
+				// Hook point immediately before the final transition. Integrations
+				// (and the concurrency test) can observe - or, in a genuine race,
+				// complete - the order here; the re-fetch below then reconciles.
+				do_action('nmm_before_autopay_cancel', $orderId, $cryptoId, $address);
+
+				// Final re-fetch after the claim to close the order-side window as
+				// far as WooCommerce allows. If the order was paid or advanced
+				// out-of-band after we claimed the row, reconcile the record and
+				// leave the order alone rather than cancelling a paid order.
+				$order = wc_get_order($orderId);
+
+				if (!$order) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' vanished after cancellation claim; record already retired.');
+					continue;
+				}
+
+				if ($order->is_paid()) {
+					$paymentRepo->set_status($orderId, $orderAmount, 'paid');
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' was paid after cancellation claim; reconciled record to paid, not cancelling.');
+					continue;
+				}
+
+				if (!$order->has_status(array('pending', 'on-hold'))) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' advanced to ' . $order->get_status() . ' after cancellation claim; leaving order, record cancelled.');
+					continue;
+				}
 
 				$orderNote = sprintf(
 					/* translators: 1: cryptocurrency ticker, 2: number of hours */
@@ -342,8 +376,8 @@ class NMM_Payment {
 					round($paymentCancellationTimeSec/3600, 1));
 
 				add_filter('woocommerce_email_subject_customer_note', 'NMM_change_cancelled_email_note_subject_line', 1, 2);
-	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);   
-	    		
+	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);
+
 				$order->update_status('wc-cancelled');
 				$order->add_order_note($orderNote, true);
 
