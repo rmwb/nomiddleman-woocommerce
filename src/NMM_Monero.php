@@ -84,7 +84,7 @@ class NMM_Monero {
 			// pinned (plan_request sets pin=false): there is no DNS to rebind, and
 			// a RESOLVE entry for an IPv6 literal is malformed.
 			if ($plan['pin'] && defined('CURLOPT_RESOLVE') && $target['ip'] !== '') {
-				$curlOpts[CURLOPT_RESOLVE] = array($target['host'] . ':' . $target['port'] . ':' . $target['ip']);
+				$curlOpts[CURLOPT_RESOLVE] = array(self::curl_resolve_entry($target['host'], $target['port'], $target['ip']));
 			}
 			curl_setopt_array($ch, $curlOpts);
 			$body = curl_exec($ch);
@@ -155,9 +155,14 @@ class NMM_Monero {
 		}
 
 		$host = $parts['host'];
+		// parse_url keeps an IPv6 literal bracketed ("[::1]"); strip the brackets
+		// so it validates as an IP and can be pinned/vetted as a literal.
+		if (strlen($host) > 1 && $host[0] === '[' && substr($host, -1) === ']') {
+			$host = substr($host, 1, -1);
+		}
 		$port = isset($parts['port']) ? (int) $parts['port'] : (strtolower($parts['scheme']) === 'https' ? 443 : 80);
 		$isLiteral = (bool) filter_var($host, FILTER_VALIDATE_IP);
-		$ip = $isLiteral ? $host : gethostbyname($host);
+		$ip = $isLiteral ? $host : self::resolve_host($host);
 
 		$isPrivate = (strtolower($host) === 'localhost') || self::is_private_or_reserved_ip($ip);
 		if ($isPrivate) {
@@ -234,6 +239,39 @@ class NMM_Monero {
 			return true;
 		}
 		return !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+	}
+
+	// Resolve a hostname to a single IP we will pin. Prefer an A (IPv4) record;
+	// fall back to AAAA so an IPv6-only self-hosted RPC endpoint still resolves
+	// (gethostbyname() is IPv4-only and returns the host unchanged for AAAA-only
+	// names, which would otherwise be misread as unresolvable). Returns '' when
+	// nothing resolves, so the caller rejects the target rather than guessing.
+	private static function resolve_host($host) {
+		$v4 = gethostbyname($host);
+		if (filter_var($v4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+			return $v4;
+		}
+
+		if (function_exists('dns_get_record')) {
+			$records = @dns_get_record($host, DNS_AAAA);
+			if (is_array($records)) {
+				foreach ($records as $rec) {
+					if (!empty($rec['ipv6']) && filter_var($rec['ipv6'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+						return $rec['ipv6'];
+					}
+				}
+			}
+		}
+
+		return '';
+	}
+
+	// Build a CURLOPT_RESOLVE entry (HOST:PORT:ADDRESS). An IPv6 address must be
+	// bracketed or its own colons make the entry ambiguous/malformed. Pure so it
+	// can be unit-tested.
+	public static function curl_resolve_entry($host, $port, $ip) {
+		$addr = (strpos($ip, ':') !== false) ? '[' . $ip . ']' : $ip;
+		return $host . ':' . (int) $port . ':' . $addr;
 	}
 
 	// Fresh subaddress for an order; throws so the existing checkout

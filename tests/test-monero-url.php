@@ -58,6 +58,21 @@ $loopLiteral = NMM_Monero::validate_rpc_url('http://127.0.0.1:18082');
 mok('loopback literal: is_literal true',  $loopLiteral['is_literal'] === true);
 mok('loopback literal: is_private true',  $loopLiteral['is_private'] === true);
 
+// IPv6 literals: brackets stripped, classified as literal, address preserved.
+$v6Public = NMM_Monero::validate_rpc_url('http://[2001:4860:4860::8888]:18082');
+mok('ipv6 public literal: is_literal',    is_array($v6Public) && $v6Public['is_literal'] === true);
+mok('ipv6 public literal: ip debracketed',is_array($v6Public) && $v6Public['ip'] === '2001:4860:4860::8888');
+mok('ipv6 public literal: not private',   is_array($v6Public) && $v6Public['is_private'] === false);
+$GLOBALS['nmm_is_ms'] = false;
+$v6Loop = NMM_Monero::validate_rpc_url('http://[::1]:18082');
+mok('ipv6 loopback: is_literal',          is_array($v6Loop) && $v6Loop['is_literal'] === true);
+mok('ipv6 loopback: is_private',          is_array($v6Loop) && $v6Loop['is_private'] === true);
+mok('ipv6 loopback: ip preserved',        is_array($v6Loop) && $v6Loop['ip'] === '::1');
+
+// curl_resolve_entry: IPv6 addresses must be bracketed in HOST:PORT:ADDRESS.
+mok('resolve entry ipv4 plain',   NMM_Monero::curl_resolve_entry('wallet.example.com', 443, '93.184.216.34') === 'wallet.example.com:443:93.184.216.34');
+mok('resolve entry ipv6 bracketed', NMM_Monero::curl_resolve_entry('wallet.example.com', 18082, '2001:db8::1') === 'wallet.example.com:18082:[2001:db8::1]');
+
 // --- plan_request: transport must never resolve away from the vetted address ---
 // plan($target, $hasCurl, $canPin, $hasCreds)
 function plan($target, $curl, $canPin, $creds) { return NMM_Monero::plan_request($target, $curl, $canPin, $creds); }
