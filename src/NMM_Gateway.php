@@ -188,6 +188,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     return;
                 }
 
+                // Do not re-display payment instructions for an order that is no
+                // longer awaiting payment. Its address may have been recycled to
+                // a different order, so a late payment would credit someone else.
+                if ($order->has_status(array('cancelled', 'failed'))) {
+                    echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+                    return;
+                }
+
                 $this->handle_thank_you_refresh(
                     $order->get_meta('crypto_type_id'),
                     $existingWalletAddress,

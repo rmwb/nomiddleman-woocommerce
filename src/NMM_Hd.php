@@ -244,6 +244,20 @@ class NMM_Hd {
 			$address = $record['address'];
 			$orderId = $record['order_id'];
 
+			// Never cancel an order that is already paid or has moved past the
+			// awaiting-payment state (e.g. the merchant verified payment
+			// out-of-band while an explorer outage kept total_received at 0).
+			$order = $orderId ? wc_get_order($orderId) : false;
+			if (!$order) {
+				// The order was deleted; recycle the dangling address safely.
+				$hdRepo->set_status($address, 'ready');
+				$hdRepo->set_order_amount($address, 0.0);
+				continue;
+			}
+			if ($order->is_paid() || !$order->has_status(array('on-hold', 'pending'))) {
+				continue;
+			}
+
 			$assignedFor = time() - $assignedAt;
 			NMM_Util::log(__FILE__, __LINE__, 'address ' . $address . ' has been assigned for ' . $assignedFor . '... cancel time: ' . $orderCancellationTimeSec);
 			if ($assignedFor > $orderCancellationTimeSec && $totalReceived == 0) {
@@ -251,7 +265,6 @@ class NMM_Hd {
 				$hdRepo->set_status($address, 'ready');
 				$hdRepo->set_order_amount($address, 0.0);
 
-				$order = new WC_Order($orderId);
 				$orderNote = sprintf(
 					/* translators: 1: cryptocurrency ticker, 2: number of hours */
 					__('Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce'),
