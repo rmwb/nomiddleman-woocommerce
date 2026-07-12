@@ -73,7 +73,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
         $validCryptos = $nmmSettings->get_valid_selected_cryptos();
-        
+        $excludedCryptoIds = array();
+
         foreach ($validCryptos as $crypto) {
             $cryptoId = $crypto->get_id();
 
@@ -91,13 +92,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     }
                     catch ( \Exception $e) {
                         NMM_Util::log(__FILE__, __LINE__, 'UNABLE TO GENERATE HD ADDRESS FOR ' . $crypto->get_name() . ' ADMIN MUST BE NOTIFIED. REMOVING CRYPTO FROM PAYMENT OPTIONS' . $e->getTraceAsString());
-                        unset($validCryptos[$cryptoId]);
+                        $excludedCryptoIds[] = $cryptoId;
                     }
                 }
             }
         }
-        
-        $selectOptions = $this->get_select_options_for_valid_cryptos($validCryptos);
+
+        $selectOptions = $this->get_select_options_for_valid_cryptos($excludedCryptoIds);
 
         woocommerce_form_field(
             'nmm_currency_id', array(
@@ -408,16 +409,20 @@ class NMM_Gateway extends WC_Payment_Gateway {
         <?php
     }
 
-    // convert array of cryptos to option array
-    private function get_select_options_for_valid_cryptos() {
+    // convert array of cryptos to option array, excluding any coin IDs we know
+    // cannot currently accept payment (e.g. HD address generation failed)
+    private function get_select_options_for_valid_cryptos($excludedCryptoIds = array()) {
         $selectOptionArray = array();
 
         $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
-        
+
         foreach (NMM_Cryptocurrencies::get_alpha() as $crypto) {
+            if (in_array($crypto->get_id(), $excludedCryptoIds, true)) {
+                continue;
+            }
             if ($nmmSettings->crypto_selected_and_valid($crypto->get_id())) {
                 $selectOptionArray[$crypto->get_id()] = $crypto->get_name();
-            }            
+            }
         }
 
         return $selectOptionArray;
