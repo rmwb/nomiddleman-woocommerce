@@ -2202,7 +2202,9 @@ class NMM_Blockchain {
 		$pageSize = 100;        // signatures per getSignaturesForAddress call
 		$maxPages = 5;          // safety bound on getSignatures pages per tick
 		$inspectBudget = 25;    // <=25 getTransaction calls per address per tick
-		$retryCap = 50;         // bounded queue of signatures whose detail lookup failed
+		$retryCap = 50;                        // bounded queue of failed-detail signatures
+		$retryBudget = intdiv($inspectBudget, 2); // at most half the budget on retries, so the sweep always advances
+		$maxRetryAttempts = 8;                 // give up on a signature after this many failed lookups
 
 		$cursorKey = 'nmm_sol_cursor_' . md5($address);
 		$retryKey  = 'nmm_sol_retry_' . md5($address);
@@ -2214,36 +2216,43 @@ class NMM_Blockchain {
 			$before = null;
 		}
 
-		$retryQueue = get_transient($retryKey);
-		if (!is_array($retryQueue)) {
-			$retryQueue = array();
+		// Retry queue is a map: signature => failed-attempt count. Preserved
+		// insertion order gives us fair rotation (see below).
+		$retryMap = get_transient($retryKey);
+		if (!is_array($retryMap)) {
+			$retryMap = array();
 		}
 
 		$transactions = array();
 		$hardError = false;
 
-		// Phase 0: retry signatures whose detail lookup failed on an earlier tick
-		// BEFORE advancing the sweep, so a transient getTransaction failure (rate
-		// limit, timeout, incomplete body) never means a real payment waits for
-		// the whole sweep to restart. Advancing the sweep cursor past a candidate
-		// is only safe because any candidate that fails below is re-queued here.
-		$stillFailing = array();
+		// Phase 0: retry signatures whose detail lookup failed earlier, but spend
+		// at most $retryBudget of the tick here so a batch of persistently-failing
+		// signatures can never starve the sweep (which would freeze the cursor and
+		// stop new payments from ever being inspected). Attempt the oldest entries
+		// (front of the map); on failure move them to the BACK so every queued
+		// signature is rotated through over successive ticks, and drop (with a
+		// prominent log) any that has failed too many times - it will be re-reached
+		// on the next full sweep anyway.
 		$retriesUsed = 0;
-		foreach ($retryQueue as $retrySig) {
-			if ($retriesUsed >= $inspectBudget) {
-				$stillFailing[] = $retrySig; // over budget this tick; keep for later
-				continue;
-			}
+		foreach (array_slice(array_keys($retryMap), 0, $retryBudget) as $retrySig) {
 			$retriesUsed++;
+			$attempts = $retryMap[$retrySig] + 1;
+			unset($retryMap[$retrySig]); // remove; re-add at the back only if still failing
+
 			list($ok, $tx) = self::sol_inspect_signature($rpc, $retrySig, $address);
-			if (!$ok) {
-				$stillFailing[] = $retrySig; // still failing; keep retrying
+			if ($ok) {
+				if ($tx !== null) {
+					$transactions[] = $tx;
+				}
 			}
-			elseif ($tx !== null) {
-				$transactions[] = $tx;
+			elseif ($attempts >= $maxRetryAttempts) {
+				NMM_Util::log(__FILE__, __LINE__, 'Giving up on Solana signature ' . $retrySig . ' after ' . $attempts . ' failed detail lookups; it will be re-examined on the next sweep.');
+			}
+			else {
+				$retryMap[$retrySig] = $attempts; // re-add at the back with incremented count
 			}
 		}
-		$retryQueue = $stillFailing;
 
 		// Phase 1: from the cursor, page older and collect the remaining budget of
 		// signatures to inspect this tick.
@@ -2338,12 +2347,12 @@ class NMM_Blockchain {
 		}
 
 		// Phase 2: inspect this tick's sweep candidates. A candidate whose detail
-		// lookup fails is added to the retry queue (Phase 0 next tick), so the
+		// lookup fails is added to the retry map (Phase 0 next tick), so the
 		// already-advanced cursor never drops it.
 		foreach ($candidates as $entry) {
 			list($ok, $tx) = self::sol_inspect_signature($rpc, $entry->signature, $address);
 			if (!$ok) {
-				$retryQueue[] = $entry->signature;
+				$retryMap[$entry->signature] = isset($retryMap[$entry->signature]) ? $retryMap[$entry->signature] + 1 : 1;
 			}
 			elseif ($tx !== null) {
 				$transactions[] = $tx;
@@ -2360,13 +2369,13 @@ class NMM_Blockchain {
 			delete_transient($cursorKey);
 		}
 
-		// Persist the bounded retry queue (drop the oldest if it overflows; they
-		// will be re-reached when the sweep next restarts).
-		if (count($retryQueue) > $retryCap) {
-			$retryQueue = array_slice($retryQueue, -$retryCap);
+		// Persist the bounded retry map (drop the oldest entries if it overflows;
+		// they will be re-reached when the sweep next restarts).
+		if (count($retryMap) > $retryCap) {
+			$retryMap = array_slice($retryMap, -$retryCap, null, true);
 		}
-		if (!empty($retryQueue)) {
-			set_transient($retryKey, $retryQueue, 6 * HOUR_IN_SECONDS);
+		if (!empty($retryMap)) {
+			set_transient($retryKey, $retryMap, 6 * HOUR_IN_SECONDS);
 		}
 		else {
 			delete_transient($retryKey);

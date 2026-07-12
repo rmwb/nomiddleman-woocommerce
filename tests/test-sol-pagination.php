@@ -207,4 +207,61 @@ ok('  recovered on the next tick via retry queue (not sweep restart)', $foundTic
 ok('  payment not found on tick 1 (its lookup failed then)', $foundTickD !== 1);
 ok('  per-tick budget held during retry', $budgetOkD);
 
+// ---- Scenario E: 25 permanently failing signatures + a valid new payment ----
+// Positions 0-24 always return an (unavailable) retryable result; a real payment
+// sits at position 25. The failing 25 must never starve the sweep - the payment
+// has to be inspected within a couple of ticks, budget held every tick.
+$ADDR5 = 'STARVE555555555555555555555555555555555555555';
+$PAYSIG5 = 'sig00025';
+$now = time();
+$ledgerE = array();
+for ($i = 0; $i < 120; $i++) {
+	$ledgerE[] = array('sig' => sprintf('sig%05d', $i), 'blockTime' => $now - 5 - $i, 'delta' => ($i === 25) ? 6600000 : 0);
+}
+$idxE = array();
+foreach ($ledgerE as $n => $r) { $idxE[$r['sig']] = $n; }
+
+$GLOBALS['nmm_http_handler'] = function ($url, $method, $postBody, $headers) use ($ADDR5, $ledgerE, $idxE, $now) {
+	$req = json_decode($postBody, true);
+	if ($req['method'] === 'getSignaturesForAddress') {
+		$GLOBALS['nmm_getsig_calls']++;
+		$opts = $req['params'][1];
+		$limit = (int) $opts['limit'];
+		$start = (isset($opts['before']) && isset($idxE[$opts['before']])) ? $idxE[$opts['before']] + 1 : 0;
+		$out = array();
+		for ($n = $start; $n < count($ledgerE) && count($out) < $limit; $n++) {
+			$out[] = array('signature' => $ledgerE[$n]['sig'], 'blockTime' => $ledgerE[$n]['blockTime'], 'err' => null);
+		}
+		return array('body' => json_encode(array('result' => $out)), 'response' => array('code' => 200));
+	}
+	$sig = $req['params'][0];
+	$GLOBALS['nmm_gettx_calls'][] = $sig;
+	$pos = isset($idxE[$sig]) ? $idxE[$sig] : -1;
+	if ($pos >= 0 && $pos <= 24) {
+		// permanently unavailable => retryable failure, forever
+		return array('body' => json_encode(array('result' => null)), 'response' => array('code' => 200));
+	}
+	$delta = ($pos >= 0) ? $ledgerE[$pos]['delta'] : 0;
+	$body = array('result' => array(
+		'blockTime' => $now,
+		'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => $ADDR5)))),
+		'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000 + $delta)),
+	));
+	return array('body' => json_encode($body), 'response' => array('code' => 200));
+};
+
+$foundTickE = -1;
+$budgetOkE = true;
+for ($t = 1; $t <= 6; $t++) {
+	$r = tick($ADDR5, $LIFE);
+	if (count($GLOBALS['nmm_gettx_calls']) > 25) { $budgetOkE = false; }
+	foreach ($r['transactions'] as $tx) {
+		if ($tx->get_hash() === $PAYSIG5) { $foundTickE = $t; break; }
+	}
+	if ($foundTickE > 0) { break; }
+}
+ok('valid payment found despite 25 permanently-failing retries', $foundTickE > 0, '(tick ' . $foundTickE . ')');
+ok('  found quickly (sweep not starved by retries)', $foundTickE > 0 && $foundTickE <= 3, '(tick ' . $foundTickE . ')');
+ok('  per-tick budget held with a full failing queue', $budgetOkE);
+
 exit($failed ? 1 : 0);
