@@ -66,7 +66,7 @@ class NMM_Payment {
 			}
 
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
-				NMM_Util::log(__FILE__, __LINE__, '---Collision occurred for old transaction, skipping....');
+				NMM_Util::log(__FILE__, __LINE__, '---Collision occurred for old transaction, skipping....', 'warning');
 				continue;
 			}
 
@@ -304,10 +304,36 @@ class NMM_Payment {
 				$orderId = $paymentRecord['order_id'];
 				$orderAmount = $paymentRecord['order_amount'];
 				$address = $paymentRecord['address'];
-				
-				$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
 
-				$order = new WC_Order($orderId);
+				// The unpaid rows were snapshotted earlier; re-check the live order
+				// right before touching state, because a merchant, webhook or the
+				// verifier can complete the order in between. Never cancel one that
+				// has already been paid or is no longer awaiting payment.
+				$order = $orderId ? wc_get_order($orderId) : false;
+
+				if (!$order) {
+					// Order deleted - retire the orphaned payment record without
+					// constructing a WC_Order on a bad id.
+					$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
+					continue;
+				}
+
+				if ($order->is_paid()) {
+					// Paid out-of-band since the snapshot - reconcile the record to
+					// paid so the cron stops matching it, and do not cancel.
+					$paymentRepo->set_status($orderId, $orderAmount, 'paid');
+					continue;
+				}
+
+				if (!$order->has_status(array('pending', 'on-hold'))) {
+					// Terminal non-paid or otherwise not awaiting payment - reconcile
+					// the record but leave the order alone.
+					$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
+					continue;
+				}
+
+				$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
 
 				$orderNote = sprintf(
 					/* translators: 1: cryptocurrency ticker, 2: number of hours */
