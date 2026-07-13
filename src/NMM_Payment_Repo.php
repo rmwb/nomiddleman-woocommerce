@@ -66,13 +66,23 @@ class NMM_Payment_Repo {
 	public function get_distinct_unpaid_addresses() {
 		global $wpdb;
 
-		// Stable ordering so the cron's persisted fair-sweep cursor is meaningful
-		// across ticks (see NMM_Payment::check_all_addresses_for_matching_payment).
-		// BINARY makes the sort byte-wise so it matches the PHP strcmp() the cursor
-		// resume logic uses, regardless of the column's (case-insensitive) collation.
-		$query = "SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid' ORDER BY BINARY `cryptocurrency`, BINARY `address`";
+		$results = $wpdb->get_results("SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'", ARRAY_A);
 
-		$results = $wpdb->get_results($query, ARRAY_A);
+		if (!is_array($results)) {
+			return array();
+		}
+
+		// Sort in PHP, byte-wise, so the order the cron's persisted fair-sweep
+		// cursor relies on exactly matches the strcmp() comparison it resumes with
+		// (see NMM_Payment::check_all_addresses_for_matching_payment). Doing it here
+		// rather than in SQL avoids two traps: an `ORDER BY BINARY <expr>` not in
+		// the SELECT DISTINCT list is rejected by MySQL 8 (error 3065), and a
+		// collation-dependent SQL sort would not match the cursor comparison anyway.
+		usort($results, function ($a, $b) {
+			$cryptoCmp = strcmp($a['cryptocurrency'], $b['cryptocurrency']);
+
+			return $cryptoCmp !== 0 ? $cryptoCmp : strcmp($a['address'], $b['address']);
+		});
 
 		return $results;
 	}
