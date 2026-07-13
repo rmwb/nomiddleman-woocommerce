@@ -85,6 +85,35 @@ NMM_Payment::check_all_addresses_for_matching_payment($lifetime);
 sok('empty backlog: no addresses checked',        count($GLOBALS['as_checked']) === 0);
 sok('empty backlog: no XMR fetch',                $GLOBALS['as_fetches'] === 0);
 
+// Adaptive budget: when the backlog is large enough that a full sweep at the
+// baseline would exceed the matching lifetime, the budget rises so every address
+// is still re-checked within the lifetime - otherwise a payment arriving just
+// after its address was scanned would be older than the lifetime when revisited
+// and rejected forever. Baseline 10, lifetime 600s -> sweepTicks = floor(300/60)
+// = 5, so budget = max(10, ceil(100/5)) = 20.
+remove_all_filters('nmm_autopay_scan_budget');
+add_filter('nmm_autopay_scan_budget', function () { return 10; });
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+$bigN = 100;
+$bigRows = array();
+for ($i = 0; $i < $bigN; $i++) { $bigRows[] = $wpdb->prepare("('xmrbig_%03d','XMR','unpaid',%d,%d,'0.00100000',0)", $i, time(), 720000 + $i); }
+$wpdb->query("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES " . implode(',', $bigRows));
+
+$shortLifetime = 600; // 10 minutes
+$GLOBALS['as_checked'] = array();
+NMM_Payment::check_all_addresses_for_matching_payment($shortLifetime);
+sok('budget rises above baseline to cover lifetime', count($GLOBALS['as_checked']) === 20, 'per-tick=' . count($GLOBALS['as_checked']) . ' (baseline 10)');
+
+$adaptiveCovered = array();
+foreach ($GLOBALS['as_checked'] as $a) { $adaptiveCovered[$a] = true; }
+for ($t = 1; $t < 5; $t++) {
+	$GLOBALS['as_checked'] = array();
+	NMM_Payment::check_all_addresses_for_matching_payment($shortLifetime);
+	foreach ($GLOBALS['as_checked'] as $a) { $adaptiveCovered[$a] = true; }
+}
+sok('adaptive: full sweep within the lifetime window', count($adaptiveCovered) === $bigN, 'covered=' . count($adaptiveCovered) . '/' . $bigN);
+
 remove_all_filters('nmm_autopay_scan_budget');
 remove_all_actions('nmm_autopay_address_checked');
 remove_all_actions('nmm_xmr_account_fetch');

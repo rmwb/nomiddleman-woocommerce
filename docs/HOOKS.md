@@ -143,15 +143,21 @@ the recommended wallet-side safeguard.
 
 ### `nmm_autopay_scan_budget`
 
-The maximum number of distinct unpaid payment addresses the Autopay verifier
+The **baseline** number of distinct unpaid payment addresses the Autopay verifier
 checks per cron tick (default `50`). Each non-Monero address costs a block-explorer
-request, so this bounds the external work a large backlog of abandoned, unpaid
-orders can trigger under the background job's lock — stopping it from starving
-payment, expiry, HD and Solana work. A persisted fair cursor resumes after the
-last address checked and wraps around, so every address is still checked within a
-few ticks. Monero is already cheap regardless of this value: an account's incoming
-transfers are fetched once per tick and grouped by subaddress locally. Raise it if
-you have a large backlog and explorer headroom; lower it to be gentler.
+request, so spreading the work with a persisted fair cursor (which resumes after
+the last address checked and wraps around) keeps a large backlog of abandoned,
+unpaid orders from holding the background job's lock for one long tick and starving
+payment, expiry, HD and Solana work.
+
+This is a floor, not a hard cap: the plugin raises the budget above it when a
+backlog is large enough that sweeping it at the baseline would take longer than the
+payment-matching window, because an address must be re-checked within that window
+or a just-arrived payment could age out before it is seen. Monero is cheap
+regardless of the value — an account's recent incoming transfers are fetched once
+per tick and grouped by subaddress locally. Raise the baseline if you want more
+frequent checks and have explorer headroom; lower it to be gentler on explorers for
+small backlogs.
 
 ```php
 apply_filters( 'nmm_autopay_scan_budget', $limit );

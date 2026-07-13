@@ -20,15 +20,26 @@ class NMM_Payment {
 		$cryptos = NMM_Cryptocurrencies::get();
 		$total = count($addressesToCheck);
 
-		// Bound the addresses checked per tick so a large backlog of abandoned,
-		// unpaid orders cannot hold the cron lock and starve payment, expiry, HD
-		// and Solana work. The persisted cursor makes the sweep fair: each tick
-		// resumes after the last address checked and wraps around, so every
-		// address is still checked within a few ticks.
-		$budget = (int) apply_filters('nmm_autopay_scan_budget', 50);
-		if ($budget < 1) {
-			$budget = 1;
+		// Spread the per-tick work with a persisted cursor so a large backlog of
+		// abandoned, unpaid orders cannot hold the cron lock for one long tick and
+		// starve payment, expiry, HD and Solana work. The baseline budget keeps
+		// normal stores gentle on explorers.
+		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
+		if ($baseBudget < 1) {
+			$baseBudget = 1;
 		}
+
+		// Correctness floor on the budget: every address MUST be re-checked within
+		// the matching lifetime, or a payment that arrives just after its address
+		// is scanned would be older than $transactionLifetime when the address is
+		// finally revisited and would be rejected forever. So guarantee a full
+		// sweep within half the lifetime (2x margin for late cron runs), raising
+		// the budget above the baseline for a large backlog when necessary. The
+		// cron fires about once a minute (Action Scheduler / WP-Cron fallback).
+		$cronIntervalSec = 60;
+		$sweepTicks = max(1, (int) floor(max($cronIntervalSec, (int) $transactionLifetime / 2) / $cronIntervalSec));
+		$budget = max($baseBudget, (int) ceil($total / $sweepTicks));
+
 		$take = min($budget, $total);
 
 		// Resume after the address the previous tick stopped on. If that address
