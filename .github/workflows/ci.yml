@@ -84,9 +84,11 @@ jobs:
           coverage: none
       - name: Offline Solana deep-sweep, budget and cursor tests
         run: php tests/test-sol-pagination.php
+      - name: Monero RPC URL SSRF-guard tests
+        run: php tests/test-monero-url.php
 
-  solana-retry-queue:
-    name: Solana durable retry queue (WordPress + MariaDB)
+  db-integration:
+    name: Autopay + retry queue (WordPress + WooCommerce + MariaDB)
     runs-on: ubuntu-latest
     services:
       mariadb:
@@ -118,18 +120,20 @@ jobs:
           wp config create --path=wp --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306
           wp core install --path=wp --url=http://localhost --title=CI \
             --admin_user=admin --admin_password=admin --admin_email=ci@example.com --skip-email
-      - name: Activate plugin (WooCommerce not required for this test)
+      - name: Install WooCommerce and activate the plugin
         run: |
+          wp plugin install woocommerce --activate --path=wp
           ln -s "$GITHUB_WORKSPACE/plugin" wp/wp-content/plugins/nomiddleman-crypto-payments-for-woocommerce
           wp plugin activate nomiddleman-crypto-payments-for-woocommerce --path=wp
-      - name: Run durable retry queue test (must run, not skip)
+      - name: Durable Solana retry queue test (must run, not skip)
         run: |
           OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-sol-retry.php" --path=wp 2>&1)
           echo "$OUT"
-          if echo "$OUT" | grep -qi "skipped"; then
-            echo "::error::retry test skipped - database not available"; exit 1
-          fi
-          if ! echo "$OUT" | grep -q "SOL-RETRY (durable queue) CHECKS PASSED"; then
-            echo "::error::retry test did not pass"; exit 1
-          fi
-          echo "durable retry queue test passed"
+          echo "$OUT" | grep -qi "skipped" && { echo "::error::retry test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "SOL-RETRY (durable queue) CHECKS PASSED" || { echo "::error::retry test did not pass"; exit 1; }
+      - name: Autopay expiry vs order-status test (must run, not skip)
+        run: |
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-autopay-cancel.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -qi "skipped" && { echo "::error::autopay test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "AUTOPAY-CANCEL CHECKS PASSED" || { echo "::error::autopay test did not pass"; exit 1; }

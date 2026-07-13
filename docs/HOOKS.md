@@ -178,6 +178,31 @@ White-labeling of the admin settings page: the browser title, the wp-admin
 menu label, and the heading on the settings screen. Each receives the
 default string.
 
+### `nmm_xmr_allow_private_rpc`
+
+Whether the merchant-configured Monero wallet RPC URL may point at a private,
+loopback, or link-local address. Default: allowed on single-site (the merchant
+controls the host), blocked on multisite (site admins are not host admins). The
+`NMM_XMR_ALLOW_PRIVATE_RPC` constant sets the default; this filter can override
+per URL. Only ever loosen this for an RPC endpoint you intentionally run on a
+trusted private network.
+
+```php
+apply_filters( 'nmm_xmr_allow_private_rpc', $allowed, $url, $host, $ip );
+// or: define( 'NMM_XMR_ALLOW_PRIVATE_RPC', true );
+```
+
+### `nmm_debug_logging`
+
+Whether verbose debug/info tracing is written to the log (WooCommerce > Status >
+Logs, source `nomiddleman`). Warnings and errors are always logged regardless.
+Default follows `WP_DEBUG`; the `NMM_DEBUG_LOG` constant overrides it.
+
+```php
+apply_filters( 'nmm_debug_logging', $enabled );
+// or: define( 'NMM_DEBUG_LOG', true );
+```
+
 ## Advanced / extension hooks
 
 These exist for the legacy paid Privacy extension and are rarely useful

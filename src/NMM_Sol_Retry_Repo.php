@@ -63,7 +63,7 @@ class NMM_Sol_Retry_Repo {
 			$address, $signature, $now, $now, (int) $blockTime
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry enqueue failed for ' . $signature . ': ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry enqueue failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 		return true;
@@ -81,7 +81,7 @@ class NMM_Sol_Retry_Repo {
 			$attempts, $nextRetryAt, $address, $signature
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry reschedule failed for ' . $signature . ': ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry reschedule failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 		return true;
@@ -99,7 +99,7 @@ class NMM_Sol_Retry_Repo {
 			$address, $signature
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry remove failed for ' . $signature . ': ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry remove failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 		return true;
@@ -127,7 +127,7 @@ class NMM_Sol_Retry_Repo {
 			$address, (int) $windowCutoffBlockTime, (int) $limit
 		));
 		if ($byBlock === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry block-time expiry failed for ' . $address . ': ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry block-time expiry failed for ' . $address . ': ' . $wpdb->last_error, 'error');
 			return -1;
 		}
 
@@ -136,7 +136,7 @@ class NMM_Sol_Retry_Repo {
 			$address, (int) $retentionCutoffFirstFailed, (int) $limit
 		));
 		if ($byRetention === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry retention expiry failed for ' . $address . ': ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry retention expiry failed for ' . $address . ': ' . $wpdb->last_error, 'error');
 			return -1;
 		}
 
@@ -160,7 +160,7 @@ class NMM_Sol_Retry_Repo {
 			(int) $cutoffFirstFailed, (int) $limit
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry global cleanup failed: ' . $wpdb->last_error);
+			NMM_Util::log(__FILE__, __LINE__, 'Solana retry global cleanup failed: ' . $wpdb->last_error, 'error');
 			return -1;
 		}
 		return (int) $result;

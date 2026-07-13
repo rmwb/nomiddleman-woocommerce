@@ -25,15 +25,11 @@ class NMM_Payment {
 	}
 
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
-		global $woocommerce;
-		$paymentRepo = new NMM_Payment_Repo();
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
-		
 		$cryptoId = $crypto->get_id();
 
 		NMM_Util::log(__FILE__, __LINE__, '===========================================================================');
 		NMM_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
-		
+
 		try {
 			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
 		}
@@ -41,9 +37,28 @@ class NMM_Payment {
 			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId);
 			return;
 		}
-		
-		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));	
 
+		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
+
+		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
+	}
+
+	/**
+	 * Match already-fetched transactions for one address against its unpaid
+	 * orders, then claim/complete or reconcile. Split out from the network fetch
+	 * so the matching, race-claim and consumed-tx logic can be exercised directly
+	 * in tests with injected NMM_Transaction objects (no external calls).
+	 *
+	 * @param NMM_Cryptocurrency $crypto
+	 * @param string             $address
+	 * @param NMM_Transaction[]  $transactions
+	 * @param int                $transactionLifetime
+	 */
+	public static function process_address_transactions($crypto, $address, $transactions, $transactionLifetime) {
+		$paymentRepo = new NMM_Payment_Repo();
+		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+
+		$cryptoId = $crypto->get_id();
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
@@ -66,7 +81,8 @@ class NMM_Payment {
 			}
 
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
-				NMM_Util::log(__FILE__, __LINE__, '---Collision occurred for old transaction, skipping....');
+				// Ordinary: we have already processed this tx. Expected, not a warning.
+				NMM_Util::log(__FILE__, __LINE__, 'Already-consumed transaction skipped: ' . $txHash);
 				continue;
 			}
 
@@ -107,25 +123,79 @@ class NMM_Payment {
 			}
 			if (count($matchingPaymentRecords) > 1) {
 				// We have a collision, send admin note to each order
+				$collidingOrderIds = array();
 				foreach ($matchingPaymentRecords as $matchingRecord) {
 					$orderId = $matchingRecord['order_id'];
-					$order = new WC_Order($orderId);
+					$collidingOrderIds[] = $orderId;
+					$order = wc_get_order($orderId);
+					if (!$order) {
+						continue;
+					}
 					/* translators: 1: cryptocurrency ticker, 2: transaction hash */
 					$order->add_order_note(sprintf(__('This order has a matching %1$s transaction but we cannot verify it due to other orders with similar payment totals. Please reconcile manually. Transaction Hash: %2$s', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoId, $txHash));
 				}
-				
-				
+
+				// A genuine payment collision needs a human: surface it as a
+				// warning naming the affected orders and the tx that could not
+				// be auto-assigned. (Ordinary already-consumed skips stay debug.)
+				NMM_Util::log(__FILE__, __LINE__, 'Autopay collision: ' . $cryptoId . ' transaction ' . $txHash . ' matches multiple unpaid orders (' . implode(', ', $collidingOrderIds) . '); left for manual reconciliation.', 'warning');
+
 				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 			}
 			if (count($matchingPaymentRecords) == 1) {
 				// We have validated a transaction: update database to paid, update order to processing, add transaction to consumed transactions
 				$orderId = $matchingPaymentRecords[0]['order_id'];
-				$orderAmount = $matchingPaymentRecords[0]['order_amount'];				
+				$orderAmount = $matchingPaymentRecords[0]['order_amount'];
 
-				$paymentRepo->set_status($orderId, $orderAmount, 'paid');
+				// Hook fired immediately before the claim, in the exact window the
+				// conditional claim below is designed to close. Integrations - and
+				// the concurrency test - can observe or, in a race, complete/cancel
+				// the order here.
+				do_action('nmm_before_autopay_complete', $orderId, $cryptoId, $address, $txHash);
+
+				// Atomically claim the row for payment. The expiry cron races us
+				// with the opposite claim (unpaid -> cancelled); because both sides
+				// go through the same conditional update, exactly one wins. The
+				// claim is tri-state so we never confuse a genuine race loss with a
+				// transient DB error.
+				$claim = $paymentRepo->claim_for_payment($orderId, $orderAmount);
+
+				if ($claim === NMM_Payment_Repo::CLAIM_DB_ERROR) {
+					// The UPDATE failed, so the row state is unknown - it may well
+					// still be unpaid. Do NOT consume the tx (that would permanently
+					// ignore a valid payment) and do NOT complete the order; leave
+					// everything untouched so a later tick retries this transaction.
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving the transaction unconsumed for retry. Transaction Hash: ' . $txHash, 'error');
+					continue;
+				}
+
+				if ($claim === NMM_Payment_Repo::CLAIM_ALREADY) {
+					// The row was conclusively transitioned out of 'unpaid' by
+					// another worker (expiry cron cancelled it, or another verifier
+					// paid it). Do NOT complete the order. But DO consume the tx:
+					// this address (a static address or a carousel seat) will be
+					// reused, and an unconsumed in-window tx could otherwise be
+					// matched against a *new* order of the same amount and
+					// misattribute the payment. Persist the hash on the cancelled
+					// row too, for manual reconciliation.
+					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
+					$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $txHash);
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded the transaction as consumed to prevent reuse on a recycled address. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
+					continue;
+				}
+
+				// CLAIM_CLAIMED: we won the row - complete the order.
+
 				$paymentRepo->set_hash($orderId, $orderAmount, $txHash);
 
 				$order = wc_get_order($orderId);
+				if (!$order) {
+					// Row is claimed 'paid' (so it stops matching), but the order is
+					// gone - nothing to complete. Record the tx as consumed and move on.
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hash: ' . $txHash, 'warning');
+					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
+					continue;
+				}
 				$orderNote = sprintf(
 						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time, 4: transaction hash */
 						__('Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
@@ -289,25 +359,113 @@ class NMM_Payment {
 		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
 		$paymentRepo = new NMM_Payment_Repo();
-		$unpaidPayments = $paymentRepo->get_unpaid();
+
+		// Single clock for the whole pass, shared by the coarse SQL cutoff below
+		// and the exact per-record check, so the two can never disagree by a
+		// second at a boundary.
+		$now = time();
+
+		// Only rows old enough to be expirable for SOME configured coin can
+		// possibly be cancelled. The shortest cancellation window among the coins
+		// that actually have unpaid rows is a safe coarse cutoff: anything newer
+		// than it is within every window and cannot be expired. Filtering on it in
+		// SQL lets the unpaid_expiry(status, ordered_at) index do a range scan
+		// instead of returning every unpaid checkout for PHP to iterate.
+		$unpaidCryptos = $paymentRepo->get_distinct_unpaid_cryptos();
+		if (empty($unpaidCryptos)) {
+			return;
+		}
+
+		$shortestWindowSec = null;
+		foreach ($unpaidCryptos as $unpaidCryptoId) {
+			$windowSec = (float) $nmmSettings->get_autopay_cancellation_time($unpaidCryptoId) * 60 * 60;
+			if ($shortestWindowSec === null || $windowSec < $shortestWindowSec) {
+				$shortestWindowSec = $windowSec;
+			}
+		}
+
+		$coarseCutoff = $now - $shortestWindowSec;
+		$unpaidPayments = $paymentRepo->get_unpaid($coarseCutoff);
 
 		foreach ($unpaidPayments as $paymentRecord) {
 			$orderTime = $paymentRecord['ordered_at'];
-			$cryptoId = $paymentRecord['cryptocurrency'];			
+			$cryptoId = $paymentRecord['cryptocurrency'];
 
 			$paymentCancellationTimeHr = $nmmSettings->get_autopay_cancellation_time($cryptoId);
 			$paymentCancellationTimeSec = $paymentCancellationTimeHr * 60 * 60;
-			$timeSinceOrder = time() - $orderTime;
+			$timeSinceOrder = $now - $orderTime;
 			NMM_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
 
 			if ($timeSinceOrder > $paymentCancellationTimeSec) {
 				$orderId = $paymentRecord['order_id'];
 				$orderAmount = $paymentRecord['order_amount'];
 				$address = $paymentRecord['address'];
-				
-				$paymentRepo->set_status($orderId, $orderAmount, 'cancelled');
 
-				$order = new WC_Order($orderId);
+				// The unpaid rows were snapshotted earlier; re-check the live order
+				// right before touching state, because a merchant, webhook or the
+				// verifier can complete the order in between. Never cancel one that
+				// has already been paid or is no longer awaiting payment.
+				$order = $orderId ? wc_get_order($orderId) : false;
+
+				if (!$order) {
+					// Order deleted - retire the orphaned payment record. Claim it
+					// conditionally so a concurrent verifier still wins the row.
+					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
+					continue;
+				}
+
+				if ($order->is_paid()) {
+					// Paid out-of-band since the snapshot - reconcile the record to
+					// paid so the cron stops matching it, and do not cancel.
+					$paymentRepo->set_status($orderId, $orderAmount, 'paid');
+					continue;
+				}
+
+				if (!$order->has_status(array('pending', 'on-hold'))) {
+					// Terminal non-paid or otherwise not awaiting payment - reconcile
+					// the record but leave the order alone.
+					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
+					continue;
+				}
+
+				// Atomically claim this row for cancellation. The verifier flips a
+				// matched row 'unpaid' -> 'paid'; this flips 'unpaid' -> 'cancelled'
+				// only while it is still 'unpaid'. Only CLAIM_CLAIMED means we won
+				// and may cancel: on CLAIM_ALREADY the verifier already took the row,
+				// and on CLAIM_DB_ERROR the outcome is unknown - in both cases leave
+				// the order alone (a real error is retried next tick).
+				if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) !== NMM_Payment_Repo::CLAIM_CLAIMED) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
+					continue;
+				}
+
+				// Hook point immediately before the final transition. Integrations
+				// (and the concurrency test) can observe - or, in a genuine race,
+				// complete - the order here; the re-fetch below then reconciles.
+				do_action('nmm_before_autopay_cancel', $orderId, $cryptoId, $address);
+
+				// Final re-fetch after the claim to close the order-side window as
+				// far as WooCommerce allows. If the order was paid or advanced
+				// out-of-band after we claimed the row, reconcile the record and
+				// leave the order alone rather than cancelling a paid order.
+				$order = wc_get_order($orderId);
+
+				if (!$order) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' vanished after cancellation claim; record already retired.');
+					continue;
+				}
+
+				if ($order->is_paid()) {
+					$paymentRepo->set_status($orderId, $orderAmount, 'paid');
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' was paid after cancellation claim; reconciled record to paid, not cancelling.');
+					continue;
+				}
+
+				if (!$order->has_status(array('pending', 'on-hold'))) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' advanced to ' . $order->get_status() . ' after cancellation claim; leaving order, record cancelled.');
+					continue;
+				}
 
 				$orderNote = sprintf(
 					/* translators: 1: cryptocurrency ticker, 2: number of hours */
@@ -316,8 +474,8 @@ class NMM_Payment {
 					round($paymentCancellationTimeSec/3600, 1));
 
 				add_filter('woocommerce_email_subject_customer_note', 'NMM_change_cancelled_email_note_subject_line', 1, 2);
-	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);   
-	    		
+	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);
+
 				$order->update_status('wc-cancelled');
 				$order->add_order_note($orderNote, true);
 

@@ -139,7 +139,7 @@ class NMM_Hd_Repo {
 			// affected === 0: another request claimed this id first; retry.
 		}
 
-		NMM_Util::log(__FILE__, __LINE__, 'claim_oldest_ready exhausted retries for ' . $this->cryptoId);
+		NMM_Util::log(__FILE__, __LINE__, 'claim_oldest_ready exhausted retries for ' . $this->cryptoId, 'warning');
 		return null;
 	}
 

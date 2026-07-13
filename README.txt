@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.3
+Stable Tag: 2.9.4
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -182,6 +182,12 @@ Yes. Filters are available for redirecting verification requests, customizing th
 Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
 
 == Changelog ==
+
+= 2.9.4 =
+* Autopay: the background job no longer cancels an order that was paid (by the merchant, a webhook, or the verifier) after its unpaid record was read but before cancellation - it re-checks the live order and reconciles the payment record instead. This is the Autopay counterpart of the HD-address cancellation fix in 2.9.3
+* Operational logging is restored and now routes to WooCommerce > Status > Logs (source "nomiddleman"), with error_log() as a fallback. Warnings and above (durable-queue write failures, schema-migration failures, cron-lock degradation, address-claim exhaustion, payment collisions, ...) are always recorded; verbose tracing is emitted only when debugging is enabled; repeated messages are de-duplicated and over-long entries truncated
+* Performance: added the composite database indexes the hot paths need - the 15-second customer status poll now looks up by order id, the cron's HD pool/claim/pending/assigned queries and the Autopay unpaid-address matcher use covering indexes instead of scanning as those tables grow (added to new installs and to existing ones through verified migrations)
+* Security: the merchant-configured Monero wallet RPC URL is now validated before use to prevent server-side request forgery - only http/https is allowed, redirects are not followed, the connection is protocol-restricted and pinned to the validated address, and private/loopback targets require an explicit opt-in on multisite (where site admins are not host admins)
 
 = 2.9.3 =
 * Privacy Mode (HD): payment addresses are now claimed atomically at checkout, so two customers checking out at the same moment can never be handed the same address

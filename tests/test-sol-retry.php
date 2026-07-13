@@ -28,8 +28,11 @@ $t = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
 NMM_create_sol_retry_table();
 $wpdb->query("DELETE FROM `$t`");
 
-$pass = true;
-function rok($label, $cond, $extra = '') { global $pass; printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $pass = false; } }
+// wp eval-file runs this file in function scope, so a top-level `$pass` is not
+// the `global $pass` rok() writes; track through $GLOBALS so the banner (which
+// CI greps) can never print PASSED while a check failed.
+$GLOBALS['sr_ok'] = true;
+function rok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['sr_ok'] = false; } }
 
 $LIFE = 100000;
 $now = time();
@@ -245,4 +248,4 @@ $drained = NMM_Sol_Retry_Repo::run_global_cleanup(7 * 24 * 60 * 60, 0, 500, 40);
 rok('drains a 1200-row backlog across bounded batches', (int) $wpdb->get_var("SELECT COUNT(*) FROM `$t` WHERE address='DRAIN'") === 0, "drained=$drained");
 
 $wpdb->query("DELETE FROM `$t`");
-echo $pass ? "\nSOL-RETRY (durable queue) CHECKS PASSED\n" : "\nSOL-RETRY CHECKS FAILED\n";
+echo $GLOBALS['sr_ok'] ? "\nSOL-RETRY (durable queue) CHECKS PASSED\n" : "\nSOL-RETRY CHECKS FAILED\n";

@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.3
+Version: 2.9.4
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -71,7 +71,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.3');
+    define('NMM_VERSION', '2.9.4');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -152,6 +152,7 @@ function NMM_init_gateways(){
     NMM_Register_Extensions();
     NMM_update_hd_table();
     NMM_maybe_create_sol_retry_table();
+    NMM_maybe_add_payment_indexes();
 
     add_action('init', 'NMM_schedule_payment_checks');
     add_action('admin_init', 'NMM_cleanup_legacy_qr_files');
@@ -216,6 +217,7 @@ function NMM_activate() {
     NMM_create_payment_table();
     NMM_create_carousel_table();
     NMM_maybe_create_sol_retry_table();
+    NMM_maybe_add_payment_indexes();
 }
 
 // Create/repair the durable Solana retry-queue table (gated by a schema version
@@ -232,7 +234,7 @@ function NMM_maybe_create_sol_retry_table() {
 
     $tableName = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
     if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) !== $tableName) {
-        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table not created (' . $wpdb->last_error . '); will retry next load.');
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry table not created (' . $wpdb->last_error . '); will retry next load.', 'error');
         return;
     }
 
@@ -278,7 +280,7 @@ function NMM_maybe_create_sol_retry_table() {
         delete_option('nmm_sol_retry_table_created'); // retire the pre-versioned flag
     }
     else {
-        NMM_Util::log(__FILE__, __LINE__, 'Solana retry schema incomplete (' . $wpdb->last_error . '); will retry next load.');
+        NMM_Util::log(__FILE__, __LINE__, 'Solana retry schema incomplete (' . $wpdb->last_error . '); will retry next load.', 'error');
     }
 }
 
@@ -392,7 +394,10 @@ function NMM_create_hd_mpk_address_table() {
             KEY `status` (`status`),
             KEY `status_checked` (`status`, `last_checked`),
             KEY `mpk_index` (`mpk_index`),
-            KEY `mpk` (`mpk`)
+            KEY `mpk` (`mpk`),
+            KEY `order_lookup` (`order_id`, `id`)
+            /* hd_mode is added by NMM_update_hd_table (1.0->1.1), so the
+               composite indexes that reference it are added there too (1.3->1.4). */
         );";
 
     $wpdb->query($query);
@@ -417,7 +422,7 @@ function NMM_update_hd_table() {
             update_option('nmm_hd_table_version', '1.1');
         }
         else {
-            NMM_Util::log(__FILE__, __LINE__, 'HD hd_mode migration did not complete (' . $wpdb->last_error . '); leaving version at 1.0 to retry.');
+            NMM_Util::log(__FILE__, __LINE__, 'HD hd_mode migration did not complete (' . $wpdb->last_error . '); leaving version at 1.0 to retry.', 'error');
         }
     }
 
@@ -450,7 +455,7 @@ function NMM_update_hd_table() {
             update_option('nmm_hd_table_version', '1.2');
         }
         else {
-            NMM_Util::log(__FILE__, __LINE__, 'HD unique-key migration did not complete (' . $wpdb->last_error . '); leaving version at 1.1 to retry.');
+            NMM_Util::log(__FILE__, __LINE__, 'HD unique-key migration did not complete (' . $wpdb->last_error . '); leaving version at 1.1 to retry.', 'error');
         }
     }
 
@@ -468,7 +473,34 @@ function NMM_update_hd_table() {
             update_option('nmm_hd_table_version', '1.3');
         }
         else {
-            NMM_Util::log(__FILE__, __LINE__, 'HD status_checked index migration did not complete (' . $wpdb->last_error . '); leaving version at 1.2 to retry.');
+            NMM_Util::log(__FILE__, __LINE__, 'HD status_checked index migration did not complete (' . $wpdb->last_error . '); leaving version at 1.2 to retry.', 'error');
+        }
+    }
+
+    // 1.3 -> 1.4: composite indexes for the hot HD queries. order_lookup serves
+    // the 15s customer status poll (WHERE order_id = ? ORDER BY id); hd_pool and
+    // hd_wallet_status serve the cron's pool/claim/pending/assigned queries that
+    // filter by cryptocurrency + hd_mode + status (and order by mpk_index or
+    // filter by mpk). These reference hd_mode, which only exists after 1.0->1.1.
+    if (get_option('nmm_hd_table_version', '1.0') === '1.3') {
+        $wanted = array(
+            'order_lookup'     => 'ADD KEY `order_lookup` (`order_id`, `id`)',
+            'hd_pool'          => 'ADD KEY `hd_pool` (`cryptocurrency`, `hd_mode`, `status`, `mpk_index`)',
+            'hd_wallet_status' => 'ADD KEY `hd_wallet_status` (`cryptocurrency`, `hd_mode`, `status`, `mpk`)',
+        );
+        $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2);
+        foreach ($wanted as $name => $def) {
+            if (!in_array($name, $present, true)) {
+                $wpdb->query("ALTER TABLE `$tableName` $def");
+            }
+        }
+
+        $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2);
+        if (count(array_intersect(array_keys($wanted), $present)) === count($wanted)) {
+            update_option('nmm_hd_table_version', '1.4');
+        }
+        else {
+            NMM_Util::log(__FILE__, __LINE__, 'HD composite-index migration did not complete (' . $wpdb->last_error . '); leaving version at 1.3 to retry.', 'error');
         }
     }
 
@@ -554,10 +586,47 @@ function NMM_create_payment_table() {
     
             PRIMARY KEY (`id`),
             UNIQUE KEY `unique_payment` (`order_id`, `order_amount`),
-            KEY `status` (`status`)
+            KEY `status` (`status`),
+            KEY `unpaid_address` (`status`, `cryptocurrency`, `address`),
+            KEY `unpaid_expiry` (`status`, `ordered_at`)
         );";
 
     $wpdb->query($query);
+}
+
+// Add the composite indexes the Autopay hot paths need to existing payment
+// tables (verify-then-record, like the other schema migrations). The matcher
+// queries WHERE status='unpaid' AND cryptocurrency=? AND address=?, and expiry
+// scans WHERE status='unpaid' ordered by ordered_at.
+function NMM_maybe_add_payment_indexes() {
+    if (get_option('nmm_payment_index_version') === '1') {
+        return;
+    }
+
+    global $wpdb;
+    $tableName = $wpdb->prefix . NMM_PAYMENT_TABLE;
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) !== $tableName) {
+        return; // table not created yet; nothing to do
+    }
+
+    $wanted = array(
+        'unpaid_address' => 'ADD KEY `unpaid_address` (`status`, `cryptocurrency`, `address`)',
+        'unpaid_expiry'  => 'ADD KEY `unpaid_expiry` (`status`, `ordered_at`)',
+    );
+    $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2);
+    foreach ($wanted as $name => $def) {
+        if (!in_array($name, $present, true)) {
+            $wpdb->query("ALTER TABLE `$tableName` $def");
+        }
+    }
+
+    $present = (array) $wpdb->get_col("SHOW INDEX FROM `$tableName`", 2);
+    if (count(array_intersect(array_keys($wanted), $present)) === count($wanted)) {
+        update_option('nmm_payment_index_version', '1');
+    }
+    else {
+        NMM_Util::log(__FILE__, __LINE__, 'Payment index migration did not complete (' . $wpdb->last_error . '); will retry next load.', 'error');
+    }
 }
 
 function NMM_create_carousel_table() {
