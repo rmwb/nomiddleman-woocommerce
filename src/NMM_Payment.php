@@ -6,22 +6,88 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class NMM_Payment {
 
-	public static function check_all_addresses_for_matching_payment($transactionLifetime) {		
+	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
 		$paymentRepo = new NMM_Payment_Repo();
 
-		// get a unique list of unpaid "payments" to crypto addresses
+		// Unique unpaid payment addresses, in a stable order so the persisted
+		// sweep cursor below is meaningful across ticks.
 		$addressesToCheck = $paymentRepo->get_distinct_unpaid_addresses();
 
-		$cryptos = NMM_Cryptocurrencies::get();
+		if (empty($addressesToCheck)) {
+			return;
+		}
 
-		foreach ($addressesToCheck as $record) {
-			$address = $record['address'];
+		$cryptos = NMM_Cryptocurrencies::get();
+		$total = count($addressesToCheck);
+
+		// Bound the addresses checked per tick so a large backlog of abandoned,
+		// unpaid orders cannot hold the cron lock and starve payment, expiry, HD
+		// and Solana work. The persisted cursor makes the sweep fair: each tick
+		// resumes after the last address checked and wraps around, so every
+		// address is still checked within a few ticks.
+		$budget = (int) apply_filters('nmm_autopay_scan_budget', 50);
+		if ($budget < 1) {
+			$budget = 1;
+		}
+		$take = min($budget, $total);
+
+		// Resume after the address the previous tick stopped on. If that address
+		// is gone (paid or removed) the key is not found and we start at the top -
+		// still correct, just slightly less even for a single tick.
+		$cursor = get_option('nmm_autopay_scan_cursor', '');
+		$startIndex = 0;
+		foreach ($addressesToCheck as $i => $record) {
+			if (self::scan_key($record) === $cursor) {
+				$startIndex = $i + 1;
+				break;
+			}
+		}
+
+		// For Monero, fetch the account's incoming transfers ONCE per tick and
+		// group them by subaddress locally, instead of two wallet-RPC calls
+		// (get_address_index + get_transfers) for every address.
+		$xmrFetched = false;
+		$xmrByAddress = array();
+
+		$lastKey = $cursor;
+
+		for ($n = 0; $n < $take; $n++) {
+			$record = $addressesToCheck[($startIndex + $n) % $total];
+			$lastKey = self::scan_key($record);
 
 			$cryptoId = $record['cryptocurrency'];
+			$address = $record['address'];
+
+			if (!isset($cryptos[$cryptoId])) {
+				continue;
+			}
 			$crypto = $cryptos[$cryptoId];
 
-			self::check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime);
+			do_action('nmm_autopay_address_checked', $cryptoId, $address);
+
+			if ($cryptoId === 'XMR') {
+				if (!$xmrFetched) {
+					$batch = NMM_Monero::get_account_transactions();
+					$xmrByAddress = (isset($batch['result']) && $batch['result'] === 'success' && isset($batch['by_address']))
+						? $batch['by_address']
+						: array();
+					$xmrFetched = true;
+				}
+				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
+				self::process_address_transactions($crypto, $address, $xmrTxs, $transactionLifetime);
+			}
+			else {
+				self::check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime);
+			}
 		}
+
+		// Persist where we stopped so the next tick continues fairly.
+		update_option('nmm_autopay_scan_cursor', $lastKey, false);
+	}
+
+	// Stable identity of a distinct-unpaid-address row, for the sweep cursor.
+	private static function scan_key($record) {
+		return $record['cryptocurrency'] . '|' . $record['address'];
 	}
 
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {

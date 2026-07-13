@@ -347,4 +347,54 @@ class NMM_Monero {
 			'transactions' => $transactions,
 		);
 	}
+
+	/**
+	 * All incoming transfers for account 0 in ONE wallet-RPC call, grouped by the
+	 * receiving subaddress. The cron uses this to check many unpaid Monero orders
+	 * per tick with a single get_transfers instead of two RPC calls
+	 * (get_address_index + get_transfers) per address. Returns
+	 * { result: 'success', by_address: { address => NMM_Transaction[] } } or
+	 * { result: 'error' } so callers can skip this tick without crediting anyone.
+	 */
+	public static function get_account_transactions() {
+		do_action('nmm_xmr_account_fetch');
+
+		$result = self::rpc('get_transfers', array(
+			'in' => true,
+			'pool' => true,
+			'account_index' => 0,
+		));
+
+		if (is_wp_error($result)) {
+			NMM_Util::log(__FILE__, __LINE__, 'XMR batch RPC failed: ' . $result->get_error_message());
+
+			return array('result' => 'error');
+		}
+
+		$byAddress = array();
+
+		foreach (array('in', 'pool') as $bucket) {
+			if (!isset($result->{$bucket}) || !is_array($result->{$bucket})) {
+				continue;
+			}
+
+			foreach ($result->{$bucket} as $transfer) {
+				if (!isset($transfer->address, $transfer->amount, $transfer->txid)) {
+					continue;
+				}
+
+				$byAddress[$transfer->address][] = new NMM_Transaction(
+					$transfer->amount,
+					isset($transfer->confirmations) ? (int) $transfer->confirmations : 0,
+					isset($transfer->timestamp) ? (int) $transfer->timestamp : time(),
+					$transfer->txid
+				);
+			}
+		}
+
+		return array(
+			'result' => 'success',
+			'by_address' => $byAddress,
+		);
+	}
 }

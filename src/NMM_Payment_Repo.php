@@ -66,7 +66,9 @@ class NMM_Payment_Repo {
 	public function get_distinct_unpaid_addresses() {
 		global $wpdb;
 
-		$query = "SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'";
+		// Stable ordering so the cron's persisted fair-sweep cursor is meaningful
+		// across ticks (see NMM_Payment::check_all_addresses_for_matching_payment).
+		$query = "SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid' ORDER BY `cryptocurrency`, `address`";
 
 		$results = $wpdb->get_results($query, ARRAY_A);
 

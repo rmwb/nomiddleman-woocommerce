@@ -1,0 +1,94 @@
+<?php
+/**
+ * Live-DB test: NMM_Payment::check_all_addresses_for_matching_payment() must
+ * bound the addresses it checks per cron tick, do at most one Monero wallet-RPC
+ * fetch per tick regardless of how many XMR addresses are pending, and still
+ * cover every address within a few ticks via a persisted fair cursor. Requires
+ * WordPress + WooCommerce + a database. Skips cleanly standalone.
+ *
+ *   Run:  wp eval-file tests/test-autopay-scan.php
+ */
+
+if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !function_exists('wc_create_order')) {
+	echo "test-autopay-scan: skipped (needs WordPress + WooCommerce + DB)\n";
+	return;
+}
+
+$wpdb = $GLOBALS['wpdb'];
+$pt = $wpdb->prefix . NMM_PAYMENT_TABLE;
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+
+$GLOBALS['as_ok'] = true;
+function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['as_ok'] = false; } }
+
+// Seed N unpaid Monero addresses. XMR RPC is unconfigured in CI, so the batch
+// fetch returns an error (no network) and no order is ever matched - the unpaid
+// set stays at N across ticks, which is exactly what we want for a coverage test.
+$N = 100;
+$budget = 30;
+$rows = array();
+for ($i = 0; $i < $N; $i++) {
+	$rows[] = $wpdb->prepare("('xmraddr_%03d','XMR','unpaid',%d,%d,'0.00100000',0)", $i, time(), 700000 + $i);
+}
+$wpdb->query("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES " . implode(',', $rows));
+
+add_filter('nmm_autopay_scan_budget', function () use ($budget) { return $budget; });
+
+$GLOBALS['as_checked'] = array();
+$GLOBALS['as_fetches'] = 0;
+add_action('nmm_autopay_address_checked', function ($cryptoId, $address) { $GLOBALS['as_checked'][] = $address; }, 10, 2);
+add_action('nmm_xmr_account_fetch', function () { $GLOBALS['as_fetches']++; });
+
+$lifetime = 3 * 60 * 60;
+$ticksNeeded = (int) ceil($N / $budget); // 4
+$perTickCounts = array();
+$perTickFetches = array();
+$covered = array();
+$firstAddrPerTick = array();
+
+for ($t = 0; $t < $ticksNeeded; $t++) {
+	$GLOBALS['as_checked'] = array();
+	$GLOBALS['as_fetches'] = 0;
+
+	NMM_Payment::check_all_addresses_for_matching_payment($lifetime);
+
+	$perTickCounts[] = count($GLOBALS['as_checked']);
+	$perTickFetches[] = $GLOBALS['as_fetches'];
+	$firstAddrPerTick[] = isset($GLOBALS['as_checked'][0]) ? $GLOBALS['as_checked'][0] : '(none)';
+	foreach ($GLOBALS['as_checked'] as $a) { $covered[$a] = true; }
+}
+
+sok('each tick checks exactly the budget',        array_unique($perTickCounts) === array($budget), 'counts=' . implode(',', $perTickCounts));
+sok('each tick does exactly ONE XMR fetch',       array_unique($perTickFetches) === array(1), 'fetches=' . implode(',', $perTickFetches));
+sok('cursor advances (ticks start elsewhere)',    count(array_unique($firstAddrPerTick)) === $ticksNeeded, 'firsts=' . implode(',', $firstAddrPerTick));
+sok('all N addresses covered within ceil(N/b)',   count($covered) === $N, 'covered=' . count($covered) . '/' . $N);
+sok('sweep cursor persisted',                     get_option('nmm_autopay_scan_cursor', '') !== '');
+
+// Budget larger than the backlog: single tick covers everything, still one fetch.
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+$small = array();
+for ($i = 0; $i < 5; $i++) { $small[] = $wpdb->prepare("('xmrsmall_%d','XMR','unpaid',%d,%d,'0.00100000',0)", $i, time(), 710000 + $i); }
+$wpdb->query("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES " . implode(',', $small));
+$GLOBALS['as_checked'] = array();
+$GLOBALS['as_fetches'] = 0;
+NMM_Payment::check_all_addresses_for_matching_payment($lifetime);
+sok('small backlog: checks all in one tick',      count($GLOBALS['as_checked']) === 5, 'checked=' . count($GLOBALS['as_checked']));
+sok('small backlog: still one XMR fetch',         $GLOBALS['as_fetches'] === 1, 'fetches=' . $GLOBALS['as_fetches']);
+
+// Empty backlog: no fetch, no work, no crash.
+$wpdb->query("DELETE FROM `$pt`");
+$GLOBALS['as_checked'] = array();
+$GLOBALS['as_fetches'] = 0;
+NMM_Payment::check_all_addresses_for_matching_payment($lifetime);
+sok('empty backlog: no addresses checked',        count($GLOBALS['as_checked']) === 0);
+sok('empty backlog: no XMR fetch',                $GLOBALS['as_fetches'] === 0);
+
+remove_all_filters('nmm_autopay_scan_budget');
+remove_all_actions('nmm_autopay_address_checked');
+remove_all_actions('nmm_xmr_account_fetch');
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+
+echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";

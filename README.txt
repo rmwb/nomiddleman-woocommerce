@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.4
+Stable Tag: 2.9.5
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -182,6 +182,10 @@ Yes. Filters are available for redirecting verification requests, customizing th
 Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
 
 == Changelog ==
+
+= 2.9.5 =
+* Autopay/Privacy Mode: the thank-you page now allocates a payment address under an order-scoped database lock and re-checks the order after acquiring it, so two near-simultaneous first loads of the same order can no longer each allocate a different address (most visible with Monero subaddresses and carousel addresses) - exactly one address is assigned and the displayed address always matches the one being monitored
+* Performance: the Autopay verifier now checks a bounded number of unpaid addresses per cron tick and advances a persisted fair cursor so every address is still eventually checked - a large backlog of abandoned orders can no longer hold the cron lock and delay payment, expiry, HD and Solana work. Monero verification fetches an account's incoming transfers once per tick and groups them by subaddress locally, instead of two wallet-RPC calls per address
 
 = 2.9.4 =
 * Autopay: the background job no longer cancels an order that was paid (by the merchant, a webhook, or the verifier) after its unpaid record was read but before cancellation - it re-checks the live order and reconciles the payment record instead. This is the Autopay counterpart of the HD-address cancellation fix in 2.9.3
