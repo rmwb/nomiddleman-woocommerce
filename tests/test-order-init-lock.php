@@ -31,6 +31,10 @@ $orderB = 8100002;
 $wpdb2 = new wpdb(DB_USER, DB_PASSWORD, DB_NAME, DB_HOST);
 $wpdb2->suppress_errors(true);
 $main = $GLOBALS['wpdb'];
+// Two concurrent requests on the SAME site share the table prefix; a fresh wpdb
+// does not initialize it, so mirror the main connection's so the per-site lock
+// name matches (the lock is scoped by DB_NAME + prefix).
+$wpdb2->prefix = $main->prefix;
 
 // Worker A (connection 2) acquires the init lock for order A.
 $GLOBALS['wpdb'] = $wpdb2;
@@ -54,6 +58,20 @@ $GLOBALS['wpdb'] = $main;
 $bAfterRelease = NMM_Util::acquire_order_init_lock($orderA, 0);
 lok('same order lockable after A releases',     $bAfterRelease === '1', 'got=' . var_export($bAfterRelease, true));
 if ($bAfterRelease === '1') { NMM_Util::release_order_init_lock($orderA); }
+
+// Multisite scoping: the SAME order id on a DIFFERENT site (different table
+// prefix) must NOT contend - those are unrelated orders that merely share
+// DB_NAME and an id. The main site holds order A; a second site's request for
+// "order A" should acquire freely.
+$mainHold = NMM_Util::acquire_order_init_lock($orderA, 0);
+$wpdb2->prefix = $main->prefix . 's2_'; // pretend a second network site
+$GLOBALS['wpdb'] = $wpdb2;
+$site2 = NMM_Util::acquire_order_init_lock($orderA, 0);
+if ($site2 === '1') { NMM_Util::release_order_init_lock($orderA); }
+$GLOBALS['wpdb'] = $main;
+$wpdb2->prefix = $main->prefix; // restore for the remaining checks
+lok('same order id on a DIFFERENT site is free', $mainHold === '1' && $site2 === '1', "$mainHold,$site2");
+if ($mainHold === '1') { NMM_Util::release_order_init_lock($orderA); }
 
 // The lock name must be order-specific even if DB_NAME is long: two different
 // orders must never collide on one truncated 64-char lock name. Prove it by

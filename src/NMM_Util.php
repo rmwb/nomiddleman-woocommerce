@@ -74,14 +74,17 @@ class NMM_Util {
 		return extension_loaded('gmp') || extension_loaded('bcmath');
 	}
 
-	// Per-order advisory lock name. Scoped to this database AND this order so a
-	// site sharing a MySQL server does not block another, and distinct orders
-	// never share a lock. DB_NAME is hashed to a fixed length so a long database
-	// name can never push the (variable-length) order id past MySQL's 64-char
-	// lock-name limit - which would silently truncate and let two DIFFERENT
-	// orders collide on one lock.
+	// Per-order advisory lock name. Scoped to this site AND this order so distinct
+	// orders never share a lock, and neither do same-numbered orders on different
+	// sites. The table prefix ($wpdb->prefix) is blog-specific on multisite, where
+	// sites share DB_NAME and WooCommerce order ids can overlap; DB_NAME still
+	// separates sites that merely share a MySQL server. Both are hashed to a fixed
+	// length so they can never push the (variable-length) order id past MySQL's
+	// 64-char lock-name limit - which would truncate and collide DIFFERENT orders.
 	private static function order_init_lock_name($orderId) {
-		return 'nmm_oinit_' . (int) $orderId . '_' . substr(md5(DB_NAME), 0, 12);
+		global $wpdb;
+
+		return 'nmm_oinit_' . (int) $orderId . '_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
 	}
 
 	/**
