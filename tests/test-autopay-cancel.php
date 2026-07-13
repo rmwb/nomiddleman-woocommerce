@@ -101,7 +101,7 @@ $wpdb->query("DELETE FROM `$pt`");
 $oClaimed = mkorder('pending'); $ins($oClaimed, $expired);
 $wpdb->query($wpdb->prepare("UPDATE `$pt` SET status='paid' WHERE order_id=%d", $oClaimed));
 $repo = new NMM_Payment_Repo();
-aok('claim on already-paid row returns false',  $repo->claim_for_cancellation($oClaimed, '0.00100000') === false);
+aok('claim on already-paid row -> CLAIM_ALREADY', $repo->claim_for_cancellation($oClaimed, '0.00100000') === NMM_Payment_Repo::CLAIM_ALREADY);
 NMM_Payment::cancel_expired_payments(); // no unpaid rows -> order stays pending
 aok('order left pending (claim lost)',          ord_status($oClaimed) === 'pending');
 aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) === 'paid');
@@ -112,16 +112,25 @@ aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) 
 $wpdb->query("DELETE FROM `$pt`");
 $oRow = mkorder('pending'); $ins($oRow, $expired);
 $rp = new NMM_Payment_Repo();
-aok('verifier claim_for_payment wins unpaid row', $rp->claim_for_payment($oRow, '0.00100000') === true);
+aok('verifier claim_for_payment -> CLAIM_CLAIMED', $rp->claim_for_payment($oRow, '0.00100000') === NMM_Payment_Repo::CLAIM_CLAIMED);
 aok('  row is now paid',                          rec_status($wpdb,$pt,$oRow) === 'paid');
-aok('cron claim then loses (row not unpaid)',     $rp->claim_for_cancellation($oRow, '0.00100000') === false);
+aok('cron claim then loses -> CLAIM_ALREADY',     $rp->claim_for_cancellation($oRow, '0.00100000') === NMM_Payment_Repo::CLAIM_ALREADY);
+
+// A transient DB failure must be distinguishable from a race loss (CLAIM_DB_ERROR
+// != CLAIM_ALREADY), so the caller can retry instead of burning the payment.
+$wpdb->query("RENAME TABLE `$pt` TO `{$pt}_bak`");
+$wpdb->suppress_errors(true);
+$claimErr = $rp->claim_for_payment($oRow, '0.00100000'); // table missing -> UPDATE fails
+$wpdb->suppress_errors(false);
+$wpdb->query("RENAME TABLE `{$pt}_bak` TO `$pt`");
+aok('claim on DB error -> CLAIM_DB_ERROR',        $claimErr === NMM_Payment_Repo::CLAIM_DB_ERROR, 'got=' . $claimErr);
 
 // Opposite order: cron wins first, verifier must lose and would abort completion.
 $wpdb->query("DELETE FROM `$pt`");
 $oRow2 = mkorder('pending'); $ins($oRow2, $expired);
-aok('cron claim_for_cancellation wins unpaid row', $rp->claim_for_cancellation($oRow2, '0.00100000') === true);
+aok('cron claim_for_cancellation -> CLAIM_CLAIMED', $rp->claim_for_cancellation($oRow2, '0.00100000') === NMM_Payment_Repo::CLAIM_CLAIMED);
 aok('  row is now cancelled',                      rec_status($wpdb,$pt,$oRow2) === 'cancelled');
-aok('verifier then loses (row not unpaid)',        $rp->claim_for_payment($oRow2, '0.00100000') === false);
+aok('verifier then loses -> CLAIM_ALREADY',        $rp->claim_for_payment($oRow2, '0.00100000') === NMM_Payment_Repo::CLAIM_ALREADY);
 
 // --- Index: the expiry query must range-scan unpaid_expiry, not read every row ---
 // Seed a realistic distribution - many recent unpaid checkouts, a few old ones -
@@ -204,10 +213,36 @@ NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetim
 aok('reused address: new order B NOT paid',     rec_status($wpdb,$pt,$oB) === 'unpaid');
 aok('reused address: order B still pending',    ord_status($oB) === 'pending');
 
+// End-to-end: a DB error during the payment claim must NOT consume the tx.
+// The hook renames the table away right before the claim, forcing the UPDATE to
+// fail (CLAIM_DB_ERROR). The row is still unpaid, so the verified tx must be left
+// unconsumed and the order untouched, ready to retry - otherwise a transient
+// glitch would permanently strand a real payment.
+$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $reuseAddr));
+delete_option('nmmpro_BTC_transactions_consumed_for_' . $reuseAddr);
+$oErr = mkorder('pending');
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
+	$reuseAddr, time(), $oErr, $reuseAmt));
+$txErr = new NMM_Transaction($txUnits, 999, time(), 'TXDBERRe2e');
+$errHook = function($orderId, $cryptoId, $address, $hash) use ($oErr, $pt, $wpdb) {
+	if ($orderId == $oErr) { $wpdb->suppress_errors(true); $wpdb->query("RENAME TABLE `$pt` TO `{$pt}_bak`"); }
+};
+add_action('nmm_before_autopay_complete', $errHook, 10, 4);
+NMM_Payment::process_address_transactions($btc, $reuseAddr, array($txErr), $lifetime);
+remove_action('nmm_before_autopay_complete', $errHook, 10);
+$wpdb->query("RENAME TABLE `{$pt}_bak` TO `$pt`"); // restore; row is still unpaid
+$wpdb->suppress_errors(false);
+
+aok('DB error: tx left UNconsumed (retryable)', $stg->tx_already_consumed('BTC', $reuseAddr, 'TXDBERRe2e') === false);
+aok('DB error: record still unpaid',            rec_status($wpdb,$pt,$oErr) === 'unpaid');
+aok('DB error: order still pending',            ord_status($oErr) === 'pending');
+
 // Sanity: a fresh, unconsumed tx on the reused address DOES complete a new order.
 // Clear the address's rows first so only order C is unpaid on it (order B lingers
 // unpaid by design, which would otherwise make C an ambiguous collision).
 $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $reuseAddr));
+delete_option('nmmpro_BTC_transactions_consumed_for_' . $reuseAddr);
 $oC = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",

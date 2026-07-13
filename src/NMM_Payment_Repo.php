@@ -105,14 +105,23 @@ class NMM_Payment_Repo {
 		));
 	}
 
+	// Tri-state result of a conditional claim. CLAIMED: this call moved the row.
+	// ALREADY: the row was conclusively transitioned out of 'unpaid' by another
+	// worker (cancelled or paid) - a definite, retry-free outcome. DB_ERROR: the
+	// UPDATE failed, so the row state is UNKNOWN (it may well still be unpaid) and
+	// the caller must not treat it as settled - retry next tick.
+	const CLAIM_CLAIMED = 'claimed';
+	const CLAIM_ALREADY = 'already';
+	const CLAIM_DB_ERROR = 'db_error';
+
 	/**
 	 * Atomically transition a payment row out of 'unpaid' to $toStatus, only
 	 * WHERE it is still 'unpaid'. The expiry cron (unpaid -> cancelled) and the
 	 * payment verifier (unpaid -> paid) race for the same row; because BOTH go
-	 * through this conditional update, exactly one wins and the loser sees zero
-	 * affected rows and must not apply its side effect (cancel the order, or
-	 * complete it). Returns true only if this call was the one that moved the
-	 * row; false if another worker already moved it, or on a logged DB error.
+	 * through this conditional update, exactly one wins. Returns a tri-state so a
+	 * genuine race loss (CLAIM_ALREADY) is never confused with a transient
+	 * database failure (CLAIM_DB_ERROR): the former is conclusive, the latter
+	 * must be retried rather than treated as settled.
 	 */
 	private function claim_from_unpaid($orderId, $orderAmount, $toStatus) {
 		global $wpdb;
@@ -128,20 +137,22 @@ class NMM_Payment_Repo {
 
 		if ($affected === false) {
 			NMM_Util::log(__FILE__, __LINE__, 'claim to ' . $toStatus . ' DB error for order ' . $orderId . ': ' . $wpdb->last_error, 'error');
-			return false;
+			return self::CLAIM_DB_ERROR;
 		}
 
-		return $affected > 0;
+		return $affected > 0 ? self::CLAIM_CLAIMED : self::CLAIM_ALREADY;
 	}
 
-	// Expiry cron's side of the race: claim the row for cancellation.
+	// Expiry cron's side of the race: claim the row for cancellation. Returns one
+	// of the CLAIM_* constants.
 	public function claim_for_cancellation($orderId, $orderAmount) {
 		return $this->claim_from_unpaid($orderId, $orderAmount, 'cancelled');
 	}
 
-	// Verifier's side of the race: claim the row for payment. If this returns
-	// false the row was already cancelled/paid by another worker and the caller
-	// must NOT complete the order.
+	// Verifier's side of the race: claim the row for payment. Returns one of the
+	// CLAIM_* constants; only CLAIM_CLAIMED means this caller may complete the
+	// order. On CLAIM_ALREADY the row was cancelled/paid elsewhere; on
+	// CLAIM_DB_ERROR the outcome is unknown and must be retried.
 	public function claim_for_payment($orderId, $orderAmount) {
 		return $this->claim_from_unpaid($orderId, $orderAmount, 'paid');
 	}

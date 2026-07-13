@@ -155,22 +155,36 @@ class NMM_Payment {
 
 				// Atomically claim the row for payment. The expiry cron races us
 				// with the opposite claim (unpaid -> cancelled); because both sides
-				// go through the same conditional update, exactly one wins. If we
-				// lose, the row was already cancelled/paid out from under us - do
-				// NOT complete the order (that would split-brain the order against
-				// its payment record).
-				if (!$paymentRepo->claim_for_payment($orderId, $orderAmount)) {
-					// Crucially, still consume the tx. This address (a static
-					// address or a carousel seat) will be reused, and an unconsumed
-					// tx that is still inside the matching window could otherwise be
+				// go through the same conditional update, exactly one wins. The
+				// claim is tri-state so we never confuse a genuine race loss with a
+				// transient DB error.
+				$claim = $paymentRepo->claim_for_payment($orderId, $orderAmount);
+
+				if ($claim === NMM_Payment_Repo::CLAIM_DB_ERROR) {
+					// The UPDATE failed, so the row state is unknown - it may well
+					// still be unpaid. Do NOT consume the tx (that would permanently
+					// ignore a valid payment) and do NOT complete the order; leave
+					// everything untouched so a later tick retries this transaction.
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving the transaction unconsumed for retry. Transaction Hash: ' . $txHash, 'error');
+					continue;
+				}
+
+				if ($claim === NMM_Payment_Repo::CLAIM_ALREADY) {
+					// The row was conclusively transitioned out of 'unpaid' by
+					// another worker (expiry cron cancelled it, or another verifier
+					// paid it). Do NOT complete the order. But DO consume the tx:
+					// this address (a static address or a carousel seat) will be
+					// reused, and an unconsumed in-window tx could otherwise be
 					// matched against a *new* order of the same amount and
-					// misattribute the payment. Record the hash on the cancelled row
-					// too, for manual reconciliation.
+					// misattribute the payment. Persist the hash on the cancelled
+					// row too, for manual reconciliation.
 					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 					$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $txHash);
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded the transaction as consumed to prevent reuse on a recycled address. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
 					continue;
 				}
+
+				// CLAIM_CLAIMED: we won the row - complete the order.
 
 				$paymentRepo->set_hash($orderId, $orderAmount, $txHash);
 
@@ -417,10 +431,12 @@ class NMM_Payment {
 
 				// Atomically claim this row for cancellation. The verifier flips a
 				// matched row 'unpaid' -> 'paid'; this flips 'unpaid' -> 'cancelled'
-				// only while it is still 'unpaid'. If the claim affects zero rows the
-				// verifier already took the row and we must not cancel the order.
-				if (!$paymentRepo->claim_for_cancellation($orderId, $orderAmount)) {
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: cancellation claim lost for order ' . $orderId . '; another worker transitioned it first. Not cancelling.');
+				// only while it is still 'unpaid'. Only CLAIM_CLAIMED means we won
+				// and may cancel: on CLAIM_ALREADY the verifier already took the row,
+				// and on CLAIM_DB_ERROR the outcome is unknown - in both cases leave
+				// the order alone (a real error is retried next tick).
+				if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) !== NMM_Payment_Repo::CLAIM_CLAIMED) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
 					continue;
 				}
 
