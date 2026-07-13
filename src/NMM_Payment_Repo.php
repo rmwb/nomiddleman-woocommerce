@@ -63,28 +63,54 @@ class NMM_Payment_Repo {
 		return $wpdb->get_col("SELECT DISTINCT `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'");
 	}
 
-	public function get_distinct_unpaid_addresses() {
+	// Number of distinct unpaid (cryptocurrency, address) pairs. A single scalar,
+	// so the cron can size its per-tick budget without loading the whole backlog
+	// into PHP.
+	public function count_distinct_unpaid_addresses() {
 		global $wpdb;
 
-		$results = $wpdb->get_results("SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'", ARRAY_A);
+		return (int) $wpdb->get_var("SELECT COUNT(*) FROM (SELECT DISTINCT `cryptocurrency`, `address` FROM `$this->tableName` WHERE `status` = 'unpaid') t");
+	}
 
-		if (!is_array($results)) {
-			return array();
-		}
+	/**
+	 * One budgeted page of distinct unpaid (cryptocurrency, address) rows, ordered
+	 * by (cryptocurrency, address), starting strictly AFTER the given cursor
+	 * (keyset pagination). Only $limit rows are read, so a large backlog never
+	 * loads or sorts in full each tick; the (status, cryptocurrency, address)
+	 * index serves both the range and the ordering. ORDER BY columns are in the
+	 * SELECT DISTINCT list (MySQL 8 safe), and the keyset comparison uses the same
+	 * collation as the sort so pages never skip or repeat a row. An empty cursor
+	 * ('' / '') sorts before everything and returns the first page.
+	 */
+	public function get_unpaid_addresses_after($cursorCrypto, $cursorAddress, $limit) {
+		global $wpdb;
+		$limit = max(1, (int) $limit);
 
-		// Sort in PHP, byte-wise, so the order the cron's persisted fair-sweep
-		// cursor relies on exactly matches the strcmp() comparison it resumes with
-		// (see NMM_Payment::check_all_addresses_for_matching_payment). Doing it here
-		// rather than in SQL avoids two traps: an `ORDER BY BINARY <expr>` not in
-		// the SELECT DISTINCT list is rejected by MySQL 8 (error 3065), and a
-		// collation-dependent SQL sort would not match the cursor comparison anyway.
-		usort($results, function ($a, $b) {
-			$cryptoCmp = strcmp($a['cryptocurrency'], $b['cryptocurrency']);
+		return $wpdb->get_results($wpdb->prepare(
+			"SELECT DISTINCT `cryptocurrency`, `address`
+			 FROM `$this->tableName`
+			 WHERE `status` = 'unpaid'
+			 AND (`cryptocurrency` > %s OR (`cryptocurrency` = %s AND `address` > %s))
+			 ORDER BY `cryptocurrency`, `address`
+			 LIMIT %d",
+			$cursorCrypto, $cursorCrypto, $cursorAddress, $limit
+		), ARRAY_A);
+	}
 
-			return $cryptoCmp !== 0 ? $cryptoCmp : strcmp($a['address'], $b['address']);
-		});
+	// The first $limit distinct unpaid (cryptocurrency, address) rows in order, to
+	// wrap the sweep back to the top when a page runs off the end of the list.
+	public function get_unpaid_addresses_from_start($limit) {
+		global $wpdb;
+		$limit = max(1, (int) $limit);
 
-		return $results;
+		return $wpdb->get_results($wpdb->prepare(
+			"SELECT DISTINCT `cryptocurrency`, `address`
+			 FROM `$this->tableName`
+			 WHERE `status` = 'unpaid'
+			 ORDER BY `cryptocurrency`, `address`
+			 LIMIT %d",
+			$limit
+		), ARRAY_A);
 	}
 
 	public function get_unpaid_for_address($cryptoId, $address) {

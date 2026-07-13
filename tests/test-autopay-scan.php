@@ -33,6 +33,15 @@ for ($i = 0; $i < $N; $i++) {
 }
 $wpdb->query("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES " . implode(',', $rows));
 
+// DB retrieval must itself be bounded: the count is a single scalar and each
+// keyset page returns only its LIMIT, never the whole backlog.
+$repo0 = new NMM_Payment_Repo();
+sok('count_distinct is a scalar over backlog', $repo0->count_distinct_unpaid_addresses() === $N, 'count=' . $repo0->count_distinct_unpaid_addresses());
+sok('keyset after-cursor returns only LIMIT',  count($repo0->get_unpaid_addresses_after('', '', $budget)) === $budget, 'rows=' . count($repo0->get_unpaid_addresses_after('', '', $budget)));
+sok('keyset from-start returns only LIMIT',    count($repo0->get_unpaid_addresses_from_start(7)) === 7);
+$afterMid = $repo0->get_unpaid_addresses_after('XMR', 'xmraddr_049', $budget);
+sok('keyset resumes strictly after the cursor', isset($afterMid[0]) && $afterMid[0]['address'] === 'xmraddr_050', 'first=' . (isset($afterMid[0]) ? $afterMid[0]['address'] : '(none)'));
+
 add_filter('nmm_autopay_scan_budget', function () use ($budget) { return $budget; });
 
 $GLOBALS['as_checked'] = array();

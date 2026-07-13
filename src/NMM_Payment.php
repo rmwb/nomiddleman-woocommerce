@@ -9,16 +9,14 @@ class NMM_Payment {
 	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
 		$paymentRepo = new NMM_Payment_Repo();
 
-		// Unique unpaid payment addresses, in a stable order so the persisted
-		// sweep cursor below is meaningful across ticks.
-		$addressesToCheck = $paymentRepo->get_distinct_unpaid_addresses();
-
-		if (empty($addressesToCheck)) {
+		// Count only (a single scalar) so a large backlog is never loaded into PHP
+		// just to size the budget.
+		$total = $paymentRepo->count_distinct_unpaid_addresses();
+		if ($total < 1) {
 			return;
 		}
 
 		$cryptos = NMM_Cryptocurrencies::get();
-		$total = count($addressesToCheck);
 
 		// Spread the per-tick work with a persisted cursor so a large backlog of
 		// abandoned, unpaid orders cannot hold the cron lock for one long tick and
@@ -42,24 +40,22 @@ class NMM_Payment {
 
 		$take = min($budget, $total);
 
-		// Resume at the first address ordered strictly AFTER the previous tick's
-		// stopping point. Matching by "next greater" rather than an exact key means
-		// that if that address was paid or removed between ticks, we still advance
-		// to the following one instead of restarting at index 0 (which, if the last
-		// scanned row is removed every tick, would rescan the top forever and
-		// starve later addresses). When the cursor is at/after the last row, no row
-		// is greater and we wrap to the top.
+		// Keyset pagination around the persisted cursor: fetch only the budgeted
+		// slice ordered strictly AFTER the previous tick's stopping point, then
+		// wrap to the head if that page ran off the end. Because we ask for rows
+		// "greater than" the cursor (not an exact key), a cursor row paid/removed
+		// between ticks simply advances to the next one - no restart-at-top that
+		// could starve later addresses. With $take <= $total the after/head pages
+		// never overlap, so no address is processed twice in a tick.
 		$cursor = get_option('nmm_autopay_scan_cursor', '');
 		$cursorParts = ($cursor !== '') ? explode('|', $cursor, 2) : array('', '');
 		$cursorCrypto = $cursorParts[0];
 		$cursorAddress = isset($cursorParts[1]) ? $cursorParts[1] : '';
 
-		$startIndex = 0;
-		foreach ($addressesToCheck as $i => $record) {
-			if (self::record_sorts_after($record, $cursorCrypto, $cursorAddress)) {
-				$startIndex = $i;
-				break;
-			}
+		$batch = $paymentRepo->get_unpaid_addresses_after($cursorCrypto, $cursorAddress, $take);
+		if (count($batch) < $take) {
+			$head = $paymentRepo->get_unpaid_addresses_from_start($take - count($batch));
+			$batch = array_merge($batch, $head);
 		}
 
 		// For Monero, fetch the account's incoming transfers ONCE per tick and
@@ -70,8 +66,7 @@ class NMM_Payment {
 
 		$lastKey = $cursor;
 
-		for ($n = 0; $n < $take; $n++) {
-			$record = $addressesToCheck[($startIndex + $n) % $total];
+		foreach ($batch as $record) {
 			$lastKey = self::scan_key($record);
 
 			$cryptoId = $record['cryptocurrency'];
@@ -86,9 +81,9 @@ class NMM_Payment {
 
 			if ($cryptoId === 'XMR') {
 				if (!$xmrFetched) {
-					$batch = NMM_Monero::get_account_transactions($transactionLifetime);
-					$xmrByAddress = (isset($batch['result']) && $batch['result'] === 'success' && isset($batch['by_address']))
-						? $batch['by_address']
+					$xmrBatch = NMM_Monero::get_account_transactions($transactionLifetime);
+					$xmrByAddress = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success' && isset($xmrBatch['by_address']))
+						? $xmrBatch['by_address']
 						: array();
 					$xmrFetched = true;
 				}
@@ -107,18 +102,6 @@ class NMM_Payment {
 	// Stable identity of a distinct-unpaid-address row, for the sweep cursor.
 	private static function scan_key($record) {
 		return $record['cryptocurrency'] . '|' . $record['address'];
-	}
-
-	// True if $record sorts strictly after the (cryptocurrency, address) cursor,
-	// matching get_distinct_unpaid_addresses()' ORDER BY cryptocurrency, address.
-	// An empty cursor sorts before everything, so the first row qualifies.
-	private static function record_sorts_after($record, $cursorCrypto, $cursorAddress) {
-		$cryptoCmp = strcmp($record['cryptocurrency'], $cursorCrypto);
-		if ($cryptoCmp !== 0) {
-			return $cryptoCmp > 0;
-		}
-
-		return strcmp($record['address'], $cursorAddress) > 0;
 	}
 
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
