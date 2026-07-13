@@ -158,6 +158,26 @@ class NMM_Payment_Repo {
 		));
 	}
 
+	/**
+	 * Record the received tx hash on a row we could not complete because the
+	 * expiry race cancelled it, for manual reconciliation. Scoped to a genuinely
+	 * cancelled row that has no hash yet, so it can never clobber the hash of a
+	 * row that a concurrent verifier legitimately marked paid.
+	 */
+	public function set_hash_on_cancelled($orderId, $orderAmount, $hash) {
+		global $wpdb;
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `tx_hash` = %s
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d
+			 AND `status` = 'cancelled'
+			 AND (`tx_hash` IS NULL OR `tx_hash` = '')",
+			$hash, $orderAmount, $orderId
+		));
+	}
+
 	public function set_ordered_at($orderId, $orderAmount, $orderedAt) {
 		global $wpdb;
 

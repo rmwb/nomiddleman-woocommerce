@@ -25,15 +25,11 @@ class NMM_Payment {
 	}
 
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
-		global $woocommerce;
-		$paymentRepo = new NMM_Payment_Repo();
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
-		
 		$cryptoId = $crypto->get_id();
 
 		NMM_Util::log(__FILE__, __LINE__, '===========================================================================');
 		NMM_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
-		
+
 		try {
 			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
 		}
@@ -41,9 +37,28 @@ class NMM_Payment {
 			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId);
 			return;
 		}
-		
-		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));	
 
+		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
+
+		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
+	}
+
+	/**
+	 * Match already-fetched transactions for one address against its unpaid
+	 * orders, then claim/complete or reconcile. Split out from the network fetch
+	 * so the matching, race-claim and consumed-tx logic can be exercised directly
+	 * in tests with injected NMM_Transaction objects (no external calls).
+	 *
+	 * @param NMM_Cryptocurrency $crypto
+	 * @param string             $address
+	 * @param NMM_Transaction[]  $transactions
+	 * @param int                $transactionLifetime
+	 */
+	public static function process_address_transactions($crypto, $address, $transactions, $transactionLifetime) {
+		$paymentRepo = new NMM_Payment_Repo();
+		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+
+		$cryptoId = $crypto->get_id();
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
@@ -132,15 +147,28 @@ class NMM_Payment {
 				$orderId = $matchingPaymentRecords[0]['order_id'];
 				$orderAmount = $matchingPaymentRecords[0]['order_amount'];
 
+				// Hook fired immediately before the claim, in the exact window the
+				// conditional claim below is designed to close. Integrations - and
+				// the concurrency test - can observe or, in a race, complete/cancel
+				// the order here.
+				do_action('nmm_before_autopay_complete', $orderId, $cryptoId, $address, $txHash);
+
 				// Atomically claim the row for payment. The expiry cron races us
 				// with the opposite claim (unpaid -> cancelled); because both sides
 				// go through the same conditional update, exactly one wins. If we
 				// lose, the row was already cancelled/paid out from under us - do
 				// NOT complete the order (that would split-brain the order against
-				// its payment record). Surface a warning so a payment that arrived
-				// right at the expiry boundary can be reconciled by hand.
+				// its payment record).
 				if (!$paymentRepo->claim_for_payment($orderId, $orderAmount)) {
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
+					// Crucially, still consume the tx. This address (a static
+					// address or a carousel seat) will be reused, and an unconsumed
+					// tx that is still inside the matching window could otherwise be
+					// matched against a *new* order of the same amount and
+					// misattribute the payment. Record the hash on the cancelled row
+					// too, for manual reconciliation.
+					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
+					$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $txHash);
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded the transaction as consumed to prevent reuse on a recycled address. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
 					continue;
 				}
 

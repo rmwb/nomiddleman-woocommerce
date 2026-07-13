@@ -17,8 +17,12 @@ $wpdb = $GLOBALS['wpdb'];
 $pt = $wpdb->prefix . NMM_PAYMENT_TABLE;
 $wpdb->query("DELETE FROM `$pt`");
 
-$pass = true;
-function aok($label, $cond, $extra = '') { global $pass; printf("%-52s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $pass = false; } }
+// NOTE: wp eval-file runs this file in function scope, so a plain top-level
+// `$pass` is NOT the same variable a `global $pass` inside aok() would write.
+// Track pass/fail through $GLOBALS explicitly so the final banner is accurate
+// (otherwise a failing check could still print PASSED and slip through CI).
+$GLOBALS['ac_ok'] = true;
+function aok($label, $cond, $extra = '') { printf("%-52s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['ac_ok'] = false; } }
 
 $crypto = 'BTC';                 // default autopay cancellation window is 24h
 $expired = time() - (25 * 3600); // past the window
@@ -151,5 +155,66 @@ $repo2 = new NMM_Payment_Repo();
 aok('cutoff returns only the 12 expired rows', count($repo2->get_unpaid($cutoff)) === 12, 'got=' . count($repo2->get_unpaid($cutoff)));
 aok('no-cutoff still returns all 412 rows',    count($repo2->get_unpaid()) === 412, 'got=' . count($repo2->get_unpaid()));
 
+// --- End-to-end: cancellation wins the race, reused address must not re-match ---
+// Drive the real matcher with an injected in-window transaction. A hook fires in
+// the exact pre-claim window and simulates the expiry cron winning (unpaid ->
+// cancelled), so the verifier's claim loses. The verified tx MUST still be
+// consumed, or the same still-in-window tx could later complete a *new* order on
+// the reused static/carousel address (payment misattribution).
 $wpdb->query("DELETE FROM `$pt`");
-echo $pass ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";
+$cryptos = NMM_Cryptocurrencies::get();
+$btc = $cryptos['BTC'];
+$reuseAddr = 'addr_reuse_e2e';
+$reuseAmt  = '0.00100000';
+$txHash    = 'TXREUSEe2e';
+$lifetime  = 3600;
+$txUnits   = $reuseAmt * (10 ** $btc->get_round_precision()); // smallest-unit amount
+$tx = new NMM_Transaction($txUnits, 999 /*confirmations*/, time() /*in window*/, $txHash);
+$rpe = new NMM_Payment_Repo();
+$stg = new NMM_Settings(get_option(NMM_REDUX_ID));
+// Consumed-tx state lives in a per-address option that outlives the table wipe;
+// clear it so this test is deterministic across repeated runs.
+delete_option('nmmpro_BTC_transactions_consumed_for_' . $reuseAddr);
+
+// Order A on the reused address, unpaid.
+$oA = mkorder('pending');
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
+	$reuseAddr, time(), $oA, $reuseAmt));
+
+$loseHook = function($orderId, $cryptoId, $address, $hash) use ($oA, $reuseAmt, $rpe) {
+	if ($orderId == $oA) { $rpe->claim_for_cancellation($oA, $reuseAmt); } // cron wins the row
+};
+add_action('nmm_before_autopay_complete', $loseHook, 10, 4);
+NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetime);
+remove_action('nmm_before_autopay_complete', $loseHook, 10);
+
+aok('lost race: order A record cancelled',      rec_status($wpdb,$pt,$oA) === 'cancelled');
+aok('lost race: order A not completed',         !wc_get_order($oA)->has_status(array('processing','completed')), 'status=' . ord_status($oA));
+aok('lost race: tx recorded as consumed',       $stg->tx_already_consumed('BTC', $reuseAddr, $txHash) === true);
+aok('lost race: hash persisted on cancelled row', $wpdb->get_var($wpdb->prepare("SELECT tx_hash FROM `$pt` WHERE order_id=%d", $oA)) === $txHash);
+
+// Reuse the address for a NEW order B, same amount; the same tx must be skipped.
+$oB = mkorder('pending');
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
+	$reuseAddr, time(), $oB, $reuseAmt));
+NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetime);
+
+aok('reused address: new order B NOT paid',     rec_status($wpdb,$pt,$oB) === 'unpaid');
+aok('reused address: order B still pending',    ord_status($oB) === 'pending');
+
+// Sanity: a fresh, unconsumed tx on the reused address DOES complete a new order.
+// Clear the address's rows first so only order C is unpaid on it (order B lingers
+// unpaid by design, which would otherwise make C an ambiguous collision).
+$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $reuseAddr));
+$oC = mkorder('pending');
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
+	$reuseAddr, time(), $oC, $reuseAmt));
+$tx2 = new NMM_Transaction($txUnits, 999, time(), 'TXFRESHe2e');
+NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx2), $lifetime);
+aok('control: fresh tx DOES pay a new order',   rec_status($wpdb,$pt,$oC) === 'paid');
+
+$wpdb->query("DELETE FROM `$pt`");
+echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";
