@@ -185,32 +185,40 @@ class NMM_Gateway extends WC_Payment_Gateway {
         
         try {
             $order = wc_get_order($order_id);
-            $existingWalletAddress = $order->get_meta('wallet_address');
 
-            // if we already set this then we are on a page refresh, so handle refresh
-            if (!empty($existingWalletAddress)) {
-
-                if ($order->is_paid()) {
-                    echo '<p class="nmm-status-paid">' . esc_html__('Payment received - thank you! Your order is being processed.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
-                    return;
-                }
-
-                // Do not re-display payment instructions for an order that is no
-                // longer awaiting payment. Its address may have been recycled to
-                // a different order, so a late payment would credit someone else.
-                if ($order->has_status(array('cancelled', 'failed'))) {
-                    echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
-                    return;
-                }
-
-                $this->handle_thank_you_refresh(
-                    $order->get_meta('crypto_type_id'),
-                    $existingWalletAddress,
-                    $order->get_meta('crypto_amount'),
-                    $order_id);
-
+            // Fast path: the address is already allocated (a page refresh). No
+            // lock is needed just to re-display it.
+            if (!empty($order->get_meta('wallet_address'))) {
+                $this->display_existing_payment($order, $order_id);
                 return;
             }
+
+            // First load. Serialize per-order initialization so two near-
+            // simultaneous first loads of the same order cannot both allocate an
+            // address: with Monero subaddresses or carousel addresses each worker
+            // would mint a DIFFERENT address, and the last meta write could differ
+            // from the address recorded in the payment table, leaving the
+            // displayed address unmonitored. Uses the same crash-safe MySQL
+            // advisory lock the cron uses.
+            $lockResult = NMM_Util::acquire_order_init_lock($order_id);
+
+            try {
+                // Re-fetch under the lock: another worker may have finished
+                // initializing while we waited for it. If so, just display that
+                // address and never allocate a second one.
+                $order = wc_get_order($order_id);
+                if (!empty($order->get_meta('wallet_address'))) {
+                    $this->display_existing_payment($order, $order_id);
+                    return;
+                }
+
+                if ($lockResult !== '1') {
+                    // Timed out waiting, or advisory locks are unavailable on this
+                    // host. Initialize anyway rather than erroring the customer's
+                    // order; the race window is now tiny and this matches the
+                    // pre-lock behaviour.
+                    NMM_Util::log(__FILE__, __LINE__, 'Order-init lock not acquired for order ' . $order_id . ' (' . var_export($lockResult, true) . '); initializing without overlap protection.', 'warning');
+                }
 
             $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
@@ -334,6 +342,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
             // Output additional thank you page html
             $this->output_thank_you_html($crypto, $orderWalletAddress, $formattedCryptoTotal, $order_id);
+            }
+            finally {
+                // Release only the lock we actually acquired ('1'); on '0'/null we
+                // never held it. Runs on the normal path, on an early return above,
+                // and if allocation throws (propagating to the outer catch).
+                if ($lockResult === '1') {
+                    NMM_Util::release_order_init_lock($order_id);
+                }
+            }
         }
         catch ( \Exception $e ) {
             $order = wc_get_order($order_id);
@@ -351,6 +368,31 @@ class NMM_Gateway extends WC_Payment_Gateway {
             echo '</ul>';
             echo '</div>';
         }
+    }
+
+    // Re-display an order whose payment address was already allocated (page
+    // refresh, or a concurrent first load that lost the init lock). Shows a
+    // terminal message for paid/cancelled/failed orders, otherwise the live
+    // payment status. Never allocates - allocation happens once, under the lock.
+    private function display_existing_payment($order, $order_id) {
+        if ($order->is_paid()) {
+            echo '<p class="nmm-status-paid">' . esc_html__('Payment received - thank you! Your order is being processed.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+            return;
+        }
+
+        // Do not re-display payment instructions for an order that is no longer
+        // awaiting payment. Its address may have been recycled to a different
+        // order, so a late payment would credit someone else.
+        if ($order->has_status(array('cancelled', 'failed'))) {
+            echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+            return;
+        }
+
+        $this->handle_thank_you_refresh(
+            $order->get_meta('crypto_type_id'),
+            $order->get_meta('wallet_address'),
+            $order->get_meta('crypto_amount'),
+            $order_id);
     }
 
     public function additional_email_details($order, $sent_to_admin, $plain_text, $email) {
