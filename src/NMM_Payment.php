@@ -67,7 +67,7 @@ class NMM_Payment {
 
 			if ($cryptoId === 'XMR') {
 				if (!$xmrFetched) {
-					$batch = NMM_Monero::get_account_transactions();
+					$batch = NMM_Monero::get_account_transactions($transactionLifetime);
 					$xmrByAddress = (isset($batch['result']) && $batch['result'] === 'success' && isset($batch['by_address']))
 						? $batch['by_address']
 						: array();
