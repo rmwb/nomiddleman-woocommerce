@@ -42,14 +42,22 @@ class NMM_Payment {
 
 		$take = min($budget, $total);
 
-		// Resume after the address the previous tick stopped on. If that address
-		// is gone (paid or removed) the key is not found and we start at the top -
-		// still correct, just slightly less even for a single tick.
+		// Resume at the first address ordered strictly AFTER the previous tick's
+		// stopping point. Matching by "next greater" rather than an exact key means
+		// that if that address was paid or removed between ticks, we still advance
+		// to the following one instead of restarting at index 0 (which, if the last
+		// scanned row is removed every tick, would rescan the top forever and
+		// starve later addresses). When the cursor is at/after the last row, no row
+		// is greater and we wrap to the top.
 		$cursor = get_option('nmm_autopay_scan_cursor', '');
+		$cursorParts = ($cursor !== '') ? explode('|', $cursor, 2) : array('', '');
+		$cursorCrypto = $cursorParts[0];
+		$cursorAddress = isset($cursorParts[1]) ? $cursorParts[1] : '';
+
 		$startIndex = 0;
 		foreach ($addressesToCheck as $i => $record) {
-			if (self::scan_key($record) === $cursor) {
-				$startIndex = $i + 1;
+			if (self::record_sorts_after($record, $cursorCrypto, $cursorAddress)) {
+				$startIndex = $i;
 				break;
 			}
 		}
@@ -99,6 +107,18 @@ class NMM_Payment {
 	// Stable identity of a distinct-unpaid-address row, for the sweep cursor.
 	private static function scan_key($record) {
 		return $record['cryptocurrency'] . '|' . $record['address'];
+	}
+
+	// True if $record sorts strictly after the (cryptocurrency, address) cursor,
+	// matching get_distinct_unpaid_addresses()' ORDER BY cryptocurrency, address.
+	// An empty cursor sorts before everything, so the first row qualifies.
+	private static function record_sorts_after($record, $cursorCrypto, $cursorAddress) {
+		$cryptoCmp = strcmp($record['cryptocurrency'], $cursorCrypto);
+		if ($cryptoCmp !== 0) {
+			return $cryptoCmp > 0;
+		}
+
+		return strcmp($record['address'], $cursorAddress) > 0;
 	}
 
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {

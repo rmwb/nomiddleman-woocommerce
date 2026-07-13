@@ -85,6 +85,30 @@ NMM_Payment::check_all_addresses_for_matching_payment($lifetime);
 sok('empty backlog: no addresses checked',        count($GLOBALS['as_checked']) === 0);
 sok('empty backlog: no XMR fetch',                $GLOBALS['as_fetches'] === 0);
 
+// Cursor resilience: when the row the cursor points at is removed between ticks
+// (its order got paid), the sweep must resume at the NEXT address, not restart at
+// the top. Otherwise removing the last-scanned row every tick would rescan the
+// beginning forever and starve later addresses past the matching window.
+remove_all_filters('nmm_autopay_scan_budget');
+add_filter('nmm_autopay_scan_budget', function () { return 3; });
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+for ($i = 0; $i < 9; $i++) {
+	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrc_%d', $i), time(), 730000 + $i));
+}
+
+$GLOBALS['as_checked'] = array();
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // tick 1 -> xmrc_0,1,2
+$tick1 = $GLOBALS['as_checked'];
+$lastScanned = end($tick1);
+$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $lastScanned)); // as if it got paid
+
+$GLOBALS['as_checked'] = array();
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // tick 2
+$tick2 = $GLOBALS['as_checked'];
+sok('resumes after a removed cursor row',       isset($tick2[0]) && $tick2[0] === 'xmrc_3', 'tick2 first=' . (isset($tick2[0]) ? $tick2[0] : '(none)') . ', removed=' . $lastScanned);
+sok('does not restart at the top',              !in_array('xmrc_0', $tick2, true), 'tick2=' . implode(',', $tick2));
+
 // Adaptive budget: when the backlog is large enough that a full sweep at the
 // baseline would exceed the matching lifetime, the budget rises so every address
 // is still re-checked within the lifetime - otherwise a payment arriving just

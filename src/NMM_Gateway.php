@@ -212,12 +212,23 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     return;
                 }
 
+                if ($lockResult === '0') {
+                    // The lock works and another request holds it: that request is
+                    // still initializing this order (a slow first load - exchange
+                    // rate or wallet RPC). We must NOT allocate a second address -
+                    // that is exactly the race this lock prevents. Ask the customer
+                    // to refresh; the fast path above will then show the address the
+                    // other request assigns.
+                    NMM_Util::log(__FILE__, __LINE__, 'Order-init lock busy for order ' . $order_id . '; another request is still initializing. Asking the customer to refresh.', 'warning');
+                    echo '<p class="nmm-status-pending">' . esc_html__('We are preparing your payment details. This will be ready in a few seconds - please refresh this page.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+                    return;
+                }
+
                 if ($lockResult !== '1') {
-                    // Timed out waiting, or advisory locks are unavailable on this
-                    // host. Initialize anyway rather than erroring the customer's
-                    // order; the race window is now tiny and this matches the
-                    // pre-lock behaviour.
-                    NMM_Util::log(__FILE__, __LINE__, 'Order-init lock not acquired for order ' . $order_id . ' (' . var_export($lockResult, true) . '); initializing without overlap protection.', 'warning');
+                    // null: advisory locks are unavailable on this host. Degrade to
+                    // initializing without overlap protection (matching the pre-lock
+                    // behaviour) rather than never allocating an address at all.
+                    NMM_Util::log(__FILE__, __LINE__, 'Advisory locks unavailable on this host; initializing order ' . $order_id . ' without overlap protection.', 'warning');
                 }
 
             $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));

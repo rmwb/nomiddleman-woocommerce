@@ -68,7 +68,9 @@ class NMM_Payment_Repo {
 
 		// Stable ordering so the cron's persisted fair-sweep cursor is meaningful
 		// across ticks (see NMM_Payment::check_all_addresses_for_matching_payment).
-		$query = "SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid' ORDER BY `cryptocurrency`, `address`";
+		// BINARY makes the sort byte-wise so it matches the PHP strcmp() the cursor
+		// resume logic uses, regardless of the column's (case-insensitive) collation.
+		$query = "SELECT DISTINCT `address`, `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid' ORDER BY BINARY `cryptocurrency`, BINARY `address`";
 
 		$results = $wpdb->get_results($query, ARRAY_A);
 
