@@ -237,7 +237,8 @@ class NMM_Payment {
 				self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime);
 			}
 			else {
-				if (!self::check_address_transactions_for_matching_payments($crypto, $address, $cryptoLifetime)) {
+				$fetched = self::check_address_transactions_for_matching_payments($crypto, $address, $cryptoLifetime);
+				if ($fetched === false) {
 					$newFailed[] = self::scan_key($record);
 				}
 				elseif ($cryptoId === 'SOL' && !NMM_Blockchain::sol_address_fully_swept($address)) {
@@ -248,6 +249,13 @@ class NMM_Payment {
 					// is durable - but not verification either: the coin must
 					// not be certified covered while signatures below the
 					// internal cursor, or in its retry queue, are uninspected.
+					$partialCryptos[$cryptoId] = true;
+				}
+				elseif ($cryptoId !== 'SOL' && self::page_possibly_truncated($cryptoId, $fetched, $cryptoLifetime, $now)) {
+					// A full newest-page whose oldest entry is still inside
+					// the matching window: in-window history may be hidden
+					// below the fixed-depth page (see page_possibly_truncated)
+					// - a valid check, but not certifiable coverage.
 					$partialCryptos[$cryptoId] = true;
 				}
 			}
@@ -317,6 +325,14 @@ class NMM_Payment {
 		// cancellation for every currency on the store. The retry path
 		// re-checks the failed address next tick, and that coin's stamp waits
 		// for the next wrap with all of its fetches clean.
+		//
+		// The stamp's claim is "every address of this coin was checked, with
+		// nothing relevant possibly hidden, after the row's window closed".
+		// Three incompleteness signals guard it: fetch failures (above),
+		// Solana's own multi-tick sweep state (sol_address_fully_swept), and
+		// the generic full-page truncation check (page_possibly_truncated) for
+		// the fixed-depth explorer adapters - all three route into the dirty
+		// marker below.
 		if ($wrapped || $take >= $total) {
 			$failedCryptos = array();
 			foreach ($newFailed as $failedKey) {
@@ -420,9 +436,11 @@ class NMM_Payment {
 		return $record['cryptocurrency'] . '|' . $record['address'];
 	}
 
-	// Returns true if the address's transactions were fetched (and matched), or
-	// false if the fetch failed - so the sweep can retry a transient failure on
-	// the next tick instead of leaving it until the whole backlog is swept again.
+	// Fetches and matches the address's transactions. Returns the fetched
+	// NMM_Transaction[] on success (so the sweep can inspect the page for
+	// possible truncation before certifying coverage), or false if the fetch
+	// failed - so the sweep can retry a transient failure on the next tick
+	// instead of leaving it until the whole backlog is swept again.
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
 		$cryptoId = $crypto->get_id();
 
@@ -441,7 +459,44 @@ class NMM_Payment {
 
 		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
 
-		return true;
+		return is_array($transactions) ? $transactions : array();
+	}
+
+	/**
+	 * Whether one address visit "may be truncated within the matching window":
+	 * the fixed-depth explorer adapters return only the newest page of an
+	 * address's history, so when a page comes back FULL and even its oldest
+	 * entry is still inside the matching window, in-window transactions may
+	 * exist below the page, unseen. Such a visit is a valid payment check (it
+	 * sees exactly what the matcher can ever see) but it must NOT certify
+	 * coverage for cancellation: under the bounded sweep an address is
+	 * revisited less often than every tick, so a payment that was visible when
+	 * it arrived can be buried under a burst of later activity (e.g. dusting a
+	 * reused carousel address) before the cursor comes back - master's
+	 * every-tick scan would have matched it first. A page whose oldest entry
+	 * is OLDER than the window proves the whole window is visible; a short
+	 * page proves there is nothing below.
+	 *
+	 * The caps describe what an adapter RETURNS (incoming/credited entries).
+	 * Burying a payment therefore requires a page-full of newer incoming
+	 * transactions, which matches the realistic burial vector (dust bursts are
+	 * incoming); a burst of outgoing wallet sweeps does not fill these pages.
+	 */
+	public static function page_possibly_truncated($cryptoId, $transactions, $transactionLifetime, $now) {
+		$cap = NMM_Blockchain::adapter_page_cap($cryptoId);
+		if ($cap < 1 || !is_array($transactions) || count($transactions) < $cap) {
+			return false;
+		}
+
+		$oldest = null;
+		foreach ($transactions as $transaction) {
+			$ts = (int) $transaction->get_time_stamp();
+			if ($oldest === null || $ts < $oldest) {
+				$oldest = $ts;
+			}
+		}
+
+		return ($oldest !== null) && ($oldest > ($now - (int) $transactionLifetime));
 	}
 
 	/**

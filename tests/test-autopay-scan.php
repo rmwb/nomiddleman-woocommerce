@@ -455,6 +455,64 @@ delete_transient('nmm_apifail_' . md5('api.mainnet-beta.solana.com'));
 remove_filter('pre_http_request', $solMock, 10);
 delete_transient('nmm_sol_cursor_' . md5($solAddr));
 
+// --- fixed-depth adapters: a full in-window page must not certify ----------
+// Explorers return only the newest page (BTC/mempool.space: 25). Under the
+// bounded sweep an address is revisited less often than every tick, so a
+// payment can be buried under a burst of later activity between visits -
+// master's every-tick scan would have matched it first. A FULL page whose
+// oldest entry is still inside the matching window may therefore hide
+// in-window history below it and must dirty the coin; a page reaching PAST
+// the window, or a short page, proves everything relevant was visible.
+$GLOBALS['btr_txs'] = array();
+$btcMockTrunc = function ($pre, $args, $url) {
+	if (strpos($url, 'mempool.space/api/blocks/tip/height') !== false) {
+		return array('response' => array('code' => 200), 'body' => '105', 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'mempool.space/api/address/') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode($GLOBALS['btr_txs']), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+$btrPage = function ($count, $oldestAge) {
+	$txs = array();
+	for ($i = 0; $i < $count; $i++) {
+		// newest-first; the last entry carries $oldestAge
+		$age = ($count > 1) ? (int) (120 + ($oldestAge - 120) * $i / ($count - 1)) : $oldestAge;
+		$txs[] = array(
+			'txid' => sprintf('btr_tx_%03d', $i),
+			'status' => array('confirmed' => true, 'block_height' => 100, 'block_time' => time() - $age),
+			'vout' => array(array('scriptpubkey_address' => 'btctrunc_addr', 'value' => 1000)),
+		);
+	}
+	return $txs;
+};
+add_filter('pre_http_request', $btcMockTrunc, 10, 3);
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('btctrunc_addr','BTC','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 785000));
+
+$GLOBALS['btr_txs'] = $btrPage(25, 1800); // FULL page, oldest entry well inside the window
+as_tick(3 * 3600);
+$covMapB = get_option('nmm_autopay_scan_covered_at', array());
+sok('full in-window page does not certify',        !is_array($covMapB) || !isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+
+$GLOBALS['btr_txs'] = $btrPage(25, 10 * 24 * 3600); // full page reaching PAST the window
+delete_option('nmm_autopay_scan_dirty');
+as_tick(3 * 3600);
+$covMapB = get_option('nmm_autopay_scan_covered_at', array());
+sok('page spanning past the window certifies',     is_array($covMapB) && isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+
+$GLOBALS['btr_txs'] = $btrPage(3, 1800); // short page: nothing below it
+delete_option('nmm_autopay_scan_covered_at');
+as_tick(3 * 3600);
+$covMapB = get_option('nmm_autopay_scan_covered_at', array());
+sok('short page certifies',                        is_array($covMapB) && isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+remove_filter('pre_http_request', $btcMockTrunc, 10);
+delete_option('nmmpro_BTC_transactions_consumed_for_btctrunc_addr');
+
 // --- unknown ticker: cannot be verified, must never be certified -----------
 // A row whose coin was removed from the registry is skipped by the scan; it
 // must be marked dirty rather than silently certified, or expiry would cancel

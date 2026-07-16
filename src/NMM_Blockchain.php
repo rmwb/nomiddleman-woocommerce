@@ -2434,6 +2434,58 @@ class NMM_Blockchain {
 	private static $solFetchComplete = array();
 
 	/**
+	 * Newest-page depth of each verification adapter: the maximum number of
+	 * transaction entries one successful fetch can return. The Autopay
+	 * verifier uses this to detect a possibly-truncated visit (a FULL page
+	 * whose oldest entry is still inside the matching window may hide older
+	 * in-window transactions below it) and withholds the cancellation
+	 * coverage stamp for that coin - see NMM_Payment::page_possibly_truncated.
+	 *
+	 * 0 means depth-complete within the matching window (no cap to hit).
+	 * Values for adapters that send no limit parameter are the explorer's
+	 * documented/observed default page size, chosen LOW where sources
+	 * disagree so possible truncation is flagged rather than missed. UTXO
+	 * adapters can return several entries per transaction (one per credited
+	 * output), which only trips the full-page check earlier - the safe
+	 * direction.
+	 */
+	public static function adapter_page_cap($cryptoId) {
+		static $caps = array(
+			// explicit limit params or client-side slices
+			'BTC' => 25, 'DGB' => 25, 'BCH' => 50, 'ADA' => 25, 'BLK' => 25,
+			'BSV' => 20, 'EOS' => 50, 'WAVES' => 100, 'XTZ' => 50, 'ZEC' => 50,
+			'USDTTRX' => 50,
+			// etherscan-style tokentx page (all ERC-20 / L2 tokens)
+			'REP' => 100, 'MLN' => 100, 'GNO' => 100, 'BAT' => 100, 'HOT' => 100,
+			'LINK' => 100, 'OMG' => 100, 'ZRX' => 100, 'USDC' => 100, 'USDT' => 100,
+			'MKR' => 100, 'DAI' => 100, 'PYUSD' => 100,
+			'USDTPOL' => 100, 'USDCPOL' => 100, 'USDTARB' => 100, 'USDCARB' => 100,
+			'USDCBAS' => 100,
+			// explorer default pages (adapter sends no limit parameter)
+			'DOGE' => 50, 'LTC' => 50, 'DASH' => 10, 'DCR' => 10, 'GRS' => 10,
+			'XLM' => 10, 'TRX' => 20, 'XRP' => 10,
+			// Blockscout txlist returns the full recent set (~10k hard cap)
+			'ETH' => 10000, 'ETC' => 10000,
+			// legacy endpoints, dead today (they throw = fetch failure); caps
+			// recorded in case a host is ever revived
+			'LSK' => 10, 'XEM' => 25, 'ONION' => 25,
+			// depth-complete within the matching window
+			'XMR' => 0, // height-bounded get_transfers batch covers the window
+			'SOL' => 0, // durable multi-tick sweep; sol_address_fully_swept() gates
+			'BTX' => 0, // full unpaginated txid list
+			'XMY' => 0, // Blockbook full page covers real payment addresses
+		);
+
+		if (isset($caps[$cryptoId])) {
+			return $caps[$cryptoId];
+		}
+
+		// Unknown/new adapter: assume the smallest real explorer default so
+		// possible truncation is flagged rather than silently certified.
+		return 10;
+	}
+
+	/**
 	 * Whether $address's in-window Solana history is FULLY inspected: this
 	 * request's fetch (if any) reached the end of the matching window without
 	 * a page failure or enqueue failure, the resume cursor is cleared, and no
