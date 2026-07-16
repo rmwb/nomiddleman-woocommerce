@@ -144,4 +144,23 @@ if (function_exists('wc_create_order')) {
 	$holder->delete(true);
 }
 
+// A deleted (or never-existing) order must not fatal the thank-you page:
+// wc_get_order() returns false, and calling get_meta() on it would throw an
+// Error that the page's \Exception handlers do not catch (a 500 for the
+// customer). The gateway must return silently, rendering nothing - matching
+// how WooCommerce's own templates behave when an order is missing.
+if (class_exists('NMM_Gateway') && function_exists('WC')) {
+	$gw = new NMM_Gateway();
+	ob_start();
+	$ghostThrew = false;
+	try {
+		$gw->thank_you_page(999999999);
+	} catch (\Throwable $t) {
+		$ghostThrew = true;
+	}
+	$ghostOut = ob_get_clean();
+	lok('missing order: thank-you page does not throw', !$ghostThrew);
+	lok('missing order: renders no payment html',       trim($ghostOut) === '', 'out=' . substr(trim($ghostOut), 0, 60));
+}
+
 echo $GLOBALS['ol_ok'] ? "\nORDER-INIT-LOCK CHECKS PASSED\n" : "\nORDER-INIT-LOCK CHECKS FAILED\n";
