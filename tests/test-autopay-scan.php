@@ -82,6 +82,20 @@ $planHourlyBig = NMM_Payment::scan_plan(9000, 50, 3 * 3600, $dayCancel, 3600);
 sok('scan_plan hourly big: burst stays capped',        $planHourlyBig['budget'] === 1000, 'budget=' . $planHourlyBig['budget']);
 sok('scan_plan hourly big: window covers real sweep',  $planHourlyBig['effective_lifetime'] === 10800 + 9 * 3600, 'eff=' . $planHourlyBig['effective_lifetime']);
 
+// page_possibly_truncated (pure): the cutoff comparison must be INCLUSIVE -
+// the matcher accepts a transaction dated exactly at the window boundary
+// (only strictly older ones are rejected) and several transactions can share
+// one block timestamp, so a full page whose oldest entry sits exactly on the
+// cutoff may still hide eligible same-second history below it.
+$ptNow = time();
+$ptLife = 3 * 3600;
+$ptPage = function ($count, $oldest) { return array('transactions' => array(), 'page' => array($count, $oldest)); };
+sok('trunc: full page, oldest AT cutoff = truncated',   NMM_Payment::page_possibly_truncated('BTC', $ptPage(25, $ptNow - $ptLife), $ptLife, $ptNow) === true);
+sok('trunc: oldest strictly past cutoff = complete',    NMM_Payment::page_possibly_truncated('BTC', $ptPage(25, $ptNow - $ptLife - 1), $ptLife, $ptNow) === false);
+sok('trunc: short page = complete',                     NMM_Payment::page_possibly_truncated('BTC', $ptPage(24, $ptNow - 60), $ptLife, $ptNow) === false);
+sok('trunc: full page, unknown oldest = truncated',     NMM_Payment::page_possibly_truncated('BTC', $ptPage(25, null), $ptLife, $ptNow) === true);
+sok('trunc: capless coin never truncated',              NMM_Payment::page_possibly_truncated('XMR', $ptPage(5000, $ptNow - 60), $ptLife, $ptNow) === false);
+
 // Seed N unpaid Monero addresses. XMR RPC is unconfigured in CI, so the batch
 // fetch returns an error (no network) and no order is ever matched - the unpaid
 // set stays at N across ticks, which is exactly what we want for a coverage test.

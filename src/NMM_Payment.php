@@ -528,8 +528,13 @@ class NMM_Payment {
 		// A full page whose oldest entry cannot be shown to pre-date the
 		// matching window may hide in-window history below it. An unknown
 		// oldest timestamp on a full page counts as truncated - reach past
-		// the window cannot be proven.
-		return ($oldest === null) || ((int) $oldest > ($now - (int) $transactionLifetime));
+		// the window cannot be proven. The comparison is INCLUSIVE at the
+		// cutoff: the matcher accepts a transaction dated exactly at the
+		// boundary (only strictly older ones are rejected), and several
+		// transactions can share one block timestamp - an oldest entry
+		// sitting exactly on the cutoff proves nothing about eligible
+		// same-second history below the page.
+		return ($oldest === null) || ((int) $oldest >= ($now - (int) $transactionLifetime));
 	}
 
 	/**
