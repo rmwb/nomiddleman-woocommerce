@@ -45,6 +45,10 @@ for ($i = 0; $i < $N; $i++) {
 }
 $wpdb->query("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES " . implode(',', $rows));
 
+// Make the Monero batch fetch "succeed" (empty) via the seam so the budget/cursor
+// assertions below are not perturbed by failed-fetch retries (exercised separately).
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+
 // DB retrieval must itself be bounded: the count is a single scalar and each
 // keyset page returns only its LIMIT, never the whole backlog.
 $repo0 = new NMM_Payment_Repo();
@@ -159,10 +163,43 @@ for ($t = 1; $t < 5; $t++) {
 }
 sok('adaptive: full sweep within the lifetime window', count($adaptiveCovered) === $bigN, 'covered=' . count($adaptiveCovered) . '/' . $bigN);
 
+// Failed fetches are retried on the NEXT tick, not left until a whole sweep
+// later. With the Monero batch fetch forced to error, addresses checked this
+// tick are retained in a bounded retry set and re-checked immediately next tick.
+remove_all_filters('nmm_xmr_account_transactions');
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'error'); });
+remove_all_filters('nmm_autopay_scan_budget');
+add_filter('nmm_autopay_scan_budget', function () { return 3; });
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+for ($i = 0; $i < 9; $i++) {
+	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrf_%d', $i), time(), 740000 + $i));
+}
+
+$GLOBALS['as_checked'] = array();
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // tick 1: xmrf_0,1,2 all fail
+sok('failed fetches recorded in retry set',     count(get_option('nmm_autopay_scan_retry', array())) === 3, 'retry=' . count(get_option('nmm_autopay_scan_retry', array())));
+
+$GLOBALS['as_checked'] = array();
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // tick 2: retries 0,1,2 + sweeps 3,4,5
+$tick2 = $GLOBALS['as_checked'];
+sok('failed keys re-checked the very next tick', in_array('xmrf_0', $tick2, true) && in_array('xmrf_1', $tick2, true) && in_array('xmrf_2', $tick2, true), 'tick2=' . implode(',', $tick2));
+sok('retry set stays bounded',                  count(get_option('nmm_autopay_scan_retry', array())) <= 9);
+
+// Once fetches succeed again, the retry set drains.
+remove_all_filters('nmm_xmr_account_transactions');
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+sok('retry set drains after fetches succeed',    count(get_option('nmm_autopay_scan_retry', array())) === 0, 'retry=' . count(get_option('nmm_autopay_scan_retry', array())));
+
+remove_all_filters('nmm_xmr_account_transactions');
 remove_all_filters('nmm_autopay_scan_budget');
 remove_all_actions('nmm_autopay_address_checked');
 remove_all_actions('nmm_xmr_account_fetch');
 $wpdb->query("DELETE FROM `$pt`");
 delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
 
 echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";

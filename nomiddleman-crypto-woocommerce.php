@@ -323,6 +323,7 @@ function NMM_uninstall() {
     NMM_drop_carousel_table();
     NMM_drop_sol_retry_table();
     delete_option('nmm_autopay_scan_cursor');
+    delete_option('nmm_autopay_scan_retry');
 }
 
 // The retry table is created per site (each blog has its own prefix), so drop it

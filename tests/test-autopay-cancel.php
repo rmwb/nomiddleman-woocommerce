@@ -251,5 +251,23 @@ $tx2 = new NMM_Transaction($txUnits, 999, time(), 'TXFRESHe2e');
 NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx2), $lifetime);
 aok('control: fresh tx DOES pay a new order',   rec_status($wpdb,$pt,$oC) === 'paid');
 
+// Order-relative lower bound: a transaction dated well before the order existed
+// (a stray tx on a reused address) must NOT complete it, even when the matching
+// window is wide enough by age. A tx dated at/after the order still pays it.
+$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $reuseAddr));
+delete_option('nmmpro_BTC_transactions_consumed_for_' . $reuseAddr);
+$oOrd = mkorder('pending');
+$ordTime = time();
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
+	$reuseAddr, $ordTime, $oOrd, $reuseAmt));
+$wideLife = 6 * 3600; // wide, so age is not the reason for any rejection
+$preTx = new NMM_Transaction($txUnits, 999, $ordTime - 2 * 3600, 'TXPREORDER'); // 2h before the order
+NMM_Payment::process_address_transactions($btc, $reuseAddr, array($preTx), $wideLife);
+aok('pre-order tx does NOT pay the order',      rec_status($wpdb,$pt,$oOrd) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oOrd));
+$postTx = new NMM_Transaction($txUnits, 999, $ordTime + 60, 'TXPOSTORDER'); // just after the order
+NMM_Payment::process_address_transactions($btc, $reuseAddr, array($postTx), $wideLife);
+aok('post-order tx DOES pay the order',         rec_status($wpdb,$pt,$oOrd) === 'paid', 'status=' . rec_status($wpdb,$pt,$oOrd));
+
 $wpdb->query("DELETE FROM `$pt`");
 echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

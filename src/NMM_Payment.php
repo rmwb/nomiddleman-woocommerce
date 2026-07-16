@@ -6,6 +6,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class NMM_Payment {
 
+	// How far before an order's creation time a matching transaction may be dated
+	// and still be accepted, absorbing block-timestamp clock skew while rejecting
+	// genuinely pre-order transactions on reused addresses.
+	const TX_ORDER_SKEW_GRACE_SEC = 3600;
+
 	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
 		$paymentRepo = new NMM_Payment_Repo();
 
@@ -13,6 +18,10 @@ class NMM_Payment {
 		// just to size the budget.
 		$total = $paymentRepo->count_distinct_unpaid_addresses();
 		if ($total < 1) {
+			// Nothing unpaid: drop any stale retry keys so they cannot linger.
+			if (get_option('nmm_autopay_scan_retry', array())) {
+				update_option('nmm_autopay_scan_retry', array(), false);
+			}
 			return;
 		}
 
@@ -46,17 +55,45 @@ class NMM_Payment {
 			$batch = array_merge($batch, $head);
 		}
 
+		// Re-check addresses whose fetch FAILED last tick BEFORE the fair sweep, so
+		// a transient explorer/RPC error is retried on the very next tick rather
+		// than waiting a whole sweep (by which time a payment could age out). The
+		// retry set is bounded, and only the fair-sweep batch advances the cursor.
+		$retrySet = get_option('nmm_autopay_scan_retry', array());
+		if (!is_array($retrySet)) {
+			$retrySet = array();
+		}
+
+		$toProcess = array();
+		$seen = array();
+		foreach ($retrySet as $key) {
+			$parts = explode('|', $key, 2);
+			if (count($parts) === 2 && !isset($seen[$key])) {
+				$toProcess[] = array('cryptocurrency' => $parts[0], 'address' => $parts[1]);
+				$seen[$key] = true;
+			}
+		}
+
+		$lastKey = $cursor;
+		foreach ($batch as $record) {
+			$key = self::scan_key($record);
+			$lastKey = $key; // the cursor tracks the fair sweep only, never retries
+			if (!isset($seen[$key])) {
+				$toProcess[] = $record;
+				$seen[$key] = true;
+			}
+		}
+
 		// For Monero, fetch the account's incoming transfers ONCE per tick and
 		// group them by subaddress locally, instead of two wallet-RPC calls
 		// (get_address_index + get_transfers) for every address.
 		$xmrFetched = false;
+		$xmrOk = false;
 		$xmrByAddress = array();
 
-		$lastKey = $cursor;
+		$newFailed = array();
 
-		foreach ($batch as $record) {
-			$lastKey = self::scan_key($record);
-
+		foreach ($toProcess as $record) {
 			$cryptoId = $record['cryptocurrency'];
 			$address = $record['address'];
 
@@ -70,20 +107,30 @@ class NMM_Payment {
 			if ($cryptoId === 'XMR') {
 				if (!$xmrFetched) {
 					$xmrBatch = NMM_Monero::get_account_transactions($effectiveLifetime);
-					$xmrByAddress = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success' && isset($xmrBatch['by_address']))
-						? $xmrBatch['by_address']
-						: array();
+					$xmrOk = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success');
+					$xmrByAddress = ($xmrOk && isset($xmrBatch['by_address'])) ? $xmrBatch['by_address'] : array();
 					$xmrFetched = true;
+				}
+				if (!$xmrOk) {
+					$newFailed[] = self::scan_key($record); // could not fetch; retry next tick
+					continue;
 				}
 				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
 				self::process_address_transactions($crypto, $address, $xmrTxs, $effectiveLifetime);
 			}
 			else {
-				self::check_address_transactions_for_matching_payments($crypto, $address, $effectiveLifetime);
+				if (!self::check_address_transactions_for_matching_payments($crypto, $address, $effectiveLifetime)) {
+					$newFailed[] = self::scan_key($record);
+				}
 			}
 		}
 
-		// Persist where we stopped so the next tick continues fairly.
+		// Persist the bounded retry set and the fair-sweep cursor.
+		$newFailed = array_values(array_unique($newFailed));
+		if (count($newFailed) > 200) {
+			$newFailed = array_slice($newFailed, 0, 200);
+		}
+		update_option('nmm_autopay_scan_retry', $newFailed, false);
 		update_option('nmm_autopay_scan_cursor', $lastKey, false);
 	}
 
@@ -129,6 +176,9 @@ class NMM_Payment {
 		return $record['cryptocurrency'] . '|' . $record['address'];
 	}
 
+	// Returns true if the address's transactions were fetched (and matched), or
+	// false if the fetch failed - so the sweep can retry a transient failure on
+	// the next tick instead of leaving it until the whole backlog is swept again.
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
 		$cryptoId = $crypto->get_id();
 
@@ -140,12 +190,14 @@ class NMM_Payment {
 		}
 		catch (\Exception $e) {
 			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId);
-			return;
+			return false;
 		}
 
 		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
 
 		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
+
+		return true;
 	}
 
 	/**
@@ -196,6 +248,17 @@ class NMM_Payment {
 			$matchingPaymentRecords = [];
 
 			foreach ($paymentRecords as $record) {
+				// A transaction cannot pay an order that did not exist when it was
+				// made. On a reused static/carousel address an old, unconsumed
+				// transaction could otherwise complete a newly created order of the
+				// same amount - a risk the widened sweep window (which accepts ages
+				// beyond the base lifetime) would enlarge. Require the tx to be no
+				// older than the order, less a grace for block-timestamp clock skew.
+				$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
+				if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
+					continue;
+				}
+
 				$paymentAmount = $record['order_amount'];
 				$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());
 

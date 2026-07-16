@@ -377,6 +377,14 @@ class NMM_Monero {
 	public static function get_account_transactions($lifetimeSeconds) {
 		do_action('nmm_xmr_account_fetch');
 
+		// Seam for integrations (a self-hosted indexer) and tests: a filter may
+		// supply the batch result array directly instead of the wallet RPC. Return
+		// anything non-array (the default null) to use the real RPC below.
+		$injected = apply_filters('nmm_xmr_account_transactions', null, $lifetimeSeconds);
+		if (is_array($injected)) {
+			return $injected;
+		}
+
 		// Read the wallet height first so we can bound the transfer query. If this
 		// fails the wallet RPC is unreachable and the transfer call would fail too,
 		// so skip the tick rather than fall back to an unbounded fetch.
