@@ -73,6 +73,23 @@ class NMM_Payment_Repo {
 		return $results;
 	}
 
+	/**
+	 * Remove unpaid payment rows left behind by an initialization attempt that
+	 * inserted a row and then failed before persisting the order's wallet_address.
+	 * A fresh attempt must clear them, or UNIQUE(order_id, order_amount) would
+	 * silently reject its insert and the customer would be shown an address that
+	 * nobody is monitoring. Only 'unpaid' rows are removed - a paid or cancelled
+	 * row is a real record and is never touched.
+	 */
+	public function delete_unpaid_for_order($orderId) {
+		global $wpdb;
+
+		return $wpdb->query($wpdb->prepare(
+			"DELETE FROM `$this->tableName` WHERE `order_id` = %d AND `status` = 'unpaid'",
+			$orderId
+		));
+	}
+
 	public function get_unpaid_for_address($cryptoId, $address) {
 		global $wpdb;
 
