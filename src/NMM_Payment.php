@@ -18,27 +18,15 @@ class NMM_Payment {
 
 		$cryptos = NMM_Cryptocurrencies::get();
 
-		// Spread the per-tick work with a persisted cursor so a large backlog of
-		// abandoned, unpaid orders cannot hold the cron lock for one long tick and
-		// starve payment, expiry, HD and Solana work. The baseline budget keeps
-		// normal stores gentle on explorers.
+		// Size the per-tick budget and the effective matching window together (see
+		// scan_plan). The baseline budget keeps normal stores gentle on explorers;
+		// a large backlog raises it so the sweep stays fast; and the matching window
+		// is widened by the sweep period so a payment seen still-unconfirmed on one
+		// visit is not rejected as too old before its address next comes round.
 		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
-		if ($baseBudget < 1) {
-			$baseBudget = 1;
-		}
-
-		// Correctness floor on the budget: every address MUST be re-checked within
-		// the matching lifetime, or a payment that arrives just after its address
-		// is scanned would be older than $transactionLifetime when the address is
-		// finally revisited and would be rejected forever. So guarantee a full
-		// sweep within half the lifetime (2x margin for late cron runs), raising
-		// the budget above the baseline for a large backlog when necessary. The
-		// cron fires about once a minute (Action Scheduler / WP-Cron fallback).
-		$cronIntervalSec = 60;
-		$sweepTicks = max(1, (int) floor(max($cronIntervalSec, (int) $transactionLifetime / 2) / $cronIntervalSec));
-		$budget = max($baseBudget, (int) ceil($total / $sweepTicks));
-
-		$take = min($budget, $total);
+		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime);
+		$take = $plan['take'];
+		$effectiveLifetime = $plan['effective_lifetime'];
 
 		// Keyset pagination around the persisted cursor: fetch only the budgeted
 		// slice ordered strictly AFTER the previous tick's stopping point, then
@@ -81,22 +69,59 @@ class NMM_Payment {
 
 			if ($cryptoId === 'XMR') {
 				if (!$xmrFetched) {
-					$xmrBatch = NMM_Monero::get_account_transactions($transactionLifetime);
+					$xmrBatch = NMM_Monero::get_account_transactions($effectiveLifetime);
 					$xmrByAddress = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success' && isset($xmrBatch['by_address']))
 						? $xmrBatch['by_address']
 						: array();
 					$xmrFetched = true;
 				}
 				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
-				self::process_address_transactions($crypto, $address, $xmrTxs, $transactionLifetime);
+				self::process_address_transactions($crypto, $address, $xmrTxs, $effectiveLifetime);
 			}
 			else {
-				self::check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime);
+				self::check_address_transactions_for_matching_payments($crypto, $address, $effectiveLifetime);
 			}
 		}
 
 		// Persist where we stopped so the next tick continues fairly.
 		update_option('nmm_autopay_scan_cursor', $lastKey, false);
+	}
+
+	/**
+	 * Pure planner for one sweep tick. Given the distinct-unpaid backlog size, the
+	 * merchant baseline budget and the base matching lifetime, returns how many
+	 * addresses to check this tick ('take'/'budget') and the effective matching
+	 * lifetime to check them against ('effective_lifetime').
+	 *
+	 * A larger backlog raises the budget so a full sweep still completes within
+	 * about half the base lifetime (2x margin for late cron runs, ~1 tick/minute).
+	 * Spreading the sweep across ticks means an address is only revisited every
+	 * sweep period, so a payment that is still below its confirmation count on one
+	 * visit could age past the base lifetime before the next visit. Widening the
+	 * matching window by the actual sweep period closes that gap: any transaction
+	 * that confirms within the base lifetime is still matched on the next visit,
+	 * regardless of the (coin/config-dependent) confirmation delay. For a normal
+	 * store the sweep is ~1 tick, so the window is only nudged by a minute.
+	 */
+	public static function scan_plan($total, $baseBudget, $transactionLifetime, $cronIntervalSec = 60) {
+		$total = max(0, (int) $total);
+		$baseBudget = max(1, (int) $baseBudget);
+		$transactionLifetime = max(0, (int) $transactionLifetime);
+		$cronIntervalSec = max(1, (int) $cronIntervalSec);
+
+		$sweepTicks = max(1, (int) floor(max($cronIntervalSec, (int) ($transactionLifetime / 2)) / $cronIntervalSec));
+		$budget = max($baseBudget, (int) ceil($total / $sweepTicks));
+		$take = min($budget, $total);
+
+		// Actual ticks (and wall-clock seconds) to sweep the whole backlog at this
+		// budget - 1 tick for a small store, more for a large one.
+		$sweepPeriodSec = ($budget > 0 ? (int) ceil($total / $budget) : 1) * $cronIntervalSec;
+
+		return array(
+			'budget' => $budget,
+			'take' => $take,
+			'effective_lifetime' => $transactionLifetime + $sweepPeriodSec,
+		);
 	}
 
 	// Stable identity of a distinct-unpaid-address row, for the sweep cursor.

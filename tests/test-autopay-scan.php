@@ -22,6 +22,18 @@ delete_option('nmm_autopay_scan_cursor');
 $GLOBALS['as_ok'] = true;
 function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['as_ok'] = false; } }
 
+// scan_plan (pure): budget/window sizing. Small store stays at baseline with the
+// window nudged one tick; a large backlog raises the budget AND widens the
+// matching window by the sweep period so a payment can't age out unseen between
+// two far-apart visits (3h lifetime, ~1 tick/min, sweep target = lifetime/2).
+$planSmall = NMM_Payment::scan_plan(50, 50, 3 * 3600);
+sok('scan_plan small: budget stays baseline',   $planSmall['budget'] === 50, 'budget=' . $planSmall['budget']);
+sok('scan_plan small: window = base + 1 tick',  $planSmall['effective_lifetime'] === 10860, 'eff=' . $planSmall['effective_lifetime']);
+$planBig = NMM_Payment::scan_plan(9000, 50, 3 * 3600);
+sok('scan_plan big: budget scales up',          $planBig['budget'] === 100, 'budget=' . $planBig['budget']);
+sok('scan_plan big: window widened by sweep',   $planBig['effective_lifetime'] === 16200, 'eff=' . $planBig['effective_lifetime']);
+sok('scan_plan big: window exceeds base life',  $planBig['effective_lifetime'] > 3 * 3600);
+
 // Seed N unpaid Monero addresses. XMR RPC is unconfigured in CI, so the batch
 // fetch returns an error (no network) and no order is ever matched - the unpaid
 // set stays at N across ticks, which is exactly what we want for a coverage test.
