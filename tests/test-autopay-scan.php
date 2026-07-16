@@ -26,13 +26,19 @@ function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond 
 // window nudged one tick; a large backlog raises the budget AND widens the
 // matching window by the sweep period so a payment can't age out unseen between
 // two far-apart visits (3h lifetime, ~1 tick/min, sweep target = lifetime/2).
-$planSmall = NMM_Payment::scan_plan(50, 50, 3 * 3600);
+$dayCancel = 24 * 3600; // default cancellation window; lifetime bound governs
+$planSmall = NMM_Payment::scan_plan(50, 50, 3 * 3600, $dayCancel);
 sok('scan_plan small: budget stays baseline',   $planSmall['budget'] === 50, 'budget=' . $planSmall['budget']);
 sok('scan_plan small: window = base + 1 tick',  $planSmall['effective_lifetime'] === 10860, 'eff=' . $planSmall['effective_lifetime']);
-$planBig = NMM_Payment::scan_plan(9000, 50, 3 * 3600);
+$planBig = NMM_Payment::scan_plan(9000, 50, 3 * 3600, $dayCancel);
 sok('scan_plan big: budget scales up',          $planBig['budget'] === 100, 'budget=' . $planBig['budget']);
 sok('scan_plan big: window widened by sweep',   $planBig['effective_lifetime'] === 16200, 'eff=' . $planBig['effective_lifetime']);
 sok('scan_plan big: window exceeds base life',  $planBig['effective_lifetime'] > 3 * 3600);
+// A short (1h) cancellation window tightens the sweep so no order can expire
+// before its first check: target = 30min => 30 ticks => budget = ceil(9000/30) = 300.
+$planCancel = NMM_Payment::scan_plan(9000, 50, 3 * 3600, 3600);
+sok('scan_plan: short cancel window raises budget', $planCancel['budget'] === 300, 'budget=' . $planCancel['budget']);
+sok('scan_plan: sweep window <= half cancel window', ($planCancel['effective_lifetime'] - 3 * 3600) <= 1800, 'sweep=' . ($planCancel['effective_lifetime'] - 3 * 3600));
 
 // Seed N unpaid Monero addresses. XMR RPC is unconfigured in CI, so the batch
 // fetch returns an error (no network) and no order is ever matched - the unpaid

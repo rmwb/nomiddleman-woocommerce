@@ -26,6 +26,20 @@ class NMM_Payment {
 		}
 
 		$cryptos = NMM_Cryptocurrencies::get();
+		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+
+		// The sweep must also finish before an order can be cancelled, or an order
+		// inserted just behind the cursor could reach cancel_expired_payments()
+		// (which runs the same tick) before its address is ever checked. Find the
+		// shortest cancellation window among the coins that actually have unpaid
+		// orders and let scan_plan keep the sweep inside it.
+		$shortestCancelSec = 0;
+		foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $unpaidCryptoId) {
+			$winSec = (int) ((float) $nmmSettings->get_autopay_cancellation_time($unpaidCryptoId) * 3600);
+			if ($winSec > 0 && ($shortestCancelSec === 0 || $winSec < $shortestCancelSec)) {
+				$shortestCancelSec = $winSec;
+			}
+		}
 
 		// Size the per-tick budget and the effective matching window together (see
 		// scan_plan). The baseline budget keeps normal stores gentle on explorers;
@@ -33,7 +47,7 @@ class NMM_Payment {
 		// is widened by the sweep period so a payment seen still-unconfirmed on one
 		// visit is not rejected as too old before its address next comes round.
 		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
-		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime);
+		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec);
 		$take = $plan['take'];
 		$effectiveLifetime = $plan['effective_lifetime'];
 
@@ -141,22 +155,35 @@ class NMM_Payment {
 	 * lifetime to check them against ('effective_lifetime').
 	 *
 	 * A larger backlog raises the budget so a full sweep still completes within
-	 * about half the base lifetime (2x margin for late cron runs, ~1 tick/minute).
-	 * Spreading the sweep across ticks means an address is only revisited every
-	 * sweep period, so a payment that is still below its confirmation count on one
-	 * visit could age past the base lifetime before the next visit. Widening the
-	 * matching window by the actual sweep period closes that gap: any transaction
-	 * that confirms within the base lifetime is still matched on the next visit,
-	 * regardless of the (coin/config-dependent) confirmation delay. For a normal
-	 * store the sweep is ~1 tick, so the window is only nudged by a minute.
+	 * about half the base lifetime (2x margin for late cron runs, ~1 tick/minute)
+	 * AND within half the shortest cancellation window, so an order can never be
+	 * cancelled before its address is checked at least once. Spreading the sweep
+	 * across ticks means an address is only revisited every sweep period, so a
+	 * payment still below its confirmation count on one visit could age past the
+	 * base lifetime before the next visit. Widening the matching window by the
+	 * actual sweep period closes that gap: any transaction that confirms within
+	 * the base lifetime is still matched on the next visit, regardless of the
+	 * (coin/config-dependent) confirmation delay. For a normal store the sweep is
+	 * ~1 tick, so the window is only nudged by a minute.
+	 *
+	 * $shortestCancelSec is the shortest order-cancellation window among coins with
+	 * unpaid orders; pass 0 when unknown to fall back to the lifetime bound alone.
 	 */
-	public static function scan_plan($total, $baseBudget, $transactionLifetime, $cronIntervalSec = 60) {
+	public static function scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec = 0, $cronIntervalSec = 60) {
 		$total = max(0, (int) $total);
 		$baseBudget = max(1, (int) $baseBudget);
 		$transactionLifetime = max(0, (int) $transactionLifetime);
+		$shortestCancelSec = max(0, (int) $shortestCancelSec);
 		$cronIntervalSec = max(1, (int) $cronIntervalSec);
 
-		$sweepTicks = max(1, (int) floor(max($cronIntervalSec, (int) ($transactionLifetime / 2)) / $cronIntervalSec));
+		// Target a full sweep within half the base lifetime, tightened to half the
+		// shortest cancellation window when that is smaller.
+		$targetSweepSec = max($cronIntervalSec, (int) ($transactionLifetime / 2));
+		if ($shortestCancelSec > 0) {
+			$targetSweepSec = min($targetSweepSec, max($cronIntervalSec, (int) ($shortestCancelSec / 2)));
+		}
+
+		$sweepTicks = max(1, (int) floor($targetSweepSec / $cronIntervalSec));
 		$budget = max($baseBudget, (int) ceil($total / $sweepTicks));
 		$take = min($budget, $total);
 
