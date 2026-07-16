@@ -74,6 +74,40 @@ class NMM_Util {
 		return extension_loaded('gmp') || extension_loaded('bcmath');
 	}
 
+	// Per-order advisory lock name. Scoped to this site AND this order so distinct
+	// orders never share a lock, and neither do same-numbered orders on different
+	// sites. The table prefix ($wpdb->prefix) is blog-specific on multisite, where
+	// sites share DB_NAME and WooCommerce order ids can overlap; DB_NAME still
+	// separates sites that merely share a MySQL server. Both are hashed to a fixed
+	// length so they can never push the (variable-length) order id past MySQL's
+	// 64-char lock-name limit - which would truncate and collide DIFFERENT orders.
+	private static function order_init_lock_name($orderId) {
+		global $wpdb;
+
+		return 'nmm_oinit_' . (int) $orderId . '_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
+	}
+
+	/**
+	 * Acquire the per-order initialization lock so two concurrent first loads of
+	 * the thank-you page cannot both allocate a payment address for one order.
+	 * GET_LOCK is atomic across connections, owned by the acquiring connection,
+	 * and released automatically if that PHP process dies, so a crash can never
+	 * wedge it. Returns the raw GET_LOCK result: '1' acquired, '0' timed out,
+	 * null if advisory locks are unavailable on this host. The caller must call
+	 * release_order_init_lock() only when this returned '1'.
+	 */
+	public static function acquire_order_init_lock($orderId, $timeoutSeconds = 15) {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', self::order_init_lock_name($orderId), $timeoutSeconds));
+	}
+
+	public static function release_order_init_lock($orderId) {
+		global $wpdb;
+
+		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::order_init_lock_name($orderId)));
+	}
+
 }
 
 ?>

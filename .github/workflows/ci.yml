@@ -137,3 +137,9 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -qi "skipped" && { echo "::error::autopay test skipped"; exit 1; } || true
           echo "$OUT" | grep -q "AUTOPAY-CANCEL CHECKS PASSED" || { echo "::error::autopay test did not pass"; exit 1; }
+      - name: Per-order initialization lock test (must run, not skip)
+        run: |
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-order-init-lock.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -qi "skipped" && { echo "::error::order-init-lock test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "ORDER-INIT-LOCK CHECKS PASSED" || { echo "::error::order-init-lock test did not pass"; exit 1; }
