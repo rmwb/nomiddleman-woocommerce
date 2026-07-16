@@ -327,6 +327,7 @@ function NMM_uninstall() {
     delete_option('nmm_autopay_scan_last_run');
     delete_option('nmm_autopay_scan_covered_at');
     delete_option('nmm_autopay_scan_sweep_start');
+    delete_option('nmm_autopay_scan_dirty');
 }
 
 // The retry table is created per site (each blog has its own prefix), so drop it

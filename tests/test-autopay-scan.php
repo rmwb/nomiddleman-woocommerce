@@ -22,6 +22,7 @@ delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_sweep_start');
+delete_option('nmm_autopay_scan_dirty');
 
 $GLOBALS['as_ok'] = true;
 function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['as_ok'] = false; } }
@@ -336,6 +337,37 @@ update_option('nmm_autopay_scan_sweep_start', $staleSentinel, false);
 as_tick(3 * 3600); // after-page empty -> head page only, flagged as a wrap
 sok('stale-cursor wrap stamps only the old start', as_cov() === $staleSentinel, 'covered=' . as_cov() . ' sentinel=' . $staleSentinel);
 
+// --- retry-cap overflow: dropped failures must dirty the coverage stamp ----
+// When the bounded retry set overflows, dropped keys are never retried even
+// though the cursor already passed them. If the endpoint then recovers, the
+// next wrap would look clean - but those addresses were never verified, so
+// the wrap must NOT stamp their currency. The one after (a fully re-swept,
+// genuinely clean pass) may. Cap pinned to 2 so 3 failures overflow.
+add_filter('nmm_autopay_scan_retry_cap', function () { return 2; });
+remove_all_filters('nmm_xmr_account_transactions');
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'error'); });
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+for ($i = 0; $i < 9; $i++) {
+	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrd_%d', $i), time() - 2 * HOUR_IN_SECONDS, 770000 + $i));
+}
+as_tick(3 * 3600); // xmrd_0,1,2 fail; cap 2 keeps 0,1 and DROPS 2 -> XMR dirty
+sok('overflowed retry set is capped',             count(get_option('nmm_autopay_scan_retry', array())) === 2, 'retry=' . count(get_option('nmm_autopay_scan_retry', array())));
+remove_all_filters('nmm_xmr_account_transactions');
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+as_tick(3 * 3600); // recovery: retries 0,1 + sweep 3,4,5 all clean
+as_tick(3 * 3600); // 6,7,8 - end of list
+as_tick(3 * 3600); // wraps clean, but xmrd_2 was dropped unverified -> no stamp
+sok('dropped failure blocks the recovery wrap',   as_cov() === 0, 'covered=' . as_cov());
+as_tick(3 * 3600); // fresh sweep re-visits everything: 3,4,5
+as_tick(3 * 3600); // 6,7,8
+as_tick(3 * 3600); // wraps - genuinely clean now
+sok('next fully-clean sweep stamps coverage',     as_cov() > 0, 'covered=' . as_cov());
+remove_all_filters('nmm_autopay_scan_retry_cap');
+
 // --- priority lane: a fresh order is checked on the very next tick ---------
 // With budget 3 and a 12-address backlog, park the cursor mid-list, then create
 // a NEW unpaid order whose address sorts BEFORE the cursor - the fair sweep
@@ -391,5 +423,6 @@ delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_sweep_start');
+delete_option('nmm_autopay_scan_dirty');
 
 echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";

@@ -354,4 +354,5 @@ delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_sweep_start');
+delete_option('nmm_autopay_scan_dirty');
 echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

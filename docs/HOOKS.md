@@ -177,6 +177,18 @@ cursor. Return `0` to disable the lane.
 apply_filters( 'nmm_autopay_priority_window', $seconds );
 ```
 
+### `nmm_autopay_scan_retry_cap`
+
+Maximum number of failed-fetch (currency, address) keys retained for next-tick
+retry (default `200`). Keys beyond the cap are dropped, and the dropped keys'
+currency is excluded from the next coverage stamp so cancellation never treats
+an address whose check was discarded as verified. Raise it on very large
+stores whose explorers fail in bursts.
+
+```php
+apply_filters( 'nmm_autopay_scan_retry_cap', $limit );
+```
+
 ### `nmm_sol_retry_global_retention_seconds`
 
 How long a durable Solana retry entry is kept before a global cleanup pass may

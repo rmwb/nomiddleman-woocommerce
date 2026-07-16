@@ -14,14 +14,33 @@ class NMM_Payment {
 	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
 		$paymentRepo = new NMM_Payment_Repo();
 
+		// Observe the cron cadence FIRST, on every tick INCLUDING empty ones.
+		// The gap since the previous run feeds scan_plan below: budget math uses
+		// it clamped (bounding the explorer burst per tick) while the matching
+		// window is widened by the REAL cadence, so even an hourly cron cannot
+		// let a payment age out between two visits. Recording it only on
+		// non-empty ticks would make the first order after an idle stretch read
+		// the whole idle period as one "interval" and request an enormous
+		// Monero/Solana history window. Written before the scan work so a
+		// mid-tick crash degrades to the nominal 60s assumption on the next run
+		// instead of compounding its budget.
+		$now = time();
+		$lastRun = (int) get_option('nmm_autopay_scan_last_run', 0);
+		update_option('nmm_autopay_scan_last_run', $now, false);
+		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
+
 		// Count only (a single scalar) so a large backlog is never loaded into PHP
 		// just to size the budget.
 		$total = $paymentRepo->count_distinct_unpaid_addresses();
 		if ($total < 1) {
-			// Nothing unpaid: drop any stale retry keys so they cannot linger.
+			// Nothing unpaid: drop any stale retry keys so they cannot linger,
+			// and keep the sweep-start fresh - an empty backlog is a trivially
+			// complete sweep, so the first sweep over newly arriving rows must
+			// not inherit a start time from before the idle stretch.
 			if (get_option('nmm_autopay_scan_retry', array())) {
 				update_option('nmm_autopay_scan_retry', array(), false);
 			}
+			update_option('nmm_autopay_scan_sweep_start', $now, false);
 			return;
 		}
 
@@ -47,22 +66,6 @@ class NMM_Payment {
 		// is widened by the sweep period so a payment seen still-unconfirmed on one
 		// visit is not rejected as too old before its address next comes round.
 		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
-
-		// The scheduler is nominally 60s, but Action Scheduler / WP-Cron are
-		// traffic-driven and quiet stores tick far less often. Planning around an
-		// assumed 60s would silently stretch the sweep past the matching lifetime
-		// on such stores and lose payments, so derive the tick interval from the
-		// OBSERVED cadence: the gap since the previous run. scan_plan clamps the
-		// interval for its budget math (bounding the explorer burst per tick)
-		// but widens the matching window by the REAL cadence, so even an hourly
-		// cron cannot let a payment age out between two visits. The timestamp is
-		// written before the scan work so a mid-tick crash degrades to the
-		// nominal 60s assumption on the next run instead of compounding its
-		// budget.
-		$now = time();
-		$lastRun = (int) get_option('nmm_autopay_scan_last_run', 0);
-		update_option('nmm_autopay_scan_last_run', $now, false);
-		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
 
 		// When the current multi-tick sweep began (the tick that fetched the
 		// head of the address list). Initialized here on the very first run;
@@ -202,10 +205,29 @@ class NMM_Payment {
 			}
 		}
 
-		// Persist the bounded retry set and the fair-sweep cursor.
+		// Persist the bounded retry set and the fair-sweep cursor. If the cap
+		// forces failed keys to be DROPPED (a wide outage: accumulated retries
+		// plus a full sweep page can exceed it), their addresses were passed by
+		// the cursor without ever being verified and will not be retried - so
+		// mark their currencies dirty. A dirty currency is excluded from the
+		// coverage stamp at the next wrap (then cleared: the following sweep
+		// revisits every address, so a clean wrap after that is trustworthy
+		// again). Without this, an endpoint recovering after drops would let a
+		// later clean wrap certify coverage for addresses that were never
+		// successfully checked, and an aged paid order could be cancelled.
+		$retryCap = max(1, (int) apply_filters('nmm_autopay_scan_retry_cap', 200));
 		$newFailed = array_values(array_unique($newFailed));
-		if (count($newFailed) > 200) {
-			$newFailed = array_slice($newFailed, 0, 200);
+		if (count($newFailed) > $retryCap) {
+			$dirty = get_option('nmm_autopay_scan_dirty', array());
+			if (!is_array($dirty)) {
+				$dirty = array();
+			}
+			foreach (array_slice($newFailed, $retryCap) as $droppedKey) {
+				$droppedParts = explode('|', $droppedKey, 2);
+				$dirty[$droppedParts[0]] = true;
+			}
+			update_option('nmm_autopay_scan_dirty', $dirty, false);
+			$newFailed = array_slice($newFailed, 0, $retryCap);
 		}
 		update_option('nmm_autopay_scan_retry', $newFailed, false);
 		update_option('nmm_autopay_scan_cursor', $lastKey, false);
@@ -246,6 +268,18 @@ class NMM_Payment {
 			foreach ($newFailed as $failedKey) {
 				$failedParts = explode('|', $failedKey, 2);
 				$failedCryptos[$failedParts[0]] = true;
+			}
+
+			// Currencies whose failed keys were dropped from the retry set
+			// during this sweep have unverified addresses the retry path will
+			// never revisit: exclude them from this stamp, then clear the
+			// marker - the sweep now starting revisits every address.
+			$dirty = get_option('nmm_autopay_scan_dirty', array());
+			if (is_array($dirty) && !empty($dirty)) {
+				foreach (array_keys($dirty) as $dirtyCryptoId) {
+					$failedCryptos[$dirtyCryptoId] = true;
+				}
+				update_option('nmm_autopay_scan_dirty', array(), false);
 			}
 
 			$stampAt = ($take >= $total) ? $now : $sweepStart;
