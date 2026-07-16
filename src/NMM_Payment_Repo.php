@@ -113,6 +113,41 @@ class NMM_Payment_Repo {
 		), ARRAY_A);
 	}
 
+	/**
+	 * Given a bounded list of ['cryptocurrency'=>.., 'address'=>..] pairs, return
+	 * the subset that still has an unpaid row, as a set keyed by "crypto|address".
+	 * One indexed query for the whole list, so the cron can drop failed-fetch
+	 * retries whose order was since paid/cancelled/deleted without re-querying a
+	 * dead address forever.
+	 */
+	public function filter_unpaid_pairs($pairs) {
+		global $wpdb;
+
+		if (empty($pairs) || !is_array($pairs)) {
+			return array();
+		}
+
+		$clauses = array();
+		$args = array();
+		foreach ($pairs as $pair) {
+			$clauses[] = '(`cryptocurrency` = %s AND `address` = %s)';
+			$args[] = $pair['cryptocurrency'];
+			$args[] = $pair['address'];
+		}
+
+		$sql = "SELECT DISTINCT `cryptocurrency`, `address` FROM `$this->tableName` WHERE `status` = 'unpaid' AND (" . implode(' OR ', $clauses) . ")";
+		$rows = $wpdb->get_results($wpdb->prepare($sql, $args), ARRAY_A);
+
+		$live = array();
+		if (is_array($rows)) {
+			foreach ($rows as $row) {
+				$live[$row['cryptocurrency'] . '|' . $row['address']] = true;
+			}
+		}
+
+		return $live;
+	}
+
 	public function get_unpaid_for_address($cryptoId, $address) {
 		global $wpdb;
 

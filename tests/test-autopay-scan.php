@@ -193,6 +193,15 @@ $tick2 = $GLOBALS['as_checked'];
 sok('failed keys re-checked the very next tick', in_array('xmrf_0', $tick2, true) && in_array('xmrf_1', $tick2, true) && in_array('xmrf_2', $tick2, true), 'tick2=' . implode(',', $tick2));
 sok('retry set stays bounded',                  count(get_option('nmm_autopay_scan_retry', array())) <= 9);
 
+// A retry key whose payment is no longer unpaid (paid/cancelled/deleted while the
+// endpoint stays down) must be dropped, not queried forever.
+$retryNow = get_option('nmm_autopay_scan_retry', array());
+$goneKey = $retryNow[0]; // e.g. 'XMR|xmrf_0'
+$goneParts = explode('|', $goneKey, 2);
+$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $goneParts[1])); // as if paid/removed
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // still failing fetches
+sok('stale retry key dropped once not unpaid',  !in_array($goneKey, get_option('nmm_autopay_scan_retry', array()), true), 'gone=' . $goneKey);
+
 // Once fetches succeed again, the retry set drains.
 remove_all_filters('nmm_xmr_account_transactions');
 add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });

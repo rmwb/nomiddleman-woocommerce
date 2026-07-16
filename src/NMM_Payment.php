@@ -78,12 +78,25 @@ class NMM_Payment {
 			$retrySet = array();
 		}
 
-		$toProcess = array();
-		$seen = array();
+		// Parse retry keys, then keep only those whose payment is STILL unpaid: a
+		// row paid/cancelled/deleted while its explorer was down must not be
+		// re-queried forever (which would peg the failing endpoint and, at up to
+		// the 200-key cap, occupy the cron lock indefinitely).
+		$retryPairs = array();
 		foreach ($retrySet as $key) {
 			$parts = explode('|', $key, 2);
-			if (count($parts) === 2 && !isset($seen[$key])) {
-				$toProcess[] = array('cryptocurrency' => $parts[0], 'address' => $parts[1]);
+			if (count($parts) === 2) {
+				$retryPairs[] = array('cryptocurrency' => $parts[0], 'address' => $parts[1]);
+			}
+		}
+		$liveRetry = $paymentRepo->filter_unpaid_pairs($retryPairs);
+
+		$toProcess = array();
+		$seen = array();
+		foreach ($retryPairs as $pair) {
+			$key = $pair['cryptocurrency'] . '|' . $pair['address'];
+			if (isset($liveRetry[$key]) && !isset($seen[$key])) {
+				$toProcess[] = $pair;
 				$seen[$key] = true;
 			}
 		}
