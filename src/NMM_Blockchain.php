@@ -2406,6 +2406,16 @@ class NMM_Blockchain {
 		// no payment", which is not true in those cases. When we did recover a
 		// payment we return it as success regardless, so the caller never discards
 		// it; the held cursor still guarantees the unstored signature is retried.
+		// Record this fetch's completeness for sol_address_fully_swept() in
+		// this same request. The persisted cursor/queue state alone cannot
+		// express one corner: a recovered retry makes the return a SUCCESS
+		// (the payment must not be discarded) while a failed signature-page
+		// fetch on a fresh (null) cursor leaves neither a cursor nor a queue
+		// row behind - the address would look fully swept although its history
+		// was never paged this tick, and the verifier could certify coverage
+		// for it.
+		self::$solFetchComplete[$address] = ($sweepComplete && !$hardError && !$enqueueFailed);
+
 		if (($hardError || $enqueueFailed) && empty($transactions)) {
 			return array(
 				'result' => 'error',
@@ -2419,27 +2429,28 @@ class NMM_Blockchain {
 		);
 	}
 
-	// Fetch and interpret a single Solana transaction. Returns
-	// array($inspected, $transactionOrNull): $inspected is false when the detail
-	// lookup failed or came back unusable in a way that could be transient (the
-	// caller should retry it), and true when we got a usable finalized result;
-	// the second element is an NMM_Transaction when the tx credited $address,
-	// otherwise null.
-	// Seconds until the next retry for a signature on its Nth failed attempt: the
-	// first failure is retried on the next tick, later failures back off
-	// exponentially up to $maxSec so a persistent failure is polled sparsely.
+	// Completeness of this request's get_sol_address_transactions() calls, by
+	// address - see the comment at the assignment above.
+	private static $solFetchComplete = array();
+
 	/**
-	 * Whether $address's in-window Solana history is FULLY inspected: the
-	 * bounded sweep reached the end of the matching window (its resume cursor
-	 * is cleared) and no failed detail lookups are pending in the durable
-	 * retry queue. get_sol_address_transactions() deliberately returns
-	 * success for a PARTIAL pass (progress is durable and payments already
-	 * found must not be discarded), so the Autopay verifier must consult this
-	 * before certifying the address as checked for the cancellation coverage
-	 * stamp - signatures below the cursor or in the queue are not yet
-	 * verified, and an aged order's payment could be among them.
+	 * Whether $address's in-window Solana history is FULLY inspected: this
+	 * request's fetch (if any) reached the end of the matching window without
+	 * a page failure or enqueue failure, the resume cursor is cleared, and no
+	 * failed detail lookups are pending in the durable retry queue.
+	 * get_sol_address_transactions() deliberately returns success for a
+	 * PARTIAL pass (progress is durable and payments already found must not
+	 * be discarded), so the Autopay verifier must consult this before
+	 * certifying the address as checked for the cancellation coverage stamp -
+	 * signatures below the cursor, in the queue, or in a page that failed to
+	 * fetch this tick are not yet verified, and an aged order's payment could
+	 * be among them.
 	 */
 	public static function sol_address_fully_swept($address) {
+		if (isset(self::$solFetchComplete[$address]) && !self::$solFetchComplete[$address]) {
+			return false;
+		}
+
 		if (get_transient('nmm_sol_cursor_' . md5($address)) !== false) {
 			return false;
 		}
@@ -2447,6 +2458,9 @@ class NMM_Blockchain {
 		return NMM_Sol_Retry_Repo::count_for($address) === 0;
 	}
 
+	// Seconds until the next retry for a signature on its Nth failed attempt: the
+	// first failure is retried on the next tick, later failures back off
+	// exponentially up to $maxSec so a persistent failure is polled sparsely.
 	private static function sol_retry_backoff($attempts, $baseSec, $maxSec) {
 		if ($attempts <= 1) {
 			return 0;
@@ -2455,6 +2469,12 @@ class NMM_Blockchain {
 		return min($step, $maxSec);
 	}
 
+	// Fetch and interpret a single Solana transaction. Returns
+	// array($inspected, $transactionOrNull): $inspected is false when the detail
+	// lookup failed or came back unusable in a way that could be transient (the
+	// caller should retry it), and true when we got a usable finalized result;
+	// the second element is an NMM_Transaction when the tx credited $address,
+	// otherwise null.
 	private static function sol_inspect_signature($rpc, $signature, $address) {
 		$txResponse = self::api_post($rpc, array(
 			'headers' => array('Content-Type' => 'application/json'),

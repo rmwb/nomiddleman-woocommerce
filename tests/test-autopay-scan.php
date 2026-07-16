@@ -377,10 +377,18 @@ remove_all_filters('nmm_autopay_scan_retry_cap');
 $solAddr = 'SCOV1111111111111111111111111111111111111111';
 $GLOBALS['scov_sigs'] = array();
 $GLOBALS['scov_addr'] = $solAddr;
+$GLOBALS['scov_sigs_fail'] = false; // getSignaturesForAddress returns HTTP 500
+$GLOBALS['scov_tx_credit'] = 0;     // lamports credited to our address per getTransaction
 $solMock = function ($pre, $args, $url) {
 	if (strpos($url, 'api.mainnet-beta.solana.com') === false) { return $pre; }
 	$req = json_decode($args['body'], true);
 	if ($req['method'] === 'getSignaturesForAddress') {
+		if ($GLOBALS['scov_sigs_fail']) {
+			// 200 + RPC error object, NOT an HTTP 5xx: a 5xx would trip the
+			// plugin's per-host backoff transient and poison later tests that
+			// share this WordPress (the sol-retry suite runs next in CI).
+			return array('response' => array('code' => 200), 'body' => json_encode(array('error' => array('code' => -32000, 'message' => 'mock outage'))));
+		}
 		$opts = isset($req['params'][1]) ? $req['params'][1] : array();
 		$limit = isset($opts['limit']) ? (int) $opts['limit'] : 1000;
 		$sigs = $GLOBALS['scov_sigs'];
@@ -392,11 +400,13 @@ $solMock = function ($pre, $args, $url) {
 		foreach ($out as &$o) { $o['err'] = null; }
 		return array('response' => array('code' => 200), 'body' => json_encode(array('result' => $out)));
 	}
-	// getTransaction: inspected fine, no credit to our address
+	// getTransaction: inspected fine; credits our address scov_tx_credit lamports
+	$credit = (int) $GLOBALS['scov_tx_credit'];
+	$pubkey = ($credit > 0) ? $GLOBALS['scov_addr'] : 'SomeoneElse';
 	return array('response' => array('code' => 200), 'body' => json_encode(array('result' => array(
 		'blockTime' => time(),
-		'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => 'SomeoneElse')))),
-		'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000)),
+		'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => $pubkey)))),
+		'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000 + $credit)),
 	))));
 };
 add_filter('pre_http_request', $solMock, 10, 3);
@@ -418,6 +428,29 @@ sok('partial SOL sweep does not certify coverage', !is_array($covMapSol) || !iss
 as_tick(3 * 3600); // remaining 5 signatures: internal sweep completes mid-tick
 $covMapSol = get_option('nmm_autopay_scan_covered_at', array());
 sok('completed SOL sweep certifies coverage',      is_array($covMapSol) && isset($covMapSol['SOL']) && (int) $covMapSol['SOL'] > 0, 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
+
+// Mixed state: a due retry recovers a (non-matching) payment while the
+// signature-page fetch fails on a fresh cursor. The fetch reports SUCCESS
+// (the recovered transaction must never be discarded) and leaves neither a
+// cursor nor a queue row behind - but the history was never paged this tick,
+// so the sweep is incomplete and must NOT certify SOL coverage.
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+$srt = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+$wpdb->query($wpdb->prepare("DELETE FROM `$srt` WHERE address=%s", $solAddr));
+$wpdb->query($wpdb->prepare("INSERT INTO `$srt` (address, signature, first_failed_at, attempts, next_retry_at, block_time) VALUES (%s,'screc_sig',%d,1,%d,%d)", $solAddr, time() - 300, time() - 10, time() - 300));
+$GLOBALS['scov_sigs_fail'] = true;
+$GLOBALS['scov_tx_credit'] = 5; // recovered, but nowhere near the order amount
+as_tick(3 * 3600);
+$covMapSol = get_option('nmm_autopay_scan_covered_at', array());
+sok('recovered retry + failed page never certifies', !is_array($covMapSol) || !isset($covMapSol['SOL']), 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
+$GLOBALS['scov_sigs_fail'] = false;
+$GLOBALS['scov_tx_credit'] = 0;
+$wpdb->query($wpdb->prepare("DELETE FROM `$srt` WHERE address=%s", $solAddr));
+// Belt-and-braces: clear any per-host backoff state for the mocked RPC host
+// so a run that DID trip it can never poison the suites that follow.
+delete_transient('nmm_backoff_' . md5('api.mainnet-beta.solana.com'));
+delete_transient('nmm_apifail_' . md5('api.mainnet-beta.solana.com'));
 
 remove_filter('pre_http_request', $solMock, 10);
 delete_transient('nmm_sol_cursor_' . md5($solAddr));
