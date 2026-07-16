@@ -243,6 +243,17 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // order while we still hold the lock (see the catch below).
             $initializing = true;
 
+            // Reaching here means the order has no wallet_address, so it was never
+            // initialized successfully - yet an earlier attempt may have inserted
+            // an Autopay payment row and then failed before persisting the meta.
+            // Clear those unpaid leftovers under the lock: otherwise
+            // UNIQUE(order_id, order_amount) would silently reject this attempt's
+            // insert, leaving the previous attempt's address monitored while we
+            // show the customer a different, unwatched one. Paid/cancelled rows
+            // are real records and are never touched.
+            $staleRepo = new NMM_Payment_Repo();
+            $staleRepo->delete_unpaid_for_order($order_id);
+
             $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
             $chosenCryptoId = $order->get_meta('nmm_chosen_crypto_id');

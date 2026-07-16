@@ -99,6 +99,24 @@ if (defined('NMM_PAYMENT_TABLE')) {
 	lok('exactly one payment row for the order',    $count === 1, 'count=' . $count);
 	lok('the first worker\'s address is the one kept', $addr === 'addr_worker_A', 'addr=' . $addr);
 	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
+
+	// A failed attempt can leave an unpaid row behind (inserted, then threw before
+	// wallet_address was persisted). A retry must clear it, or its own insert would
+	// be silently rejected by UNIQUE(order_id, order_amount) and it would display an
+	// address nobody monitors. Paid rows must survive.
+	$repo->insert('addr_stale_attempt', 'BTC', $orderA, '0.00100000', 'unpaid');
+	$repo->delete_unpaid_for_order($orderA);
+	lok('stale unpaid row from a failed attempt cleared', (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `$pt` WHERE order_id=%d", $orderA)) === 0);
+	$repo->insert('addr_retry', 'BTC', $orderA, '0.00100000', 'unpaid'); // retry now inserts cleanly
+	$retryAddr = $wpdb->get_var($wpdb->prepare("SELECT address FROM `$pt` WHERE order_id=%d", $orderA));
+	lok('retry row is the monitored one',           $retryAddr === 'addr_retry', 'addr=' . $retryAddr);
+
+	// A settled (paid) row is a real record and must never be cleared.
+	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
+	$repo->insert('addr_paid', 'BTC', $orderA, '0.00200000', 'paid');
+	$repo->delete_unpaid_for_order($orderA);
+	lok('paid row is never cleared',                (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `$pt` WHERE order_id=%d AND status='paid'", $orderA)) === 1);
+	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
 }
 
 $wpdb2->close();
