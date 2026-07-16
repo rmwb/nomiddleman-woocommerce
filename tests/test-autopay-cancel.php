@@ -284,6 +284,7 @@ $wpdb->query("DELETE FROM `$pt`");
 delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_sweep_start');
 $oAged = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
@@ -318,4 +319,5 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_last_run');
+delete_option('nmm_autopay_scan_sweep_start');
 echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

@@ -20,6 +20,8 @@ $wpdb->query("DELETE FROM `$pt`");
 delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_last_run');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_sweep_start');
 
 $GLOBALS['as_ok'] = true;
 function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['as_ok'] = false; } }
@@ -292,6 +294,40 @@ sok('retry set drains after fetches succeed',    count(get_option('nmm_autopay_s
 for ($t = 0; $t < 4; $t++) { as_tick(3 * 3600); }
 sok('coverage resumes once fetches succeed',     (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
 
+// --- coverage stamp semantics: sweep START time, and stale-cursor wraps ----
+// The stamp must be the completed sweep's start, not its wrap time: a row
+// checked early in a multi-tick sweep whose window closed before the wrap
+// must not count as "checked after expiry". Pin the recorded sweep start to
+// a sentinel and assert the wrap stamps exactly that value.
+remove_all_filters('nmm_autopay_scan_budget');
+add_filter('nmm_autopay_scan_budget', function () { return 3; });
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+for ($i = 0; $i < 9; $i++) {
+	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrsw_%d', $i), time() - 2 * HOUR_IN_SECONDS, 760000 + $i));
+}
+$sweepSentinel = time() - 500;
+update_option('nmm_autopay_scan_sweep_start', $sweepSentinel, false);
+as_tick(3 * 3600); // xmrsw_0,1,2
+as_tick(3 * 3600); // xmrsw_3,4,5
+as_tick(3 * 3600); // xmrsw_6,7,8 - exact end of list, wrap not yet detected
+sok('multi-tick sweep: no stamp before the wrap', (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
+as_tick(3 * 3600); // wraps
+sok('wrap stamps the sweep START, not wrap time', (int) get_option('nmm_autopay_scan_covered_at', 0) === $sweepSentinel, 'covered=' . get_option('nmm_autopay_scan_covered_at', 0) . ' sentinel=' . $sweepSentinel);
+
+// A stale cursor beyond every row (backlog churn / long outage) makes one
+// head page look like a wrap. That must not certify a full sweep: the stamp
+// is still the OLD sweep start, so rows that expired after it - including
+// the unscanned tail - stay protected until a genuinely complete sweep.
+delete_option('nmm_autopay_scan_covered_at');
+update_option('nmm_autopay_scan_cursor', 'XMR|zzzz_stale', false);
+$staleSentinel = time() - 400;
+update_option('nmm_autopay_scan_sweep_start', $staleSentinel, false);
+as_tick(3 * 3600); // after-page empty -> head page only, flagged as a wrap
+sok('stale-cursor wrap stamps only the old start', (int) get_option('nmm_autopay_scan_covered_at', 0) === $staleSentinel, 'covered=' . get_option('nmm_autopay_scan_covered_at', 0) . ' sentinel=' . $staleSentinel);
+
 // --- priority lane: a fresh order is checked on the very next tick ---------
 // With budget 3 and a 12-address backlog, park the cursor mid-list, then create
 // a NEW unpaid order whose address sorts BEFORE the cursor - the fair sweep
@@ -346,5 +382,6 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_sweep_start');
 
 echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";

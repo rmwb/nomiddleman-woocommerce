@@ -64,6 +64,16 @@ class NMM_Payment {
 		update_option('nmm_autopay_scan_last_run', $now, false);
 		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
 
+		// When the current multi-tick sweep began (the tick that fetched the
+		// head of the address list). Initialized here on the very first run;
+		// thereafter reset by the wrap handling at the bottom. The coverage
+		// stamp uses this START time, never the wrap time - see below.
+		$sweepStart = (int) get_option('nmm_autopay_scan_sweep_start', 0);
+		if ($sweepStart < 1) {
+			$sweepStart = $now;
+			update_option('nmm_autopay_scan_sweep_start', $sweepStart, false);
+		}
+
 		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec, $cronIntervalSec);
 		$take = $plan['take'];
 		$effectiveLifetime = $plan['effective_lifetime'];
@@ -206,14 +216,32 @@ class NMM_Payment {
 		// treats a row as expired once its whole window lies behind this stamp,
 		// so a row that pre-dates the cursor (plugin upgrade with an aged
 		// backlog) or that aged out during a long cron outage is always checked
-		// at least once after expiring before it can be cancelled. Do NOT stamp
-		// while any fetch failure is unresolved ($newFailed carries this tick's
-		// failures AND re-failed retries from earlier ticks): a failed address
-		// was not verified, and stamping would let cancellation treat it as
-		// checked. The retry path re-checks it next tick, and the stamp waits
-		// for the next wrap with everything fetched clean.
-		if (($wrapped || $take >= $total) && empty($newFailed)) {
-			update_option('nmm_autopay_scan_covered_at', time(), false);
+		// at least once after expiring before it can be cancelled.
+		//
+		// The stamp is the completed sweep's START time, never the wrap time:
+		// the keyset sweep proves only that every row present throughout
+		// [start, wrap] was visited at some point in that interval, so the
+		// earliest such visit is all "checked after expiry" may assume. Using
+		// the wrap time would let a row checked early in the sweep - whose
+		// window closed before the wrap - be cancelled although a payment
+		// arriving after its check was never seen. This also covers the
+		// stale-cursor wrap (backlog churn leaving the cursor beyond every
+		// row): the head page alone completes a "sweep" whose start is old, so
+		// rows in the unscanned tail that expired after that start remain
+		// protected until a genuinely complete sweep finishes. A single page
+		// covering the whole backlog stamps this tick's own start.
+		//
+		// Do NOT stamp while any fetch failure is unresolved ($newFailed
+		// carries this tick's failures AND re-failed retries from earlier
+		// ticks): a failed address was not verified, and stamping would let
+		// cancellation treat it as checked. The retry path re-checks it next
+		// tick, and the stamp waits for the next wrap with everything clean.
+		if ($wrapped || $take >= $total) {
+			if (empty($newFailed)) {
+				update_option('nmm_autopay_scan_covered_at', ($take >= $total) ? $now : $sweepStart, false);
+			}
+			// The next sweep begins with the head rows this tick just fetched.
+			update_option('nmm_autopay_scan_sweep_start', $now, false);
 		}
 	}
 
