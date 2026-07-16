@@ -141,6 +141,28 @@ abandoned checkouts from pushing a later *paid* address beyond your wallet's
 the seed — 20 by default in Electrum). See the "gap limit" note in the FAQ for
 the recommended wallet-side safeguard.
 
+### `nmm_autopay_scan_budget`
+
+The **baseline** number of distinct unpaid payment addresses the Autopay verifier
+checks per cron tick (default `50`). Each non-Monero address costs a block-explorer
+request, so spreading the work with a persisted fair cursor (which resumes after
+the last address checked and wraps around) keeps a large backlog of abandoned,
+unpaid orders from holding the background job's lock for one long tick and starving
+payment, expiry, HD and Solana work.
+
+This is a floor, not a hard cap: the plugin raises the budget above it when a
+backlog is large enough that sweeping it at the baseline would take longer than the
+payment-matching window, because an address must be re-checked within that window
+or a just-arrived payment could age out before it is seen. Monero is cheap
+regardless of the value — an account's recent incoming transfers are fetched once
+per tick and grouped by subaddress locally. Raise the baseline if you want more
+frequent checks and have explorer headroom; lower it to be gentler on explorers for
+small backlogs.
+
+```php
+apply_filters( 'nmm_autopay_scan_budget', $limit );
+```
+
 ### `nmm_sol_retry_global_retention_seconds`
 
 How long a durable Solana retry entry is kept before a global cleanup pass may

@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.5
+Stable Tag: 2.9.6
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -182,6 +182,12 @@ Yes. Filters are available for redirecting verification requests, customizing th
 Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
 
 == Changelog ==
+
+= 2.9.6 =
+* Performance: the Autopay verifier now checks a bounded number of unpaid addresses per cron tick and advances a persisted fair cursor so every address is still eventually checked - a large backlog of abandoned orders can no longer hold the background job's lock and delay payment, expiry, HD and Solana work. Monero verification fetches an account's incoming transfers once per tick and groups them by subaddress locally, instead of two wallet-RPC calls per address
+* Autopay: the per-tick scan budget is derived from the observed cron cadence instead of assuming one tick per minute, so a store whose cron runs infrequently still re-checks every address within the payment-matching window and cannot silently miss a payment
+* Autopay: a bounded priority lane checks recently placed orders on every tick, so a new customer's payment is confirmed promptly even while a large backlog is being swept
+* Hardening: the thank-you page no longer errors if the order was deleted while the page was loading
 
 = 2.9.5 =
 * Autopay/Privacy Mode: the thank-you page now allocates a payment address under an order-scoped database lock and re-reads the order after acquiring it, so two near-simultaneous first loads of the same order can no longer each allocate a different address (most visible with Monero subaddresses and carousel addresses) - exactly one address is assigned, and the address shown to the customer is always the one being monitored. If a second request finds the order already being set up it shows a brief "preparing your payment details" notice instead of allocating, and a failed set-up is recorded before the lock is released so it can never overwrite a concurrent success

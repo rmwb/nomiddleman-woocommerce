@@ -73,6 +73,13 @@ mok('ipv6 loopback: ip preserved',        is_array($v6Loop) && $v6Loop['ip'] ===
 mok('resolve entry ipv4 plain',   NMM_Monero::curl_resolve_entry('wallet.example.com', 443, '93.184.216.34') === 'wallet.example.com:443:93.184.216.34');
 mok('resolve entry ipv6 bracketed', NMM_Monero::curl_resolve_entry('wallet.example.com', 18082, '2001:db8::1') === 'wallet.example.com:18082:[2001:db8::1]');
 
+// lookback_min_height bounds the batch get_transfers to the payment window so an
+// established wallet's full history is never fetched: ~120s/block, 2x window + 30.
+mok('min_height 3h window (90 blk *2 +30)', NMM_Monero::lookback_min_height(1000000, 3 * 3600) === 1000000 - 210);
+mok('min_height clamps at 0 near genesis',  NMM_Monero::lookback_min_height(50, 3 * 3600) === 0);
+mok('min_height zero lifetime = height-30', NMM_Monero::lookback_min_height(1000, 0) === 970);
+mok('min_height is bounded (not full hist)', NMM_Monero::lookback_min_height(5000000, 3 * 3600) === 4999790);
+
 // --- plan_request: transport must never resolve away from the vetted address ---
 // plan($target, $hasCurl, $canPin, $hasCreds)
 function plan($target, $curl, $canPin, $creds) { return NMM_Monero::plan_request($target, $curl, $canPin, $creds); }

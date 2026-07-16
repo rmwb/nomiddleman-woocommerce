@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.5
+Version: 2.9.6
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -71,7 +71,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.5');
+    define('NMM_VERSION', '2.9.6');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -322,6 +322,9 @@ function NMM_uninstall() {
     NMM_drop_payment_table();
     NMM_drop_carousel_table();
     NMM_drop_sol_retry_table();
+    delete_option('nmm_autopay_scan_cursor');
+    delete_option('nmm_autopay_scan_retry');
+    delete_option('nmm_autopay_scan_last_run');
 }
 
 // The retry table is created per site (each blog has its own prefix), so drop it
