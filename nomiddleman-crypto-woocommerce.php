@@ -322,12 +322,38 @@ function NMM_uninstall() {
     NMM_drop_payment_table();
     NMM_drop_carousel_table();
     NMM_drop_sol_retry_table();
-    delete_option('nmm_autopay_scan_cursor');
-    delete_option('nmm_autopay_scan_retry');
-    delete_option('nmm_autopay_scan_last_run');
-    delete_option('nmm_autopay_scan_covered_at');
-    delete_option('nmm_autopay_scan_sweep_start');
-    delete_option('nmm_autopay_scan_dirty');
+    NMM_delete_scan_options();
+}
+
+// The Autopay scan state is per site (options live in each blog's options
+// table), so on a network uninstall delete them per site alongside the per-site
+// tables; otherwise sub-sites would retain orphaned cursor/coverage state.
+function NMM_delete_scan_options() {
+    $scanOptions = array(
+        'nmm_autopay_scan_cursor',
+        'nmm_autopay_scan_retry',
+        'nmm_autopay_scan_last_run',
+        'nmm_autopay_scan_covered_at',
+        'nmm_autopay_scan_sweep_start',
+        'nmm_autopay_scan_dirty',
+    );
+
+    if (is_multisite()) {
+        global $wpdb;
+        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
+        foreach ($blogIds as $blogId) {
+            switch_to_blog($blogId);
+            foreach ($scanOptions as $scanOption) {
+                delete_option($scanOption);
+            }
+            restore_current_blog();
+        }
+        return;
+    }
+
+    foreach ($scanOptions as $scanOption) {
+        delete_option($scanOption);
+    }
 }
 
 // The retry table is created per site (each blog has its own prefix), so drop it

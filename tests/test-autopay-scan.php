@@ -422,6 +422,20 @@ sok('completed SOL sweep certifies coverage',      is_array($covMapSol) && isset
 remove_filter('pre_http_request', $solMock, 10);
 delete_transient('nmm_sol_cursor_' . md5($solAddr));
 
+// --- unknown ticker: cannot be verified, must never be certified -----------
+// A row whose coin was removed from the registry is skipped by the scan; it
+// must be marked dirty rather than silently certified, or expiry would cancel
+// its orders without any payment check ever being possible.
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('zombie_addr','ZZZFAKE','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 790000));
+as_tick(3 * 3600);
+$covMapZ = get_option('nmm_autopay_scan_covered_at', array());
+sok('unknown ticker never certified covered',      !is_array($covMapZ) || !isset($covMapZ['ZZZFAKE']), 'map=' . (is_array($covMapZ) ? implode(',', array_keys($covMapZ)) : '(scalar)'));
+
 // --- priority lane: a fresh order is checked on the very next tick ---------
 // With budget 3 and a 12-address backlog, park the cursor mid-list, then create
 // a NEW unpaid order whose address sorts BEFORE the cursor - the fair sweep

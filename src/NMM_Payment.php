@@ -200,6 +200,13 @@ class NMM_Payment {
 			$address = $record['address'];
 
 			if (!isset($cryptos[$cryptoId])) {
+				// A ticker no longer in the registry (coin support removed)
+				// cannot be verified at all - it must not be certified covered,
+				// or expiry would cancel its orders without any payment check.
+				// Dirty (not failed): there is no point re-fetching it every
+				// tick, and the next sweep re-marks it for as long as its
+				// unpaid rows exist, so they are never auto-cancelled.
+				$partialCryptos[$cryptoId] = true;
 				continue;
 			}
 			$crypto = $cryptos[$cryptoId];

@@ -286,6 +286,8 @@ delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_sweep_start');
 $agedTime = time() - 3 * 24 * 3600;
+delete_option('nmmpro_XMR_transactions_consumed_for_xmr_aged');
+delete_option('nmmpro_XMR_transactions_consumed_for_xmr_agedpaid');
 $oAged = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
