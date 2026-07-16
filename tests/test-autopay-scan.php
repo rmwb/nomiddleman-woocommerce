@@ -36,6 +36,14 @@ function as_tick($lifetime) {
 	NMM_Payment::check_all_addresses_for_matching_payment($lifetime);
 }
 
+// XMR's per-currency coverage stamp (0 when absent). Coverage is stamped per
+// coin so one dead endpoint cannot freeze every currency's expirations; all
+// the backlogs this file seeds are XMR.
+function as_cov() {
+	$m = get_option('nmm_autopay_scan_covered_at', array());
+	return (is_array($m) && isset($m['XMR'])) ? (int) $m['XMR'] : 0;
+}
+
 // scan_plan (pure): budget/window sizing. Small store stays at baseline with the
 // window nudged one tick; a large backlog raises the budget AND widens the
 // matching window by the sweep period so a payment can't age out unseen between
@@ -131,7 +139,7 @@ sok('each tick does exactly ONE XMR fetch',       array_unique($perTickFetches) 
 sok('cursor advances (ticks start elsewhere)',    count(array_unique($firstAddrPerTick)) === $ticksNeeded, 'firsts=' . implode(',', $firstAddrPerTick));
 sok('all N addresses covered within ceil(N/b)',   count($covered) === $N, 'covered=' . count($covered) . '/' . $N);
 sok('sweep cursor persisted',                     get_option('nmm_autopay_scan_cursor', '') !== '');
-sok('coverage stamped once the sweep wraps',      (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
+sok('coverage stamped once the sweep wraps',      as_cov() > 0);
 
 // Budget larger than the backlog: single tick covers everything, still one fetch.
 $wpdb->query("DELETE FROM `$pt`");
@@ -144,7 +152,7 @@ $GLOBALS['as_fetches'] = 0;
 as_tick($lifetime);
 sok('small backlog: checks all in one tick',      count($GLOBALS['as_checked']) === 5, 'checked=' . count($GLOBALS['as_checked']));
 sok('small backlog: still one XMR fetch',         $GLOBALS['as_fetches'] === 1, 'fetches=' . $GLOBALS['as_fetches']);
-sok('single-page tick stamps coverage',           (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
+sok('single-page tick stamps coverage',           as_cov() > 0);
 
 // Empty backlog: no fetch, no work, no crash.
 $wpdb->query("DELETE FROM `$pt`");
@@ -169,7 +177,7 @@ for ($i = 0; $i < 9; $i++) {
 delete_option('nmm_autopay_scan_covered_at');
 $GLOBALS['as_checked'] = array();
 as_tick(3 * 3600); // tick 1 -> xmrc_0,1,2
-sok('no coverage stamp mid-sweep',              (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
+sok('no coverage stamp mid-sweep',              as_cov() === 0);
 $tick1 = $GLOBALS['as_checked'];
 $lastScanned = end($tick1);
 $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $lastScanned)); // as if it got paid
@@ -282,7 +290,7 @@ $goneParts = explode('|', $goneKey, 2);
 $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $goneParts[1])); // as if paid/removed
 as_tick(3 * 3600); // still failing fetches; this tick wraps past the list end
 sok('stale retry key dropped once not unpaid',  !in_array($goneKey, get_option('nmm_autopay_scan_retry', array()), true), 'gone=' . $goneKey);
-sok('no coverage stamp while fetches fail',     (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
+sok('no coverage stamp while fetches fail',     as_cov() === 0);
 
 // Once fetches succeed again, the retry set drains.
 remove_all_filters('nmm_xmr_account_transactions');
@@ -292,7 +300,7 @@ as_tick(3 * 3600);
 sok('retry set drains after fetches succeed',    count(get_option('nmm_autopay_scan_retry', array())) === 0, 'retry=' . count(get_option('nmm_autopay_scan_retry', array())));
 // A few more clean ticks guarantee a failure-free wrap, which may stamp again.
 for ($t = 0; $t < 4; $t++) { as_tick(3 * 3600); }
-sok('coverage resumes once fetches succeed',     (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
+sok('coverage resumes once fetches succeed',     as_cov() > 0);
 
 // --- coverage stamp semantics: sweep START time, and stale-cursor wraps ----
 // The stamp must be the completed sweep's start, not its wrap time: a row
@@ -313,9 +321,9 @@ update_option('nmm_autopay_scan_sweep_start', $sweepSentinel, false);
 as_tick(3 * 3600); // xmrsw_0,1,2
 as_tick(3 * 3600); // xmrsw_3,4,5
 as_tick(3 * 3600); // xmrsw_6,7,8 - exact end of list, wrap not yet detected
-sok('multi-tick sweep: no stamp before the wrap', (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
+sok('multi-tick sweep: no stamp before the wrap', as_cov() === 0);
 as_tick(3 * 3600); // wraps
-sok('wrap stamps the sweep START, not wrap time', (int) get_option('nmm_autopay_scan_covered_at', 0) === $sweepSentinel, 'covered=' . get_option('nmm_autopay_scan_covered_at', 0) . ' sentinel=' . $sweepSentinel);
+sok('wrap stamps the sweep START, not wrap time', as_cov() === $sweepSentinel, 'covered=' . as_cov() . ' sentinel=' . $sweepSentinel);
 
 // A stale cursor beyond every row (backlog churn / long outage) makes one
 // head page look like a wrap. That must not certify a full sweep: the stamp
@@ -326,7 +334,7 @@ update_option('nmm_autopay_scan_cursor', 'XMR|zzzz_stale', false);
 $staleSentinel = time() - 400;
 update_option('nmm_autopay_scan_sweep_start', $staleSentinel, false);
 as_tick(3 * 3600); // after-page empty -> head page only, flagged as a wrap
-sok('stale-cursor wrap stamps only the old start', (int) get_option('nmm_autopay_scan_covered_at', 0) === $staleSentinel, 'covered=' . get_option('nmm_autopay_scan_covered_at', 0) . ' sentinel=' . $staleSentinel);
+sok('stale-cursor wrap stamps only the old start', as_cov() === $staleSentinel, 'covered=' . as_cov() . ' sentinel=' . $staleSentinel);
 
 // --- priority lane: a fresh order is checked on the very next tick ---------
 // With budget 3 and a 12-address backlog, park the cursor mid-list, then create

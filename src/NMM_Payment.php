@@ -231,15 +231,35 @@ class NMM_Payment {
 		// protected until a genuinely complete sweep finishes. A single page
 		// covering the whole backlog stamps this tick's own start.
 		//
-		// Do NOT stamp while any fetch failure is unresolved ($newFailed
-		// carries this tick's failures AND re-failed retries from earlier
-		// ticks): a failed address was not verified, and stamping would let
-		// cancellation treat it as checked. The retry path re-checks it next
-		// tick, and the stamp waits for the next wrap with everything clean.
+		// Coverage is stamped PER CURRENCY, and a currency with an unresolved
+		// fetch failure ($newFailed carries this tick's failures AND re-failed
+		// retries from earlier ticks) keeps its previous stamp: a failed
+		// address was not verified, and stamping it would let cancellation
+		// treat it as checked. Scoping this per currency matters - one
+		// permanently failing endpoint (say, an unconfigured Monero wallet
+		// RPC) must only hold back ITS coin's expirations, not freeze
+		// cancellation for every currency on the store. The retry path
+		// re-checks the failed address next tick, and that coin's stamp waits
+		// for the next wrap with all of its fetches clean.
 		if ($wrapped || $take >= $total) {
-			if (empty($newFailed)) {
-				update_option('nmm_autopay_scan_covered_at', ($take >= $total) ? $now : $sweepStart, false);
+			$failedCryptos = array();
+			foreach ($newFailed as $failedKey) {
+				$failedParts = explode('|', $failedKey, 2);
+				$failedCryptos[$failedParts[0]] = true;
 			}
+
+			$stampAt = ($take >= $total) ? $now : $sweepStart;
+			$coveredMap = get_option('nmm_autopay_scan_covered_at', array());
+			if (!is_array($coveredMap)) {
+				$coveredMap = array();
+			}
+			foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
+				if (!isset($failedCryptos[$sweptCryptoId])) {
+					$coveredMap[$sweptCryptoId] = $stampAt;
+				}
+			}
+			update_option('nmm_autopay_scan_covered_at', $coveredMap, false);
+
 			// The next sweep begins with the head rows this tick just fetched.
 			update_option('nmm_autopay_scan_sweep_start', $now, false);
 		}
@@ -662,20 +682,23 @@ class NMM_Payment {
 
 		$paymentRepo = new NMM_Payment_Repo();
 
-		// Single clock for the whole pass, shared by the coarse SQL cutoff below
-		// and the exact per-record check, so the two can never disagree by a
-		// second at a boundary. The clock is additionally capped at the
-		// verifier's last full-sweep coverage stamp: a row only counts as
-		// expired once the bounded sweep has checked its address at least once
-		// AFTER its window closed. Otherwise rows that pre-date the scan cursor
-		// (plugin upgrade with an aged unpaid backlog) or that aged out during
-		// a long cron outage would be cancelled without ever being verified,
-		// and an on-chain-paid order could be cancelled. Cancellation can
-		// therefore lag by up to one sweep period (<= half the shortest
-		// window) - late, never wrong. min() with real time keeps a fresh
-		// stamp from ever loosening the real-time expiry check.
-		$coveredAt = (int) get_option('nmm_autopay_scan_covered_at', 0);
-		$cancelClock = min(time(), $coveredAt);
+		// Single real-time clock for the whole pass. Each row's effective
+		// expiry clock is additionally capped at ITS currency's last
+		// full-sweep coverage stamp: a row only counts as expired once the
+		// bounded sweep has checked its address at least once AFTER its window
+		// closed. Otherwise rows that pre-date the scan cursor (plugin upgrade
+		// with an aged unpaid backlog) or that aged out during a long cron
+		// outage would be cancelled without ever being verified, and an
+		// on-chain-paid order could be cancelled. The stamp is per currency so
+		// one dead endpoint only pauses its own coin's expirations.
+		// Cancellation can therefore lag by up to one sweep period (<= half
+		// the shortest window) - late, never wrong. min() with real time keeps
+		// a fresh stamp from ever loosening the real-time expiry check.
+		$nowReal = time();
+		$coveredMap = get_option('nmm_autopay_scan_covered_at', array());
+		if (!is_array($coveredMap)) {
+			$coveredMap = array(); // unknown format: treat as no coverage (defer, never cancel unverified)
+		}
 
 		// Only rows old enough to be expirable for SOME configured coin can
 		// possibly be cancelled. The shortest cancellation window among the coins
@@ -689,19 +712,31 @@ class NMM_Payment {
 		}
 
 		$shortestWindowSec = null;
+		$latestCoveredAt = 0;
 		foreach ($unpaidCryptos as $unpaidCryptoId) {
 			$windowSec = (float) $nmmSettings->get_autopay_cancellation_time($unpaidCryptoId) * 60 * 60;
 			if ($shortestWindowSec === null || $windowSec < $shortestWindowSec) {
 				$shortestWindowSec = $windowSec;
 			}
+			if (isset($coveredMap[$unpaidCryptoId]) && (int) $coveredMap[$unpaidCryptoId] > $latestCoveredAt) {
+				$latestCoveredAt = (int) $coveredMap[$unpaidCryptoId];
+			}
 		}
 
-		$coarseCutoff = $cancelClock - $shortestWindowSec;
+		// The coarse cutoff must not exclude any row the per-record check below
+		// could cancel, so it pairs the shortest window with the LATEST per-coin
+		// coverage stamp; per-record filtering then applies each row's own
+		// window and its own coin's stamp. With no coverage at all the cutoff
+		// goes negative and nothing is fetched.
+		$coarseCutoff = min($nowReal, $latestCoveredAt) - $shortestWindowSec;
 		$unpaidPayments = $paymentRepo->get_unpaid($coarseCutoff);
 
 		foreach ($unpaidPayments as $paymentRecord) {
 			$orderTime = $paymentRecord['ordered_at'];
 			$cryptoId = $paymentRecord['cryptocurrency'];
+
+			$cryptoCoveredAt = isset($coveredMap[$cryptoId]) ? (int) $coveredMap[$cryptoId] : 0;
+			$cancelClock = min($nowReal, $cryptoCoveredAt);
 
 			$paymentCancellationTimeHr = $nmmSettings->get_autopay_cancellation_time($cryptoId);
 			$paymentCancellationTimeSec = $paymentCancellationTimeHr * 60 * 60;
