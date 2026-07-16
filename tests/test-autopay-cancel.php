@@ -285,11 +285,25 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_sweep_start');
+$agedTime = time() - 3 * 24 * 3600;
 $oAged = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
 	 VALUES ('xmr_aged','XMR','unpaid',%d,%d,'0.00100000',0)",
-	time() - 3 * 24 * 3600, $oAged));
+	$agedTime, $oAged));
+// A second aged order that WAS paid when it was fresh: its transaction is as
+// old as the order, far outside the normal matching lifetime. The verifying
+// sweep must widen its window back to the oldest unpaid order, actually see
+// this payment, and mark the order paid - not "verify" it against a few hours
+// of history and let expiry cancel a paid order.
+$oAgedPaid = mkorder('pending');
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
+	 VALUES ('xmr_agedpaid','XMR','unpaid',%d,%d,'0.00200000',0)",
+	$agedTime, $oAgedPaid));
+$xmrCrypto = NMM_Cryptocurrencies::get()['XMR'];
+$agedUnits = 0.002 * (10 ** $xmrCrypto->get_round_precision());
+$agedTx = new NMM_Transaction($agedUnits, 999, $agedTime + 120, 'TXAGEDPAY');
 NMM_Payment::cancel_expired_payments();
 aok('aged pre-scan row NOT cancelled unchecked', rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
 aok('  its order still pending',                ord_status($oAged) === 'pending');
@@ -305,16 +319,22 @@ aok('failed fetch does not stamp coverage',      !is_array($covMap) || !isset($c
 NMM_Payment::cancel_expired_payments();
 aok('aged row survives a failed check',          rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
 
-// One SUCCESSFUL bounded sweep tick covers the one-address backlog and stamps
-// coverage; the Monero seam keeps the tick offline (no wallet RPC in CI).
-add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+// One SUCCESSFUL bounded sweep tick covers the backlog and stamps coverage;
+// the Monero seam keeps the tick offline (no wallet RPC in CI) and serves the
+// aged payment for xmr_agedpaid.
+add_filter('nmm_xmr_account_transactions', function () use ($agedTx) {
+	return array('result' => 'success', 'by_address' => array('xmr_agedpaid' => array($agedTx)));
+});
 NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
 remove_all_filters('nmm_xmr_account_transactions');
 $covMap = get_option('nmm_autopay_scan_covered_at', array());
 aok('coverage stamped after a full sweep',       is_array($covMap) && isset($covMap['XMR']) && (int) $covMap['XMR'] > 0);
+aok('aged payment matched via widened window',   rec_status($wpdb,$pt,$oAgedPaid) === 'paid', 'status=' . rec_status($wpdb,$pt,$oAgedPaid));
 NMM_Payment::cancel_expired_payments();
 aok('aged row cancelled once checked',           rec_status($wpdb,$pt,$oAged) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oAged));
 aok('  its order cancelled',                    ord_status($oAged) === 'cancelled');
+aok('aged PAID order not cancelled',             ord_status($oAgedPaid) !== 'cancelled', 'order=' . ord_status($oAgedPaid));
+aok('  its record stays paid',                  rec_status($wpdb,$pt,$oAgedPaid) === 'paid');
 
 // Per-currency scoping: one coin's dead endpoint (here XMR, wallet RPC forced
 // to error) must only pause ITS OWN expirations - a healthy coin's aged rows

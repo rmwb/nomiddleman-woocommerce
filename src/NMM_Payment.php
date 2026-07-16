@@ -81,6 +81,27 @@ class NMM_Payment {
 		$take = $plan['take'];
 		$effectiveLifetime = $plan['effective_lifetime'];
 
+		// The matching window must also reach back past the OLDEST unpaid
+		// order (plus the pre-order skew grace), or the coverage stamp would be
+		// hollow for aged rows: a days-old order met after an upgrade or cron
+		// outage may have been paid when it was fresh, and a sweep that only
+		// fetched the last few hours would "verify" its address without ever
+		// being able to see that payment - expiry would then cancel a paid
+		// order. Widening the window also lets such a payment actually MATCH
+		// (the per-order TX_ORDER_SKEW_GRACE_SEC lower bound still blocks
+		// pre-order transactions on reused addresses, and consumed-tx tracking
+		// still blocks replays). Steady-state cost is small - the oldest
+		// unpaid row is at most about its cancellation window old - and after
+		// an outage the window stays wide exactly until the aged backlog has
+		// been verified once and settled.
+		$oldestOrderedAt = $paymentRepo->oldest_unpaid_ordered_at();
+		if ($oldestOrderedAt > 0) {
+			$atRiskLifetime = ($now - $oldestOrderedAt) + self::TX_ORDER_SKEW_GRACE_SEC;
+			if ($atRiskLifetime > $effectiveLifetime) {
+				$effectiveLifetime = $atRiskLifetime;
+			}
+		}
+
 		// Keyset pagination around the persisted cursor: fetch only the budgeted
 		// slice ordered strictly AFTER the previous tick's stopping point, then
 		// wrap to the head if that page ran off the end. Because we ask for rows

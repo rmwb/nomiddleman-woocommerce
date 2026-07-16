@@ -63,6 +63,17 @@ class NMM_Payment_Repo {
 		return $wpdb->get_col("SELECT DISTINCT `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'");
 	}
 
+	// Creation time of the oldest unpaid payment row (0 when none). A single
+	// scalar off the unpaid_expiry(status, ordered_at) index; the verifier
+	// widens its matching window back to this so the coverage stamp can only
+	// certify an aged order after a sweep that could actually have SEEN any
+	// payment that order might have received.
+	public function oldest_unpaid_ordered_at() {
+		global $wpdb;
+
+		return (int) $wpdb->get_var("SELECT MIN(`ordered_at`) FROM `$this->tableName` WHERE `status` = 'unpaid'");
+	}
+
 	// Number of distinct unpaid (cryptocurrency, address) pairs. A single scalar,
 	// so the cron can size its per-tick budget without loading the whole backlog
 	// into PHP.
