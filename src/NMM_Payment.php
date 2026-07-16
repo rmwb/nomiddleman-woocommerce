@@ -47,7 +47,24 @@ class NMM_Payment {
 		// is widened by the sweep period so a payment seen still-unconfirmed on one
 		// visit is not rejected as too old before its address next comes round.
 		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
-		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec);
+
+		// The scheduler is nominally 60s, but Action Scheduler / WP-Cron are
+		// traffic-driven and quiet stores tick far less often. Planning around an
+		// assumed 60s would silently stretch the sweep past the matching lifetime
+		// on such stores and lose payments, so derive the tick interval from the
+		// OBSERVED cadence: the gap since the previous run, clamped to [60s,
+		// 600s]. One long gap (host asleep, maintenance) then raises the next
+		// tick's budget to compensate, keeping the sweep-within-lifetime
+		// invariant real. The timestamp is written before the scan work so a
+		// mid-tick crash degrades to the nominal 60s assumption on the next run
+		// instead of compounding its budget.
+		$now = time();
+		$lastRun = (int) get_option('nmm_autopay_scan_last_run', 0);
+		update_option('nmm_autopay_scan_last_run', $now, false);
+		$observedInterval = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
+		$cronIntervalSec = min(600, max(60, $observedInterval));
+
+		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec, $cronIntervalSec);
 		$take = $plan['take'];
 		$effectiveLifetime = $plan['effective_lifetime'];
 
@@ -98,6 +115,27 @@ class NMM_Payment {
 			if (isset($liveRetry[$key]) && !isset($seen[$key])) {
 				$toProcess[] = $pair;
 				$seen[$key] = true;
+			}
+		}
+
+		// Priority lane: a fresh customer is watching the thank-you page's
+		// 15-second poller, so their first check must not wait for the fair
+		// sweep to come around (up to the full sweep period under a backlog).
+		// Scan recently created payment records every tick, ADDITIVE to the
+		// sweep budget - carving the lane out of the sweep budget would slow
+		// the sweep and re-open the sweep-within-lifetime invariant - and
+		// bounded by the baseline so the worst-case extra explorer load per
+		// tick is one baseline's worth. The lane never advances the cursor: it
+		// is not part of the fair sweep, and an address in both the lane and
+		// the sweep page is scanned only once ($seen).
+		$priorityWindow = (int) apply_filters('nmm_autopay_priority_window', 30 * MINUTE_IN_SECONDS);
+		if ($priorityWindow > 0) {
+			foreach ($paymentRepo->get_recent_unpaid_addresses($priorityWindow, $baseBudget) as $record) {
+				$key = self::scan_key($record);
+				if (!isset($seen[$key])) {
+					$toProcess[] = $record;
+					$seen[$key] = true;
+				}
 			}
 		}
 
@@ -168,7 +206,7 @@ class NMM_Payment {
 	 * lifetime to check them against ('effective_lifetime').
 	 *
 	 * A larger backlog raises the budget so a full sweep still completes within
-	 * about half the base lifetime (2x margin for late cron runs, ~1 tick/minute)
+	 * about half the base lifetime (2x margin for late cron runs)
 	 * AND within half the shortest cancellation window, so an order can never be
 	 * cancelled before its address is checked at least once. Spreading the sweep
 	 * across ticks means an address is only revisited every sweep period, so a
@@ -181,6 +219,9 @@ class NMM_Payment {
 	 *
 	 * $shortestCancelSec is the shortest order-cancellation window among coins with
 	 * unpaid orders; pass 0 when unknown to fall back to the lifetime bound alone.
+	 * $cronIntervalSec is the tick cadence to plan around; the caller passes the
+	 * observed (clamped) gap between cron runs, so the sweep-time guarantees hold
+	 * in wall-clock seconds even when the scheduler runs less often than nominal.
 	 */
 	public static function scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec = 0, $cronIntervalSec = 60) {
 		$total = max(0, (int) $total);

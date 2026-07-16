@@ -114,6 +114,30 @@ class NMM_Payment_Repo {
 	}
 
 	/**
+	 * Distinct unpaid (cryptocurrency, address) pairs whose payment record was
+	 * created within the last $windowSeconds, newest first - the "priority lane"
+	 * so a fresh customer's first check never waits behind a backlog sweep.
+	 * GROUP BY + MAX keeps the ordering ONLY_FULL_GROUP_BY-safe; the
+	 * unpaid_expiry (status, ordered_at) index serves the range predicate.
+	 */
+	public function get_recent_unpaid_addresses($windowSeconds, $limit) {
+		global $wpdb;
+		$limit = max(1, (int) $limit);
+		$since = time() - max(0, (int) $windowSeconds);
+
+		return $wpdb->get_results($wpdb->prepare(
+			"SELECT `cryptocurrency`, `address`, MAX(`ordered_at`) AS `latest_ordered_at`
+			 FROM `$this->tableName`
+			 WHERE `status` = 'unpaid'
+			 AND `ordered_at` >= %d
+			 GROUP BY `cryptocurrency`, `address`
+			 ORDER BY `latest_ordered_at` DESC
+			 LIMIT %d",
+			$since, $limit
+		), ARRAY_A);
+	}
+
+	/**
 	 * Given a bounded list of ['cryptocurrency'=>.., 'address'=>..] pairs, return
 	 * the subset that still has an unpaid row, as a set keyed by "crypto|address".
 	 * One indexed query for the whole list, so the cron can drop failed-fetch

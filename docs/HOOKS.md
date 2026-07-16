@@ -163,6 +163,20 @@ small backlogs.
 apply_filters( 'nmm_autopay_scan_budget', $limit );
 ```
 
+### `nmm_autopay_priority_window`
+
+Seconds of recency that qualify an unpaid payment record for the priority lane
+(default `1800`, 30 minutes). Addresses whose payment record was created within
+this window are checked on **every** tick, ahead of the fair sweep, so a fresh
+customer watching the thank-you page gets their first check on the next tick
+even while a large backlog is being swept. The lane is additive to the sweep
+budget and capped at the baseline budget, and it never advances the sweep
+cursor. Return `0` to disable the lane.
+
+```php
+apply_filters( 'nmm_autopay_priority_window', $seconds );
+```
+
 ### `nmm_sol_retry_global_retention_seconds`
 
 How long a durable Solana retry entry is kept before a global cleanup pass may
