@@ -2428,6 +2428,25 @@ class NMM_Blockchain {
 	// Seconds until the next retry for a signature on its Nth failed attempt: the
 	// first failure is retried on the next tick, later failures back off
 	// exponentially up to $maxSec so a persistent failure is polled sparsely.
+	/**
+	 * Whether $address's in-window Solana history is FULLY inspected: the
+	 * bounded sweep reached the end of the matching window (its resume cursor
+	 * is cleared) and no failed detail lookups are pending in the durable
+	 * retry queue. get_sol_address_transactions() deliberately returns
+	 * success for a PARTIAL pass (progress is durable and payments already
+	 * found must not be discarded), so the Autopay verifier must consult this
+	 * before certifying the address as checked for the cancellation coverage
+	 * stamp - signatures below the cursor or in the queue are not yet
+	 * verified, and an aged order's payment could be among them.
+	 */
+	public static function sol_address_fully_swept($address) {
+		if (get_transient('nmm_sol_cursor_' . md5($address)) !== false) {
+			return false;
+		}
+
+		return NMM_Sol_Retry_Repo::count_for($address) === 0;
+	}
+
 	private static function sol_retry_backoff($attempts, $baseSec, $maxSec) {
 		if ($attempts <= 1) {
 			return 0;

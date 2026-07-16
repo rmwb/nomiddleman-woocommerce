@@ -172,6 +172,7 @@ class NMM_Payment {
 		$xmrByAddress = array();
 
 		$newFailed = array();
+		$partialCryptos = array();
 
 		foreach ($toProcess as $record) {
 			$cryptoId = $record['cryptocurrency'];
@@ -202,6 +203,16 @@ class NMM_Payment {
 				if (!self::check_address_transactions_for_matching_payments($crypto, $address, $effectiveLifetime)) {
 					$newFailed[] = self::scan_key($record);
 				}
+				elseif ($cryptoId === 'SOL' && !NMM_Blockchain::sol_address_fully_swept($address)) {
+					// The bounded Solana sweep made durable progress but has
+					// not yet inspected this address's whole matching window
+					// (a busy or dusted address spans several ticks). Not a
+					// failure - collected payments were returned and progress
+					// is durable - but not verification either: the coin must
+					// not be certified covered while signatures below the
+					// internal cursor, or in its retry queue, are uninspected.
+					$partialCryptos[$cryptoId] = true;
+				}
 			}
 		}
 
@@ -215,19 +226,25 @@ class NMM_Payment {
 		// again). Without this, an endpoint recovering after drops would let a
 		// later clean wrap certify coverage for addresses that were never
 		// successfully checked, and an aged paid order could be cancelled.
+		$dirtyAdd = $partialCryptos;
 		$retryCap = max(1, (int) apply_filters('nmm_autopay_scan_retry_cap', 200));
 		$newFailed = array_values(array_unique($newFailed));
 		if (count($newFailed) > $retryCap) {
+			foreach (array_slice($newFailed, $retryCap) as $droppedKey) {
+				$droppedParts = explode('|', $droppedKey, 2);
+				$dirtyAdd[$droppedParts[0]] = true;
+			}
+			$newFailed = array_slice($newFailed, 0, $retryCap);
+		}
+		if (!empty($dirtyAdd)) {
 			$dirty = get_option('nmm_autopay_scan_dirty', array());
 			if (!is_array($dirty)) {
 				$dirty = array();
 			}
-			foreach (array_slice($newFailed, $retryCap) as $droppedKey) {
-				$droppedParts = explode('|', $droppedKey, 2);
-				$dirty[$droppedParts[0]] = true;
+			foreach (array_keys($dirtyAdd) as $dirtyAddCryptoId) {
+				$dirty[$dirtyAddCryptoId] = true;
 			}
 			update_option('nmm_autopay_scan_dirty', $dirty, false);
-			$newFailed = array_slice($newFailed, 0, $retryCap);
 		}
 		update_option('nmm_autopay_scan_retry', $newFailed, false);
 		update_option('nmm_autopay_scan_cursor', $lastKey, false);
@@ -270,10 +287,12 @@ class NMM_Payment {
 				$failedCryptos[$failedParts[0]] = true;
 			}
 
-			// Currencies whose failed keys were dropped from the retry set
-			// during this sweep have unverified addresses the retry path will
-			// never revisit: exclude them from this stamp, then clear the
-			// marker - the sweep now starting revisits every address.
+			// Currencies marked dirty during this sweep - failed keys dropped
+			// from the retry set, or a Solana address whose bounded internal
+			// history sweep is still mid-window - have addresses that were not
+			// fully verified: exclude them from this stamp, then clear the
+			// marker. The sweep now starting revisits every address, and a
+			// still-incomplete address simply re-marks its coin dirty.
 			$dirty = get_option('nmm_autopay_scan_dirty', array());
 			if (is_array($dirty) && !empty($dirty)) {
 				foreach (array_keys($dirty) as $dirtyCryptoId) {

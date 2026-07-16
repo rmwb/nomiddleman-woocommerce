@@ -368,6 +368,60 @@ as_tick(3 * 3600); // wraps - genuinely clean now
 sok('next fully-clean sweep stamps coverage',     as_cov() > 0, 'covered=' . as_cov());
 remove_all_filters('nmm_autopay_scan_retry_cap');
 
+// --- partial Solana history sweep must not certify coverage ----------------
+// A busy/dusted SOL address takes several ticks to inspect (<=25 detail
+// lookups per tick, durable internal cursor). get_sol_address_transactions()
+// returns success for such a partial pass, so the verifier must consult
+// sol_address_fully_swept() and dirty the coin - a payment could still sit
+// below the internal cursor while cancel_expired_payments() runs.
+$solAddr = 'SCOV1111111111111111111111111111111111111111';
+$GLOBALS['scov_sigs'] = array();
+$GLOBALS['scov_addr'] = $solAddr;
+$solMock = function ($pre, $args, $url) {
+	if (strpos($url, 'api.mainnet-beta.solana.com') === false) { return $pre; }
+	$req = json_decode($args['body'], true);
+	if ($req['method'] === 'getSignaturesForAddress') {
+		$opts = isset($req['params'][1]) ? $req['params'][1] : array();
+		$limit = isset($opts['limit']) ? (int) $opts['limit'] : 1000;
+		$sigs = $GLOBALS['scov_sigs'];
+		$start = 0;
+		if (isset($opts['before'])) {
+			foreach ($sigs as $i => $s) { if ($s['signature'] === $opts['before']) { $start = $i + 1; break; } }
+		}
+		$out = array_slice($sigs, $start, $limit);
+		foreach ($out as &$o) { $o['err'] = null; }
+		return array('response' => array('code' => 200), 'body' => json_encode(array('result' => $out)));
+	}
+	// getTransaction: inspected fine, no credit to our address
+	return array('response' => array('code' => 200), 'body' => json_encode(array('result' => array(
+		'blockTime' => time(),
+		'transaction' => array('message' => array('accountKeys' => array(array('pubkey' => 'SomeoneElse')))),
+		'meta' => array('preBalances' => array(1000), 'postBalances' => array(1000)),
+	))));
+};
+add_filter('pre_http_request', $solMock, 10, 3);
+
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+delete_transient('nmm_sol_cursor_' . md5($solAddr));
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'SOL','unpaid',%d,%d,'0.10000000',0)", $solAddr, time() - 2 * HOUR_IN_SECONDS, 780000));
+// 30 in-window signatures > the 25-per-tick inspection budget -> partial pass.
+for ($i = 0; $i < 30; $i++) { $GLOBALS['scov_sigs'][] = array('signature' => sprintf('scov_sig_%02d', $i), 'blockTime' => time() - 60 - $i); }
+
+as_tick(3 * 3600); // single-page backlog: wrap-equivalent, but SOL is partial
+$covMapSol = get_option('nmm_autopay_scan_covered_at', array());
+sok('partial SOL sweep does not certify coverage', !is_array($covMapSol) || !isset($covMapSol['SOL']), 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
+
+as_tick(3 * 3600); // remaining 5 signatures: internal sweep completes mid-tick
+$covMapSol = get_option('nmm_autopay_scan_covered_at', array());
+sok('completed SOL sweep certifies coverage',      is_array($covMapSol) && isset($covMapSol['SOL']) && (int) $covMapSol['SOL'] > 0, 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
+
+remove_filter('pre_http_request', $solMock, 10);
+delete_transient('nmm_sol_cursor_' . md5($solAddr));
+
 // --- priority lane: a fresh order is checked on the very next tick ---------
 // With budget 3 and a 12-address backlog, park the cursor mid-list, then create
 // a NEW unpaid order whose address sorts BEFORE the cursor - the fair sweep
