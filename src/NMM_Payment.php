@@ -252,10 +252,11 @@ class NMM_Payment {
 					$partialCryptos[$cryptoId] = true;
 				}
 				elseif ($cryptoId !== 'SOL' && self::page_possibly_truncated($cryptoId, $fetched, $cryptoLifetime, $now)) {
-					// A full newest-page whose oldest entry is still inside
-					// the matching window: in-window history may be hidden
-					// below the fixed-depth page (see page_possibly_truncated)
-					// - a valid check, but not certifiable coverage.
+					// A full newest-page (raw, pre-filtering) whose oldest
+					// entry is still inside the matching window: in-window
+					// history may be hidden below the fixed-depth page (see
+					// page_possibly_truncated) - a valid check, but not
+					// certifiable coverage.
 					$partialCryptos[$cryptoId] = true;
 				}
 			}
@@ -436,16 +437,21 @@ class NMM_Payment {
 		return $record['cryptocurrency'] . '|' . $record['address'];
 	}
 
-	// Fetches and matches the address's transactions. Returns the fetched
-	// NMM_Transaction[] on success (so the sweep can inspect the page for
-	// possible truncation before certifying coverage), or false if the fetch
-	// failed - so the sweep can retry a transient failure on the next tick
-	// instead of leaving it until the whole backlog is swept again.
+	// Fetches and matches the address's transactions. Returns
+	// array('transactions' => NMM_Transaction[], 'page' => rawPageMeta|null)
+	// on success - so the sweep can inspect the served page for possible
+	// truncation before certifying coverage - or false if the fetch failed,
+	// so the sweep can retry a transient failure on the next tick instead of
+	// leaving it until the whole backlog is swept again.
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
 		$cryptoId = $crypto->get_id();
 
 		NMM_Util::log(__FILE__, __LINE__, '===========================================================================');
 		NMM_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
+
+		// Clear any stale raw-page note so the meta read after this fetch can
+		// only belong to this fetch.
+		NMM_Blockchain::take_raw_page_meta();
 
 		try {
 			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
@@ -455,11 +461,16 @@ class NMM_Payment {
 			return false;
 		}
 
+		$pageMeta = NMM_Blockchain::take_raw_page_meta();
+
 		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
 
 		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
 
-		return is_array($transactions) ? $transactions : array();
+		return array(
+			'transactions' => is_array($transactions) ? $transactions : array(),
+			'page' => $pageMeta,
+		);
 	}
 
 	/**
@@ -477,26 +488,48 @@ class NMM_Payment {
 	 * is OLDER than the window proves the whole window is visible; a short
 	 * page proves there is nothing below.
 	 *
-	 * The caps describe what an adapter RETURNS (incoming/credited entries).
-	 * Burying a payment therefore requires a page-full of newer incoming
-	 * transactions, which matches the realistic burial vector (dust bursts are
-	 * incoming); a burst of outgoing wallet sweeps does not fill these pages.
+	 * Fullness is judged on the RAW page the explorer served (reported by the
+	 * adapter via NMM_Blockchain::note_raw_page BEFORE its incoming-only
+	 * filtering), never on the filtered result: a 25-entry page of 24
+	 * outgoing transfers and one payment filters down to a single entry, but
+	 * an older in-window payment may still be hidden below the full raw page.
+	 * When an adapter reports no raw metadata (not yet instrumented), the
+	 * filtered result is used as a floor - it can only under-detect, so
+	 * instrumenting an adapter strictly tightens the check.
 	 */
-	public static function page_possibly_truncated($cryptoId, $transactions, $transactionLifetime, $now) {
+	public static function page_possibly_truncated($cryptoId, $fetchResult, $transactionLifetime, $now) {
 		$cap = NMM_Blockchain::adapter_page_cap($cryptoId);
-		if ($cap < 1 || !is_array($transactions) || count($transactions) < $cap) {
+		if ($cap < 1) {
 			return false;
 		}
 
-		$oldest = null;
-		foreach ($transactions as $transaction) {
-			$ts = (int) $transaction->get_time_stamp();
-			if ($oldest === null || $ts < $oldest) {
-				$oldest = $ts;
+		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
+		$transactions = isset($fetchResult['transactions']) ? $fetchResult['transactions'] : array();
+
+		if (is_array($pageMeta)) {
+			$count = (int) $pageMeta[0];
+			$oldest = $pageMeta[1];
+		}
+		else {
+			$count = is_array($transactions) ? count($transactions) : 0;
+			$oldest = null;
+			foreach ($transactions as $transaction) {
+				$ts = (int) $transaction->get_time_stamp();
+				if ($oldest === null || $ts < $oldest) {
+					$oldest = $ts;
+				}
 			}
 		}
 
-		return ($oldest !== null) && ($oldest > ($now - (int) $transactionLifetime));
+		if ($count < $cap) {
+			return false;
+		}
+
+		// A full page whose oldest entry cannot be shown to pre-date the
+		// matching window may hide in-window history below it. An unknown
+		// oldest timestamp on a full page counts as truncated - reach past
+		// the window cannot be proven.
+		return ($oldest === null) || ((int) $oldest > ($now - (int) $transactionLifetime));
 	}
 
 	/**

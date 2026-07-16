@@ -510,6 +510,19 @@ delete_option('nmm_autopay_scan_covered_at');
 as_tick(3 * 3600);
 $covMapB = get_option('nmm_autopay_scan_covered_at', array());
 sok('short page certifies',                        is_array($covMapB) && isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+
+// Mixed directions: fullness must be judged on the RAW page, not the
+// incoming-filtered result. 25 raw in-window entries of which only ONE pays
+// our address filters down to a single transaction - but the raw page is
+// full, so an older in-window payment may still be hidden below it.
+$btrMixed = $btrPage(25, 1800);
+for ($i = 1; $i < 25; $i++) { $btrMixed[$i]['vout'] = array(array('scriptpubkey_address' => 'someone_else', 'value' => 1000)); }
+$GLOBALS['btr_txs'] = $btrMixed;
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+as_tick(3 * 3600);
+$covMapB = get_option('nmm_autopay_scan_covered_at', array());
+sok('full raw page, one incoming: not certified',  !is_array($covMapB) || !isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
 remove_filter('pre_http_request', $btcMockTrunc, 10);
 delete_option('nmmpro_BTC_transactions_consumed_for_btctrunc_addr');
 

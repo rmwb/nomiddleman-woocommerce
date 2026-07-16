@@ -496,6 +496,19 @@ class NMM_Blockchain {
 		});
 		$rawTxList = array_slice($rawTxList, 0, 25);
 
+		// Raw page the matcher works from: Koios returns the full address
+		// history (both directions), which we cap client-side to the newest
+		// 25 - so the truncation check must reason about this slice, not the
+		// longer list above it. block_time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTxList as $row) {
+			$ts = isset($row->block_time) ? (int) $row->block_time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTxList), $rawOldestTs);
+
 		$txHashes = array();
 		$txTimes = array();
 		foreach ($rawTxList as $row) {
@@ -592,6 +605,18 @@ class NMM_Blockchain {
 			return $result;
 		}
 
+		// Report the RAW page (haskoin serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// output-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		// confirmations are not included, so fetch the current best block height
 		$tipHeight = 0;
 		$tipResponse = self::api_get('https://api.blockchain.info/haskoin-store/bch/block/best?notx=true');
@@ -675,6 +700,12 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+		// Raw page the matcher works from (getaddress returns BOTH directions;
+		// we keep the newest 25 client-side). last_txs entries carry no
+		// timestamp - those only arrive when each tx is fetched below - so the
+		// oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactionIds), null);
+
 		$transactions = array();
 		
 		foreach ($rawTransactionIds as $rawTransactionId) {			
@@ -756,6 +787,11 @@ class NMM_Blockchain {
 
 		// newest entries are last in the history; keep the 20 most recent
 		$history = array_slice($history, -20);
+
+		// Raw page the matcher works from (history covers BOTH directions; we
+		// keep the newest 20 client-side). History entries carry only a height,
+		// no timestamp, so the oldest raw timestamp is unknown.
+		self::note_raw_page(count($history), null);
 
 		$tipHeight = 0;
 		$tipResponse = self::api_get('https://api.whatsonchain.com/v1/bsv/main/chain/info');
@@ -854,6 +890,17 @@ class NMM_Blockchain {
 
                 return $result;
             }
+
+            // Raw page (txrefs cover BOTH directions) for the truncation check.
+            $rawOldestTs = null;
+            foreach ($rawTransactions as $rawTransaction) {
+                $ts = isset($rawTransaction->confirmed) ? strtotime($rawTransaction->confirmed) : null;
+                if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+                    $rawOldestTs = $ts;
+                }
+            }
+            self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
             $transactions = array();
             foreach ($rawTransactions as $rawTransaction) {
                 if ($rawTransaction->tx_input_n == -1) {
@@ -882,6 +929,20 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page (the explorer serves ALL transactions touching the
+		// address, both directions) for the truncation check - the
+		// vout-filtered subset below can look short while the served page
+		// was full. Unconfirmed entries have no block_time; they are the
+		// newest, so they never determine the oldest.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = (!empty($rawTransaction->status->confirmed) && isset($rawTransaction->status->block_time)) ? (int) $rawTransaction->status->block_time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
 
 		// mempool.space does not include confirmation counts, so fetch the tip height
 		$tipHeight = 0;
@@ -1007,6 +1068,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Insight serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// vout-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
@@ -1057,6 +1131,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Insight serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// vout-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
@@ -1107,6 +1194,17 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page (txrefs cover BOTH directions) for the truncation check.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->confirmed) ? strtotime($rawTransaction->confirmed) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if ($rawTransaction->tx_input_n == -1) {
@@ -1152,6 +1250,20 @@ class NMM_Blockchain {
 
             return $result;
         }
+
+        // Raw page (the Esplora endpoint serves ALL transactions touching the
+        // address, both directions) for the truncation check - the vout-filtered
+        // subset below can look short while the served page was full. Unconfirmed
+        // entries have no block_time; they are the newest, so they never
+        // determine the oldest.
+        $rawOldestTs = null;
+        foreach ($rawTransactions as $rawTransaction) {
+            $ts = (!empty($rawTransaction->status->confirmed) && isset($rawTransaction->status->block_time)) ? (int) $rawTransaction->status->block_time : null;
+            if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+                $rawOldestTs = $ts;
+            }
+        }
+        self::note_raw_page(count($rawTransactions), $rawOldestTs);
 
         // Esplora omits confirmation counts, so fetch the tip height
         $tipHeight = 0;
@@ -1199,6 +1311,17 @@ class NMM_Blockchain {
 			$body = json_decode($response['body']);
 
 			if (isset($body->actions) && is_array($body->actions)) {
+				// Report the RAW page (get_actions covers BOTH directions) for
+				// the truncation check, before the to-address filtering below.
+				$rawOldestTs = null;
+				foreach ($body->actions as $action) {
+					$ts = isset($action->timestamp) ? strtotime($action->timestamp) : null;
+					if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+						$rawOldestTs = $ts;
+					}
+				}
+				self::note_raw_page(count($body->actions), $rawOldestTs);
+
 				$transactions = array();
 
 				foreach ($body->actions as $action) {
@@ -1261,6 +1384,17 @@ class NMM_Blockchain {
 				'message' => 'No transactions found',
 			);
 		}
+
+		// Report the RAW page (get_actions covers BOTH directions) for the
+		// truncation check, before the to-address filtering below.
+		$rawOldestTs = null;
+		foreach ($body2->actions as $action) {
+			$ts = isset($action->block_time) ? strtotime($action->block_time) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($body2->actions), $rawOldestTs);
 
 		$transactions = array();
 		$seenTrxIds = array();
@@ -1331,6 +1465,18 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (txlist covers BOTH directions) for the
+		// truncation check, before the incoming-only filtering below.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 
 
@@ -1383,6 +1529,17 @@ class NMM_Blockchain {
 			return $result;
 		}
 
+		// Report the RAW page (txlist covers BOTH directions) for the
+		// truncation check, before the incoming-only filtering below.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			
@@ -1431,6 +1588,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Insight serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// vout-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
@@ -1481,6 +1651,13 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page for the truncation check. This endpoint is recipient-
+		// filtered server-side (recipientId) and the entries carry only a
+		// Lisk-epoch timestamp the parser does not decode (it emits time()),
+		// so the oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactions), null);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {				
 			$transactions[] = new NMM_Transaction($rawTransaction->amount, 
@@ -1529,6 +1706,17 @@ class NMM_Blockchain {
 
             return $result;
         }
+
+        // Raw page (txrefs cover BOTH directions) for the truncation check.
+        $rawOldestTs = null;
+        foreach ($rawTransactions as $rawTransaction) {
+            $ts = isset($rawTransaction->confirmed) ? strtotime($rawTransaction->confirmed) : null;
+            if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+                $rawOldestTs = $ts;
+            }
+        }
+        self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
         $transactions = array();
         foreach ($rawTransactions as $rawTransaction) {
             if ($rawTransaction->tx_input_n == -1) {
@@ -1589,6 +1777,13 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page the matcher works from (getaddress returns BOTH directions;
+		// we keep the newest 25 client-side). last_txs entries carry no
+		// timestamp - those only arrive when each tx is fetched below - so the
+		// oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactionIds), null);
+
 		$transactions = array();
 		
 		foreach ($rawTransactionIds as $rawTransactionId) {			
@@ -1667,6 +1862,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (this endpoint covers BOTH directions) for the
+		// truncation check, before the to-address filtering below. ->timestamp
+		// is milliseconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timestamp) ? (int) ($rawTransaction->timestamp / 1000) : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		
 		foreach ($rawTransactions as $rawTransaction) {
@@ -1715,6 +1923,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (this endpoint returns ALL of the address's
+		// transactions, both directions) for the truncation check, before the
+		// type/direction filtering below. ->timestamp is milliseconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timestamp) ? (int) ($rawTransaction->timestamp / 1000) : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if ($rawTransaction->type == '4') {
@@ -1761,6 +1982,13 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page for the truncation check. This endpoint is recipient-
+		// filtered server-side (transfers/incoming) and the entries carry only
+		// a NEM-epoch timestamp the parser does not decode (it emits time()),
+		// so the oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactions), null);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {				
 			$transactions[] = new NMM_Transaction($rawTransaction->transaction->amount, 
@@ -1805,6 +2033,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Horizon returns BOTH directions of payments) for
+		// the truncation check, before the to/account filtering below.
+		// ->created_at is an ISO string.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->created_at) ? strtotime($rawTransaction->created_at) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		
 		foreach ($rawTransactions as $rawTransaction) {
@@ -1925,6 +2166,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (this endpoint returns BOTH directions) for the
+		// truncation check, before the Payment/Destination filtering below.
+		// ->date is an ISO string.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->date) ? strtotime($rawTransaction->date) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if (!isset($rawTransaction->TransactionType) || $rawTransaction->TransactionType !== 'Payment') {
@@ -1982,6 +2236,20 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page for the truncation check. TzKT already filters
+		// server-side to this target (incoming only), but the served page must
+		// still be reported before the amount filtering below. ->timestamp is
+		// an ISO string.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timestamp) ? strtotime($rawTransaction->timestamp) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 
 		foreach ($rawTransactions as $rawTransaction) {
@@ -2031,6 +2299,18 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page for the truncation check. Blockchair already
+		// filters server-side to this recipient, but the served page must still
+		// be reported before it is consumed below. ->time is a datetime string.
+		$rawOldestTs = null;
+		foreach ($body->data as $output) {
+			$ts = isset($output->time) ? strtotime($output->time) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($body->data), $rawOldestTs);
 
 		// ZEC requires real confirmation counts; blockchair context carries the tip
 		$tipHeight = isset($body->context->state) ? (int) $body->context->state : 0;
@@ -2093,11 +2373,24 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (both directions) for the truncation check -
+		// the incoming-only subset below can look short while the page the
+		// explorer served was full.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 
 		foreach($rawTransactions as $rawTransaction) {
-			
-			
+
+
 			if (strtolower($rawTransaction->to) === strtolower($address)
 				&& isset($rawTransaction->contractAddress)
 				&& strtolower($rawTransaction->contractAddress) === strtolower($contract)) {
@@ -2143,6 +2436,17 @@ class NMM_Blockchain {
 				'message' => 'No transactions found',
 			);
 		}
+
+		// Report the RAW page (relatedAddress returns both directions) for
+		// the truncation check before the incoming-only filtering below.
+		$rawOldestTs = null;
+		foreach ($body->token_transfers as $transfer) {
+			$ts = isset($transfer->block_ts) ? (int) ($transfer->block_ts / 1000) : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($body->token_transfers), $rawOldestTs);
 
 		$transactions = array();
 
@@ -2449,6 +2753,29 @@ class NMM_Blockchain {
 	 * output), which only trips the full-page check earlier - the safe
 	 * direction.
 	 */
+	// Raw newest-page metadata for the last adapter fetch in this request:
+	// array(rawEntryCount, oldestRawTimestamp|null). Adapters report the
+	// UNFILTERED page - the entry count and oldest entry time of what the
+	// explorer actually served, before directional (incoming-only) filtering
+	// - because the truncation check must reason about the page itself: a
+	// full raw page of mostly outgoing entries still proves nothing about
+	// what lies below it, even though the matcher's filtered result looks
+	// short. Consumed (and cleared) by the verifier via take_raw_page_meta()
+	// immediately after each fetch, so a value can never leak from one
+	// address's fetch to another's.
+	private static $lastRawPage = null;
+
+	public static function note_raw_page($count, $oldestTs) {
+		self::$lastRawPage = array((int) $count, ($oldestTs === null) ? null : (int) $oldestTs);
+	}
+
+	public static function take_raw_page_meta() {
+		$meta = self::$lastRawPage;
+		self::$lastRawPage = null;
+
+		return $meta;
+	}
+
 	public static function adapter_page_cap($cryptoId) {
 		static $caps = array(
 			// explicit limit params or client-side slices
