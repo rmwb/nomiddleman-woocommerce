@@ -205,9 +205,16 @@ class NMM_Gateway extends WC_Payment_Gateway {
             try {
                 // Re-fetch under the lock: another worker may have finished
                 // initializing while we waited for it. If so, just display that
-                // address and never allocate a second one.
+                // address and never allocate a second one. Force a fresh meta read
+                // (bypassing the request-local cache the pre-lock get_meta() above
+                // populated with an empty wallet_address) so we actually see what
+                // the worker that held the lock just committed - a stale cache here
+                // would let us allocate a second, unmonitored address.
                 $order = wc_get_order($order_id);
-                if (!empty($order->get_meta('wallet_address'))) {
+                if ($order) {
+                    $order->read_meta_data(true);
+                }
+                if ($order && !empty($order->get_meta('wallet_address'))) {
                     $this->display_existing_payment($order, $order_id);
                     return;
                 }

@@ -103,4 +103,27 @@ if (defined('NMM_PAYMENT_TABLE')) {
 
 $wpdb2->close();
 
+// Post-lock recheck must see a wallet_address committed by another worker after
+// this request first read the order (which caches an empty value). The gateway
+// forces a fresh meta read under the lock; assert that a forced re-read reflects
+// a value written behind a previously-read order object's back.
+if (function_exists('wc_create_order')) {
+	$o = wc_create_order();
+	$o->save();
+	$oid = $o->get_id();
+
+	$staleOrder = wc_get_order($oid);
+	$staleOrder->get_meta('wallet_address'); // populate this object's meta cache (empty)
+
+	// Simulate the lock holder committing the address via a separate load.
+	$holder = wc_get_order($oid);
+	$holder->update_meta_data('wallet_address', 'ADDR_FROM_HOLDER');
+	$holder->save();
+
+	$staleOrder->read_meta_data(true); // exactly what the gateway does post-lock
+	lok('forced re-read sees the committed address', $staleOrder->get_meta('wallet_address') === 'ADDR_FROM_HOLDER', 'got=' . $staleOrder->get_meta('wallet_address'));
+
+	$holder->delete(true);
+}
+
 echo $GLOBALS['ol_ok'] ? "\nORDER-INIT-LOCK CHECKS PASSED\n" : "\nORDER-INIT-LOCK CHECKS FAILED\n";
