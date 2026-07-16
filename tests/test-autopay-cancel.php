@@ -293,8 +293,18 @@ NMM_Payment::cancel_expired_payments();
 aok('aged pre-scan row NOT cancelled unchecked', rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
 aok('  its order still pending',                ord_status($oAged) === 'pending');
 
-// One bounded sweep tick covers the one-address backlog and stamps coverage;
-// the Monero seam keeps the tick offline (no wallet RPC in CI).
+// A sweep whose fetch FAILED must not stamp coverage either - the address was
+// visited but never actually verified (transient explorer/RPC outage), and
+// stamping would let the cancellation below kill a possibly-paid order.
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'error'); });
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+remove_all_filters('nmm_xmr_account_transactions');
+aok('failed fetch does not stamp coverage',      (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
+NMM_Payment::cancel_expired_payments();
+aok('aged row survives a failed check',          rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
+
+// One SUCCESSFUL bounded sweep tick covers the one-address backlog and stamps
+// coverage; the Monero seam keeps the tick offline (no wallet RPC in CI).
 add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
 NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
 remove_all_filters('nmm_xmr_account_transactions');

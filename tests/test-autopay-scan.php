@@ -60,6 +60,16 @@ $planFastCron = NMM_Payment::scan_plan(100, 10, 600, $dayCancel, 60);
 sok('scan_plan 60s cadence: budget spread over ticks', $planFastCron['budget'] === 20, 'budget=' . $planFastCron['budget']);
 $planSlowCron = NMM_Payment::scan_plan(100, 10, 600, $dayCancel, 600);
 sok('scan_plan 600s cadence: one-tick sweep budget',   $planSlowCron['budget'] === 100, 'budget=' . $planSlowCron['budget']);
+// Beyond the 600s planning clamp the BUDGET stays burst-capped, but the
+// matching window must widen by the REAL cadence - with an hourly cron the
+// sweep genuinely takes hours, and a window computed from the clamped 600s
+// would let a payment age out unseen between two visits.
+$planHourly = NMM_Payment::scan_plan(100, 10, 600, $dayCancel, 3600);
+sok('scan_plan hourly: one-page budget unchanged',     $planHourly['budget'] === 100, 'budget=' . $planHourly['budget']);
+sok('scan_plan hourly: window widened by REAL gap',    $planHourly['effective_lifetime'] === 600 + 3600, 'eff=' . $planHourly['effective_lifetime']);
+$planHourlyBig = NMM_Payment::scan_plan(9000, 50, 3 * 3600, $dayCancel, 3600);
+sok('scan_plan hourly big: burst stays capped',        $planHourlyBig['budget'] === 1000, 'budget=' . $planHourlyBig['budget']);
+sok('scan_plan hourly big: window covers real sweep',  $planHourlyBig['effective_lifetime'] === 10800 + 9 * 3600, 'eff=' . $planHourlyBig['effective_lifetime']);
 
 // Seed N unpaid Monero addresses. XMR RPC is unconfigured in CI, so the batch
 // fetch returns an error (no network) and no order is ever matched - the unpaid
@@ -247,6 +257,7 @@ add_filter('nmm_autopay_scan_budget', function () { return 3; });
 $wpdb->query("DELETE FROM `$pt`");
 delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
 for ($i = 0; $i < 9; $i++) {
 	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrf_%d', $i), time() - 2 * HOUR_IN_SECONDS, 740000 + $i));
 }
@@ -267,8 +278,9 @@ $retryNow = get_option('nmm_autopay_scan_retry', array());
 $goneKey = $retryNow[0]; // e.g. 'XMR|xmrf_0'
 $goneParts = explode('|', $goneKey, 2);
 $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $goneParts[1])); // as if paid/removed
-as_tick(3 * 3600); // still failing fetches
+as_tick(3 * 3600); // still failing fetches; this tick wraps past the list end
 sok('stale retry key dropped once not unpaid',  !in_array($goneKey, get_option('nmm_autopay_scan_retry', array()), true), 'gone=' . $goneKey);
+sok('no coverage stamp while fetches fail',     (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
 
 // Once fetches succeed again, the retry set drains.
 remove_all_filters('nmm_xmr_account_transactions');
@@ -276,6 +288,9 @@ add_filter('nmm_xmr_account_transactions', function () { return array('result' =
 as_tick(3 * 3600);
 as_tick(3 * 3600);
 sok('retry set drains after fetches succeed',    count(get_option('nmm_autopay_scan_retry', array())) === 0, 'retry=' . count(get_option('nmm_autopay_scan_retry', array())));
+// A few more clean ticks guarantee a failure-free wrap, which may stamp again.
+for ($t = 0; $t < 4; $t++) { as_tick(3 * 3600); }
+sok('coverage resumes once fetches succeed',     (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
 
 // --- priority lane: a fresh order is checked on the very next tick ---------
 // With budget 3 and a 12-address backlog, park the cursor mid-list, then create

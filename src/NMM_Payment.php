@@ -52,17 +52,17 @@ class NMM_Payment {
 		// traffic-driven and quiet stores tick far less often. Planning around an
 		// assumed 60s would silently stretch the sweep past the matching lifetime
 		// on such stores and lose payments, so derive the tick interval from the
-		// OBSERVED cadence: the gap since the previous run, clamped to [60s,
-		// 600s]. One long gap (host asleep, maintenance) then raises the next
-		// tick's budget to compensate, keeping the sweep-within-lifetime
-		// invariant real. The timestamp is written before the scan work so a
-		// mid-tick crash degrades to the nominal 60s assumption on the next run
-		// instead of compounding its budget.
+		// OBSERVED cadence: the gap since the previous run. scan_plan clamps the
+		// interval for its budget math (bounding the explorer burst per tick)
+		// but widens the matching window by the REAL cadence, so even an hourly
+		// cron cannot let a payment age out between two visits. The timestamp is
+		// written before the scan work so a mid-tick crash degrades to the
+		// nominal 60s assumption on the next run instead of compounding its
+		// budget.
 		$now = time();
 		$lastRun = (int) get_option('nmm_autopay_scan_last_run', 0);
 		update_option('nmm_autopay_scan_last_run', $now, false);
-		$observedInterval = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
-		$cronIntervalSec = min(600, max(60, $observedInterval));
+		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
 
 		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec, $cronIntervalSec);
 		$take = $plan['take'];
@@ -206,8 +206,13 @@ class NMM_Payment {
 		// treats a row as expired once its whole window lies behind this stamp,
 		// so a row that pre-dates the cursor (plugin upgrade with an aged
 		// backlog) or that aged out during a long cron outage is always checked
-		// at least once after expiring before it can be cancelled.
-		if ($wrapped || $take >= $total) {
+		// at least once after expiring before it can be cancelled. Do NOT stamp
+		// while any fetch failure is unresolved ($newFailed carries this tick's
+		// failures AND re-failed retries from earlier ticks): a failed address
+		// was not verified, and stamping would let cancellation treat it as
+		// checked. The retry path re-checks it next tick, and the stamp waits
+		// for the next wrap with everything fetched clean.
+		if (($wrapped || $take >= $total) && empty($newFailed)) {
 			update_option('nmm_autopay_scan_covered_at', time(), false);
 		}
 	}
@@ -232,9 +237,14 @@ class NMM_Payment {
 	 *
 	 * $shortestCancelSec is the shortest order-cancellation window among coins with
 	 * unpaid orders; pass 0 when unknown to fall back to the lifetime bound alone.
-	 * $cronIntervalSec is the tick cadence to plan around; the caller passes the
-	 * observed (clamped) gap between cron runs, so the sweep-time guarantees hold
-	 * in wall-clock seconds even when the scheduler runs less often than nominal.
+	 * $cronIntervalSec is the OBSERVED gap between cron runs, unclamped. The
+	 * budget math clamps it to [60s, 600s] - the floor keeps back-to-back manual
+	 * runs from shrinking the budget, the ceiling caps the explorer burst any one
+	 * tick can be asked to absorb - but the wall-clock sweep period (and so the
+	 * widened matching window) uses the REAL cadence: with an hourly cron the
+	 * burst cap means the sweep genuinely takes longer, and the matching window
+	 * must reflect the real revisit gap or a payment seen still-unconfirmed on
+	 * one visit would age out before its address next comes round.
 	 */
 	public static function scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec = 0, $cronIntervalSec = 60) {
 		$total = max(0, (int) $total);
@@ -242,20 +252,22 @@ class NMM_Payment {
 		$transactionLifetime = max(0, (int) $transactionLifetime);
 		$shortestCancelSec = max(0, (int) $shortestCancelSec);
 		$cronIntervalSec = max(1, (int) $cronIntervalSec);
+		$plannedIntervalSec = min(600, max(60, $cronIntervalSec));
 
 		// Target a full sweep within half the base lifetime, tightened to half the
 		// shortest cancellation window when that is smaller.
-		$targetSweepSec = max($cronIntervalSec, (int) ($transactionLifetime / 2));
+		$targetSweepSec = max($plannedIntervalSec, (int) ($transactionLifetime / 2));
 		if ($shortestCancelSec > 0) {
-			$targetSweepSec = min($targetSweepSec, max($cronIntervalSec, (int) ($shortestCancelSec / 2)));
+			$targetSweepSec = min($targetSweepSec, max($plannedIntervalSec, (int) ($shortestCancelSec / 2)));
 		}
 
-		$sweepTicks = max(1, (int) floor($targetSweepSec / $cronIntervalSec));
+		$sweepTicks = max(1, (int) floor($targetSweepSec / $plannedIntervalSec));
 		$budget = max($baseBudget, (int) ceil($total / $sweepTicks));
 		$take = min($budget, $total);
 
-		// Actual ticks (and wall-clock seconds) to sweep the whole backlog at this
-		// budget - 1 tick for a small store, more for a large one.
+		// Actual ticks to sweep the whole backlog at this budget - 1 tick for a
+		// small store, more for a large one - converted to wall-clock seconds at
+		// the REAL observed cadence, not the clamped planning interval.
 		$sweepPeriodSec = ($budget > 0 ? (int) ceil($total / $budget) : 1) * $cronIntervalSec;
 
 		return array(
