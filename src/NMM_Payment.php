@@ -81,24 +81,30 @@ class NMM_Payment {
 		$take = $plan['take'];
 		$effectiveLifetime = $plan['effective_lifetime'];
 
-		// The matching window must also reach back past the OLDEST unpaid
-		// order (plus the pre-order skew grace), or the coverage stamp would be
-		// hollow for aged rows: a days-old order met after an upgrade or cron
-		// outage may have been paid when it was fresh, and a sweep that only
-		// fetched the last few hours would "verify" its address without ever
-		// being able to see that payment - expiry would then cancel a paid
-		// order. Widening the window also lets such a payment actually MATCH
-		// (the per-order TX_ORDER_SKEW_GRACE_SEC lower bound still blocks
-		// pre-order transactions on reused addresses, and consumed-tx tracking
-		// still blocks replays). Steady-state cost is small - the oldest
-		// unpaid row is at most about its cancellation window old - and after
-		// an outage the window stays wide exactly until the aged backlog has
-		// been verified once and settled.
-		$oldestOrderedAt = $paymentRepo->oldest_unpaid_ordered_at();
-		if ($oldestOrderedAt > 0) {
-			$atRiskLifetime = ($now - $oldestOrderedAt) + self::TX_ORDER_SKEW_GRACE_SEC;
-			if ($atRiskLifetime > $effectiveLifetime) {
-				$effectiveLifetime = $atRiskLifetime;
+		// Each coin's matching window must also reach back past ITS oldest
+		// unpaid order (plus the pre-order skew grace), or the coverage stamp
+		// would be hollow for aged rows: a days-old order met after an upgrade
+		// or cron outage may have been paid when it was fresh, and a sweep
+		// that only fetched the last few hours would "verify" its address
+		// without ever being able to see that payment - expiry would then
+		// cancel a paid order. Widening the window also lets such a payment
+		// actually MATCH (the per-order TX_ORDER_SKEW_GRACE_SEC lower bound
+		// still blocks pre-order transactions on reused addresses, and
+		// consumed-tx tracking still blocks replays). The widening is scoped
+		// PER CURRENCY: one coin's stale row (say, months-old BTC behind a
+		// dead explorer) must not inflate every other coin's history requests
+		// - an oversized Monero get_transfers or Solana signature sweep every
+		// tick would defeat the bounded-scan goal. Steady-state cost is small
+		// (a coin's oldest unpaid row is at most about its cancellation window
+		// old); after an outage that coin's window stays wide exactly until
+		// its aged backlog has been verified once and settled.
+		$lifetimeByCrypto = array();
+		foreach ($paymentRepo->oldest_unpaid_ordered_at_by_crypto() as $agedCryptoId => $agedOrderedAt) {
+			if ($agedOrderedAt > 0) {
+				$atRiskLifetime = ($now - $agedOrderedAt) + self::TX_ORDER_SKEW_GRACE_SEC;
+				if ($atRiskLifetime > $effectiveLifetime) {
+					$lifetimeByCrypto[$agedCryptoId] = $atRiskLifetime;
+				}
 			}
 		}
 
@@ -211,11 +217,14 @@ class NMM_Payment {
 			}
 			$crypto = $cryptos[$cryptoId];
 
+			// This coin's window, widened past its own oldest unpaid order.
+			$cryptoLifetime = isset($lifetimeByCrypto[$cryptoId]) ? $lifetimeByCrypto[$cryptoId] : $effectiveLifetime;
+
 			do_action('nmm_autopay_address_checked', $cryptoId, $address);
 
 			if ($cryptoId === 'XMR') {
 				if (!$xmrFetched) {
-					$xmrBatch = NMM_Monero::get_account_transactions($effectiveLifetime);
+					$xmrBatch = NMM_Monero::get_account_transactions($cryptoLifetime);
 					$xmrOk = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success');
 					$xmrByAddress = ($xmrOk && isset($xmrBatch['by_address'])) ? $xmrBatch['by_address'] : array();
 					$xmrFetched = true;
@@ -225,10 +234,10 @@ class NMM_Payment {
 					continue;
 				}
 				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
-				self::process_address_transactions($crypto, $address, $xmrTxs, $effectiveLifetime);
+				self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime);
 			}
 			else {
-				if (!self::check_address_transactions_for_matching_payments($crypto, $address, $effectiveLifetime)) {
+				if (!self::check_address_transactions_for_matching_payments($crypto, $address, $cryptoLifetime)) {
 					$newFailed[] = self::scan_key($record);
 				}
 				elseif ($cryptoId === 'SOL' && !NMM_Blockchain::sol_address_fully_swept($address)) {

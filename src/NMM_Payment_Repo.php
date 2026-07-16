@@ -63,15 +63,32 @@ class NMM_Payment_Repo {
 		return $wpdb->get_col("SELECT DISTINCT `cryptocurrency` FROM `$this->tableName` WHERE `status` = 'unpaid'");
 	}
 
-	// Creation time of the oldest unpaid payment row (0 when none). A single
-	// scalar off the unpaid_expiry(status, ordered_at) index; the verifier
-	// widens its matching window back to this so the coverage stamp can only
-	// certify an aged order after a sweep that could actually have SEEN any
-	// payment that order might have received.
-	public function oldest_unpaid_ordered_at() {
+	// Creation time of the oldest unpaid payment row PER CURRENCY, as a
+	// ['CRYPTO' => timestamp] map (at most one row per coin). The verifier
+	// widens each coin's matching window back to its own oldest order so the
+	// coverage stamp can only certify an aged order after a sweep that could
+	// actually have SEEN any payment that order might have received - scoped
+	// per currency so one coin's stale row cannot inflate every other coin's
+	// explorer/RPC history requests.
+	public function oldest_unpaid_ordered_at_by_crypto() {
 		global $wpdb;
 
-		return (int) $wpdb->get_var("SELECT MIN(`ordered_at`) FROM `$this->tableName` WHERE `status` = 'unpaid'");
+		$rows = $wpdb->get_results(
+			"SELECT `cryptocurrency`, MIN(`ordered_at`) AS `oldest_ordered_at`
+			 FROM `$this->tableName`
+			 WHERE `status` = 'unpaid'
+			 GROUP BY `cryptocurrency`",
+			ARRAY_A
+		);
+
+		$oldest = array();
+		if (is_array($rows)) {
+			foreach ($rows as $row) {
+				$oldest[$row['cryptocurrency']] = (int) $row['oldest_ordered_at'];
+			}
+		}
+
+		return $oldest;
 	}
 
 	// Number of distinct unpaid (cryptocurrency, address) pairs. A single scalar,
