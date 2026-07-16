@@ -100,6 +100,7 @@ $perTickCounts = array();
 $perTickFetches = array();
 $covered = array();
 $firstAddrPerTick = array();
+delete_option('nmm_autopay_scan_covered_at');
 
 for ($t = 0; $t < $ticksNeeded; $t++) {
 	$GLOBALS['as_checked'] = array();
@@ -118,6 +119,7 @@ sok('each tick does exactly ONE XMR fetch',       array_unique($perTickFetches) 
 sok('cursor advances (ticks start elsewhere)',    count(array_unique($firstAddrPerTick)) === $ticksNeeded, 'firsts=' . implode(',', $firstAddrPerTick));
 sok('all N addresses covered within ceil(N/b)',   count($covered) === $N, 'covered=' . count($covered) . '/' . $N);
 sok('sweep cursor persisted',                     get_option('nmm_autopay_scan_cursor', '') !== '');
+sok('coverage stamped once the sweep wraps',      (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
 
 // Budget larger than the backlog: single tick covers everything, still one fetch.
 $wpdb->query("DELETE FROM `$pt`");
@@ -130,6 +132,7 @@ $GLOBALS['as_fetches'] = 0;
 as_tick($lifetime);
 sok('small backlog: checks all in one tick',      count($GLOBALS['as_checked']) === 5, 'checked=' . count($GLOBALS['as_checked']));
 sok('small backlog: still one XMR fetch',         $GLOBALS['as_fetches'] === 1, 'fetches=' . $GLOBALS['as_fetches']);
+sok('single-page tick stamps coverage',           (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
 
 // Empty backlog: no fetch, no work, no crash.
 $wpdb->query("DELETE FROM `$pt`");
@@ -151,8 +154,10 @@ for ($i = 0; $i < 9; $i++) {
 	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrc_%d', $i), time() - 2 * HOUR_IN_SECONDS, 730000 + $i));
 }
 
+delete_option('nmm_autopay_scan_covered_at');
 $GLOBALS['as_checked'] = array();
 as_tick(3 * 3600); // tick 1 -> xmrc_0,1,2
+sok('no coverage stamp mid-sweep',              (int) get_option('nmm_autopay_scan_covered_at', 0) === 0);
 $tick1 = $GLOBALS['as_checked'];
 $lastScanned = end($tick1);
 $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $lastScanned)); // as if it got paid
@@ -325,5 +330,6 @@ $wpdb->query("DELETE FROM `$pt`");
 delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_last_run');
+delete_option('nmm_autopay_scan_covered_at');
 
 echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";

@@ -186,6 +186,7 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 = 2.9.6 =
 * Performance: the Autopay verifier now checks a bounded number of unpaid addresses per cron tick and advances a persisted fair cursor so every address is still eventually checked - a large backlog of abandoned orders can no longer hold the background job's lock and delay payment, expiry, HD and Solana work. Monero verification fetches an account's incoming transfers once per tick and groups them by subaddress locally, instead of two wallet-RPC calls per address
 * Autopay: the per-tick scan budget is derived from the observed cron cadence instead of assuming one tick per minute, so a store whose cron runs infrequently still re-checks every address within the payment-matching window and cannot silently miss a payment
+* Autopay: an order is never auto-cancelled before the verifier has checked its address at least once after its cancellation window closed - protecting aged unpaid backlogs at upgrade time and after long cron outages from being cancelled unverified
 * Autopay: a bounded priority lane checks recently placed orders on every tick, so a new customer's payment is confirmed promptly even while a large backlog is being swept
 * Hardening: the thank-you page no longer errors if the order was deleted while the page was loading
 

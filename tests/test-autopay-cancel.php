@@ -17,6 +17,12 @@ $wpdb = $GLOBALS['wpdb'];
 $pt = $wpdb->prefix . NMM_PAYMENT_TABLE;
 $wpdb->query("DELETE FROM `$pt`");
 
+// The verifier's full-sweep coverage stamp gates cancellation: a row only
+// counts as expired once a sweep has completed after its window closed (see
+// the dedicated section at the end). Seed a fresh stamp so the sections below
+// exercise pure expiry logic.
+update_option('nmm_autopay_scan_covered_at', time(), false);
+
 // NOTE: wp eval-file runs this file in function scope, so a plain top-level
 // `$pass` is NOT the same variable a `global $pass` inside aok() would write.
 // Track pass/fail through $GLOBALS explicitly so the final banner is accurate
@@ -269,5 +275,37 @@ $postTx = new NMM_Transaction($txUnits, 999, $ordTime + 60, 'TXPOSTORDER'); // j
 NMM_Payment::process_address_transactions($btc, $reuseAddr, array($postTx), $wideLife);
 aok('post-order tx DOES pay the order',         rec_status($wpdb,$pt,$oOrd) === 'paid', 'status=' . rec_status($wpdb,$pt,$oOrd));
 
+// Coverage gate: a row that pre-dates the scan cursor (plugin upgrade with an
+// aged unpaid backlog, or a long cron outage) must NOT be cancelled before the
+// bounded sweep has checked its address at least once after its window closed
+// - it may have been paid on-chain all along. Once one full sweep completes,
+// normal expiry resumes.
 $wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+$oAged = mkorder('pending');
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
+	 VALUES ('xmr_aged','XMR','unpaid',%d,%d,'0.00100000',0)",
+	time() - 3 * 24 * 3600, $oAged));
+NMM_Payment::cancel_expired_payments();
+aok('aged pre-scan row NOT cancelled unchecked', rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
+aok('  its order still pending',                ord_status($oAged) === 'pending');
+
+// One bounded sweep tick covers the one-address backlog and stamps coverage;
+// the Monero seam keeps the tick offline (no wallet RPC in CI).
+add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+remove_all_filters('nmm_xmr_account_transactions');
+aok('coverage stamped after a full sweep',       (int) get_option('nmm_autopay_scan_covered_at', 0) > 0);
+NMM_Payment::cancel_expired_payments();
+aok('aged row cancelled once checked',           rec_status($wpdb,$pt,$oAged) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oAged));
+aok('  its order cancelled',                    ord_status($oAged) === 'cancelled');
+
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_last_run');
 echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

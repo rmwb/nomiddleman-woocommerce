@@ -81,9 +81,11 @@ class NMM_Payment {
 		$cursorAddress = isset($cursorParts[1]) ? $cursorParts[1] : '';
 
 		$batch = $paymentRepo->get_unpaid_addresses_after($cursorCrypto, $cursorAddress, $take);
+		$wrapped = false;
 		if (count($batch) < $take) {
 			$head = $paymentRepo->get_unpaid_addresses_from_start($take - count($batch));
 			$batch = array_merge($batch, $head);
+			$wrapped = true;
 		}
 
 		// Re-check addresses whose fetch FAILED last tick BEFORE the fair sweep, so
@@ -197,6 +199,17 @@ class NMM_Payment {
 		}
 		update_option('nmm_autopay_scan_retry', $newFailed, false);
 		update_option('nmm_autopay_scan_cursor', $lastKey, false);
+
+		// A full sweep has just completed: either this tick's page wrapped past
+		// the end of the address list, or the budget covered the whole backlog
+		// in one page. Stamp the coverage time - cancel_expired_payments() only
+		// treats a row as expired once its whole window lies behind this stamp,
+		// so a row that pre-dates the cursor (plugin upgrade with an aged
+		// backlog) or that aged out during a long cron outage is always checked
+		// at least once after expiring before it can be cancelled.
+		if ($wrapped || $take >= $total) {
+			update_option('nmm_autopay_scan_covered_at', time(), false);
+		}
 	}
 
 	/**
@@ -611,8 +624,18 @@ class NMM_Payment {
 
 		// Single clock for the whole pass, shared by the coarse SQL cutoff below
 		// and the exact per-record check, so the two can never disagree by a
-		// second at a boundary.
-		$now = time();
+		// second at a boundary. The clock is additionally capped at the
+		// verifier's last full-sweep coverage stamp: a row only counts as
+		// expired once the bounded sweep has checked its address at least once
+		// AFTER its window closed. Otherwise rows that pre-date the scan cursor
+		// (plugin upgrade with an aged unpaid backlog) or that aged out during
+		// a long cron outage would be cancelled without ever being verified,
+		// and an on-chain-paid order could be cancelled. Cancellation can
+		// therefore lag by up to one sweep period (<= half the shortest
+		// window) - late, never wrong. min() with real time keeps a fresh
+		// stamp from ever loosening the real-time expiry check.
+		$coveredAt = (int) get_option('nmm_autopay_scan_covered_at', 0);
+		$cancelClock = min(time(), $coveredAt);
 
 		// Only rows old enough to be expirable for SOME configured coin can
 		// possibly be cancelled. The shortest cancellation window among the coins
@@ -633,7 +656,7 @@ class NMM_Payment {
 			}
 		}
 
-		$coarseCutoff = $now - $shortestWindowSec;
+		$coarseCutoff = $cancelClock - $shortestWindowSec;
 		$unpaidPayments = $paymentRepo->get_unpaid($coarseCutoff);
 
 		foreach ($unpaidPayments as $paymentRecord) {
@@ -642,7 +665,7 @@ class NMM_Payment {
 
 			$paymentCancellationTimeHr = $nmmSettings->get_autopay_cancellation_time($cryptoId);
 			$paymentCancellationTimeSec = $paymentCancellationTimeHr * 60 * 60;
-			$timeSinceOrder = $now - $orderTime;
+			$timeSinceOrder = $cancelClock - $orderTime;
 			NMM_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
 
 			if ($timeSinceOrder > $paymentCancellationTimeSec) {
