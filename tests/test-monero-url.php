@@ -73,6 +73,13 @@ mok('ipv6 loopback: ip preserved',        is_array($v6Loop) && $v6Loop['ip'] ===
 mok('resolve entry ipv4 plain',   NMM_Monero::curl_resolve_entry('wallet.example.com', 443, '93.184.216.34') === 'wallet.example.com:443:93.184.216.34');
 mok('resolve entry ipv6 bracketed', NMM_Monero::curl_resolve_entry('wallet.example.com', 18082, '2001:db8::1') === 'wallet.example.com:18082:[2001:db8::1]');
 
+// lookback_min_height bounds the batch get_transfers to the payment window so an
+// established wallet's full history is never fetched: ~120s/block, 2x window + 30.
+mok('min_height 3h window (90 blk *2 +30)', NMM_Monero::lookback_min_height(1000000, 3 * 3600) === 1000000 - 210);
+mok('min_height clamps at 0 near genesis',  NMM_Monero::lookback_min_height(50, 3 * 3600) === 0);
+mok('min_height zero lifetime = height-30', NMM_Monero::lookback_min_height(1000, 0) === 970);
+mok('min_height is bounded (not full hist)', NMM_Monero::lookback_min_height(5000000, 3 * 3600) === 4999790);
+
 // --- plan_request: transport must never resolve away from the vetted address ---
 // plan($target, $hasCurl, $canPin, $hasCreds)
 function plan($target, $curl, $canPin, $creds) { return NMM_Monero::plan_request($target, $curl, $canPin, $creds); }
@@ -123,5 +130,15 @@ mok('curl but no ip -> reject',          plan($unresolvable,   true,  true,  fal
 $GLOBALS['nmm_is_ms'] = true;
 define('NMM_XMR_ALLOW_PRIVATE_RPC', true);
 mok('constant opt-in allows private on multisite', allowed('http://127.0.0.1:18082/json_rpc'));
+
+// --- batched get_transfers request shape ---------------------------------
+// max_height must be EXPLICIT: upstream wallet-rpc defaults an absent field to
+// the max block number, but older builds/forks default it to 0 under
+// filter_by_height and silently return zero confirmed transfers.
+$p = NMM_Monero::account_transfers_params(1000000, 3 * 3600);
+mok('batch params: filters by height',      $p['filter_by_height'] === true);
+mok('batch params: min matches lookback',   $p['min_height'] === NMM_Monero::lookback_min_height(1000000, 3 * 3600));
+mok('batch params: max_height explicit',    isset($p['max_height']) && $p['max_height'] > 1000000);
+mok('batch params: includes pool',          $p['pool'] === true && $p['in'] === true);
 
 exit($failed ? 1 : 0);

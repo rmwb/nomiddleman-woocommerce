@@ -347,4 +347,105 @@ class NMM_Monero {
 			'transactions' => $transactions,
 		);
 	}
+
+	// Lowest block height whose confirmed transfers we still need to fetch to
+	// cover a payment window of $lifetimeSeconds, given the current wallet height.
+	// Monero targets ~120s per block; we look back twice the window plus a fixed
+	// margin so block-time variance or a shallow reorg can never drop an in-window
+	// transfer (the matcher's own timestamp check is the authoritative filter).
+	// Clamped at 0. Pure, so it can be unit-tested.
+	public static function lookback_min_height($currentHeight, $lifetimeSeconds) {
+		$lifetimeSeconds = max(0, (int) $lifetimeSeconds);
+		$lookbackBlocks = (int) ceil($lifetimeSeconds / 120) * 2 + 30;
+
+		return max(0, (int) $currentHeight - $lookbackBlocks);
+	}
+
+	// Full parameter set for the batched get_transfers call. Pure, so the
+	// request shape is unit-testable. max_height is set EXPLICITLY: upstream
+	// monero-wallet-rpc defaults an absent max_height to the maximum block
+	// number (KV_SERIALIZE_OPT), but older builds and forks default it to 0
+	// under filter_by_height, which silently excludes every confirmed transfer
+	// and would fail all XMR verification with nothing in the logs. The +720
+	// margin (~1 day of blocks) covers blocks mined between the get_height
+	// call and this query.
+	public static function account_transfers_params($currentHeight, $lifetimeSeconds) {
+		return array(
+			'in' => true,
+			'pool' => true,
+			'account_index' => 0,
+			'filter_by_height' => true,
+			'min_height' => self::lookback_min_height((int) $currentHeight, $lifetimeSeconds),
+			'max_height' => (int) $currentHeight + 720,
+		);
+	}
+
+	/**
+	 * Incoming transfers for account 0 within roughly the payment window, in ONE
+	 * get_transfers call, grouped by the receiving subaddress. The cron uses this
+	 * to check many unpaid Monero orders per tick instead of two RPC calls
+	 * (get_address_index + get_transfers) per address.
+	 *
+	 * The query is bounded to recent blocks (filter_by_height + min_height) so an
+	 * established wallet's full incoming history is never fetched every tick -
+	 * pool (unconfirmed) transfers are unaffected by the height filter and always
+	 * included. Returns { result: 'success', by_address: { address =>
+	 * NMM_Transaction[] } } or { result: 'error' } so callers can skip this tick
+	 * without crediting anyone.
+	 */
+	public static function get_account_transactions($lifetimeSeconds) {
+		do_action('nmm_xmr_account_fetch');
+
+		// Seam for integrations (a self-hosted indexer) and tests: a filter may
+		// supply the batch result array directly instead of the wallet RPC. Return
+		// anything non-array (the default null) to use the real RPC below.
+		$injected = apply_filters('nmm_xmr_account_transactions', null, $lifetimeSeconds);
+		if (is_array($injected)) {
+			return $injected;
+		}
+
+		// Read the wallet height first so we can bound the transfer query. If this
+		// fails the wallet RPC is unreachable and the transfer call would fail too,
+		// so skip the tick rather than fall back to an unbounded fetch.
+		$heightResult = self::rpc('get_height');
+		if (is_wp_error($heightResult) || !isset($heightResult->height)) {
+			NMM_Util::log(__FILE__, __LINE__, 'XMR batch: could not read wallet height; skipping this tick.');
+
+			return array('result' => 'error');
+		}
+
+		$result = self::rpc('get_transfers', self::account_transfers_params((int) $heightResult->height, $lifetimeSeconds));
+
+		if (is_wp_error($result)) {
+			NMM_Util::log(__FILE__, __LINE__, 'XMR batch get_transfers failed: ' . $result->get_error_message());
+
+			return array('result' => 'error');
+		}
+
+		$byAddress = array();
+
+		foreach (array('in', 'pool') as $bucket) {
+			if (!isset($result->{$bucket}) || !is_array($result->{$bucket})) {
+				continue;
+			}
+
+			foreach ($result->{$bucket} as $transfer) {
+				if (!isset($transfer->address, $transfer->amount, $transfer->txid)) {
+					continue;
+				}
+
+				$byAddress[$transfer->address][] = new NMM_Transaction(
+					$transfer->amount,
+					isset($transfer->confirmations) ? (int) $transfer->confirmations : 0,
+					isset($transfer->timestamp) ? (int) $transfer->timestamp : time(),
+					$transfer->txid
+				);
+			}
+		}
+
+		return array(
+			'result' => 'success',
+			'by_address' => $byAddress,
+		);
+	}
 }

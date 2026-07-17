@@ -496,6 +496,19 @@ class NMM_Blockchain {
 		});
 		$rawTxList = array_slice($rawTxList, 0, 25);
 
+		// Raw page the matcher works from: Koios returns the full address
+		// history (both directions), which we cap client-side to the newest
+		// 25 - so the truncation check must reason about this slice, not the
+		// longer list above it. block_time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTxList as $row) {
+			$ts = isset($row->block_time) ? (int) $row->block_time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTxList), $rawOldestTs);
+
 		$txHashes = array();
 		$txTimes = array();
 		foreach ($rawTxList as $row) {
@@ -592,6 +605,18 @@ class NMM_Blockchain {
 			return $result;
 		}
 
+		// Report the RAW page (haskoin serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// output-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		// confirmations are not included, so fetch the current best block height
 		$tipHeight = 0;
 		$tipResponse = self::api_get('https://api.blockchain.info/haskoin-store/bch/block/best?notx=true');
@@ -675,22 +700,42 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+		// Raw page the matcher works from (getaddress returns BOTH directions;
+		// we keep the newest 25 client-side). last_txs entries carry no
+		// timestamp - those only arrive when each tx is fetched below - so the
+		// oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactionIds), null);
+
 		$transactions = array();
-		
-		foreach ($rawTransactionIds as $rawTransactionId) {			
+		$detailFailed = false;
+
+		foreach ($rawTransactionIds as $rawTransactionId) {
 			if ($rawTransactionId->type === 'vout' || $rawTransactionId->type === 'vin') {
 
 				$txId = $rawTransactionId->addresses;
 
 				$request2 = 'https://explorer.blackcoin.nl/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
 				$rawTransaction = json_decode($response2['body']);
+
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
+					$detailFailed = true;
+					continue;
+				}
 
 				$vouts = $rawTransaction->vout;
 
@@ -704,6 +749,14 @@ class NMM_Blockchain {
 						$voutAddresses = array($vout->scriptPubKey->address);
 					}
 
+					if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+						// An output we cannot conclusively inspect might BE
+						// the payment, so this visit must never certify
+						// coverage (see vout_inspectable for the rule).
+						$detailFailed = true;
+						continue;
+					}
+
 					if (in_array($address, $voutAddresses, true)) {
 						$transactions[] = new NMM_Transaction($vout->value * 100000000,
 															  isset($rawTransaction->confirmations) ? $rawTransaction->confirmations : 0,
@@ -713,8 +766,23 @@ class NMM_Blockchain {
 				}
 
 
-				
-			}			
+
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -756,6 +824,11 @@ class NMM_Blockchain {
 
 		// newest entries are last in the history; keep the 20 most recent
 		$history = array_slice($history, -20);
+
+		// Raw page the matcher works from (history covers BOTH directions; we
+		// keep the newest 20 client-side). History entries carry only a height,
+		// no timestamp, so the oldest raw timestamp is unknown.
+		self::note_raw_page(count($history), null);
 
 		$tipHeight = 0;
 		$tipResponse = self::api_get('https://api.whatsonchain.com/v1/bsv/main/chain/info');
@@ -854,6 +927,17 @@ class NMM_Blockchain {
 
                 return $result;
             }
+
+            // Raw page (txrefs cover BOTH directions) for the truncation check.
+            $rawOldestTs = null;
+            foreach ($rawTransactions as $rawTransaction) {
+                $ts = isset($rawTransaction->confirmed) ? strtotime($rawTransaction->confirmed) : null;
+                if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+                    $rawOldestTs = $ts;
+                }
+            }
+            self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
             $transactions = array();
             foreach ($rawTransactions as $rawTransaction) {
                 if ($rawTransaction->tx_input_n == -1) {
@@ -882,6 +966,20 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page (the explorer serves ALL transactions touching the
+		// address, both directions) for the truncation check - the
+		// vout-filtered subset below can look short while the served page
+		// was full. Unconfirmed entries have no block_time; they are the
+		// newest, so they never determine the oldest.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = (!empty($rawTransaction->status->confirmed) && isset($rawTransaction->status->block_time)) ? (int) $rawTransaction->status->block_time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
 
 		// mempool.space does not include confirmation counts, so fetch the tip height
 		$tipHeight = 0;
@@ -946,30 +1044,72 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+		// Raw page (the Insight /addr txid list covers BOTH directions and may
+		// be a bounded page; entries carry no timestamps) for the truncation
+		// check.
+		self::note_raw_page(count($transactionIds), null);
+
 		$transactions = array();
+		$detailFailed = false;
 
 		foreach ($transactionIds as $transactionId) {
 
 				$request2 = 'https://insight.bitcore.cc/api/tx/' . $transactionId;
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
 				$rawTransaction = json_decode($response2['body']);
 
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
+					$detailFailed = true;
+					continue;
+				}
+
 				$vouts = $rawTransaction->vout;
 
 			foreach ($rawTransaction->vout as $vout) {
-				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
-														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+				$voutAddresses = (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) ? $vout->scriptPubKey->addresses : array();
+				if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+					// An output we cannot conclusively inspect might BE the
+					// payment, so this visit must never certify coverage (see
+					// vout_inspectable for the rule).
+					$detailFailed = true;
+					continue;
 				}
-			}		
+				if (isset($voutAddresses[0]) && $voutAddresses[0] === $address) {
+					$transactions[] = new NMM_Transaction($vout->value * 100000000,
+														  $rawTransaction->confirmations,
+														  $rawTransaction->time,
+														  $rawTransaction->txid);
+				}
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -979,7 +1119,7 @@ class NMM_Blockchain {
 
 		return $result;
 	}
-	
+
 	public static function get_dash_address_transactions($address) {		
 		
 		$request = 'https://insight.dash.org/insight-api/txs/?address=' . $address;
@@ -1007,6 +1147,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Insight serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// vout-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
@@ -1057,6 +1210,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Insight serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// vout-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
@@ -1107,6 +1273,17 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page (txrefs cover BOTH directions) for the truncation check.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->confirmed) ? strtotime($rawTransaction->confirmed) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if ($rawTransaction->tx_input_n == -1) {
@@ -1152,6 +1329,20 @@ class NMM_Blockchain {
 
             return $result;
         }
+
+        // Raw page (the Esplora endpoint serves ALL transactions touching the
+        // address, both directions) for the truncation check - the vout-filtered
+        // subset below can look short while the served page was full. Unconfirmed
+        // entries have no block_time; they are the newest, so they never
+        // determine the oldest.
+        $rawOldestTs = null;
+        foreach ($rawTransactions as $rawTransaction) {
+            $ts = (!empty($rawTransaction->status->confirmed) && isset($rawTransaction->status->block_time)) ? (int) $rawTransaction->status->block_time : null;
+            if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+                $rawOldestTs = $ts;
+            }
+        }
+        self::note_raw_page(count($rawTransactions), $rawOldestTs);
 
         // Esplora omits confirmation counts, so fetch the tip height
         $tipHeight = 0;
@@ -1199,6 +1390,17 @@ class NMM_Blockchain {
 			$body = json_decode($response['body']);
 
 			if (isset($body->actions) && is_array($body->actions)) {
+				// Report the RAW page (get_actions covers BOTH directions) for
+				// the truncation check, before the to-address filtering below.
+				$rawOldestTs = null;
+				foreach ($body->actions as $action) {
+					$ts = isset($action->timestamp) ? strtotime($action->timestamp) : null;
+					if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+						$rawOldestTs = $ts;
+					}
+				}
+				self::note_raw_page(count($body->actions), $rawOldestTs);
+
 				$transactions = array();
 
 				foreach ($body->actions as $action) {
@@ -1261,6 +1463,17 @@ class NMM_Blockchain {
 				'message' => 'No transactions found',
 			);
 		}
+
+		// Report the RAW page (get_actions covers BOTH directions) for the
+		// truncation check, before the to-address filtering below.
+		$rawOldestTs = null;
+		foreach ($body2->actions as $action) {
+			$ts = isset($action->block_time) ? strtotime($action->block_time) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($body2->actions), $rawOldestTs);
 
 		$transactions = array();
 		$seenTrxIds = array();
@@ -1331,6 +1544,18 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (txlist covers BOTH directions) for the
+		// truncation check, before the incoming-only filtering below.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 
 
@@ -1383,6 +1608,17 @@ class NMM_Blockchain {
 			return $result;
 		}
 
+		// Report the RAW page (txlist covers BOTH directions) for the
+		// truncation check, before the incoming-only filtering below.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			
@@ -1431,6 +1667,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Insight serves ALL transactions touching the
+		// address, both directions) for the truncation check, before the
+		// vout-address filtering below. ->time is unix seconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->time) ? (int) $rawTransaction->time : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
@@ -1481,6 +1730,13 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page for the truncation check. This endpoint is recipient-
+		// filtered server-side (recipientId) and the entries carry only a
+		// Lisk-epoch timestamp the parser does not decode (it emits time()),
+		// so the oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactions), null);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {				
 			$transactions[] = new NMM_Transaction($rawTransaction->amount, 
@@ -1529,6 +1785,17 @@ class NMM_Blockchain {
 
             return $result;
         }
+
+        // Raw page (txrefs cover BOTH directions) for the truncation check.
+        $rawOldestTs = null;
+        foreach ($rawTransactions as $rawTransaction) {
+            $ts = isset($rawTransaction->confirmed) ? strtotime($rawTransaction->confirmed) : null;
+            if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+                $rawOldestTs = $ts;
+            }
+        }
+        self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
         $transactions = array();
         foreach ($rawTransactions as $rawTransaction) {
             if ($rawTransaction->tx_input_n == -1) {
@@ -1589,22 +1856,43 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page the matcher works from (getaddress returns BOTH directions;
+		// we keep the newest 25 client-side). last_txs entries carry no
+		// timestamp - those only arrive when each tx is fetched below - so the
+		// oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactionIds), null);
+
 		$transactions = array();
-		
-		foreach ($rawTransactionIds as $rawTransactionId) {			
+		$detailFailed = false;
+
+		foreach ($rawTransactionIds as $rawTransactionId) {
 			if ($rawTransactionId->type === 'vout' || $rawTransactionId->type === 'vin') {
 
 				$txId = $rawTransactionId->addresses;
 
 				$request2 = 'https://explorer.deeponion.org/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
 				$rawTransaction = json_decode($response2['body']);
+
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
+					$detailFailed = true;
+					continue;
+				}
 
 				$vouts = $rawTransaction->vout;
 
@@ -1618,6 +1906,14 @@ class NMM_Blockchain {
 						$voutAddresses = array($vout->scriptPubKey->address);
 					}
 
+					if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+						// An output we cannot conclusively inspect might BE
+						// the payment, so this visit must never certify
+						// coverage (see vout_inspectable for the rule).
+						$detailFailed = true;
+						continue;
+					}
+
 					if (in_array($address, $voutAddresses, true)) {
 						$transactions[] = new NMM_Transaction($vout->value * 100000000,
 															  isset($rawTransaction->confirmations) ? $rawTransaction->confirmations : 0,
@@ -1627,8 +1923,23 @@ class NMM_Blockchain {
 				}
 
 
-				
-			}			
+
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -1637,7 +1948,7 @@ class NMM_Blockchain {
 		);
 
 		return $result;
-	}	
+	}
 
 	public static function get_trx_address_transactions($address) {
 		
@@ -1667,6 +1978,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (this endpoint covers BOTH directions) for the
+		// truncation check, before the to-address filtering below. ->timestamp
+		// is milliseconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timestamp) ? (int) ($rawTransaction->timestamp / 1000) : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		
 		foreach ($rawTransactions as $rawTransaction) {
@@ -1715,6 +2039,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (this endpoint returns ALL of the address's
+		// transactions, both directions) for the truncation check, before the
+		// type/direction filtering below. ->timestamp is milliseconds.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timestamp) ? (int) ($rawTransaction->timestamp / 1000) : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if ($rawTransaction->type == '4') {
@@ -1761,6 +2098,13 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Raw page for the truncation check. This endpoint is recipient-
+		// filtered server-side (transfers/incoming) and the entries carry only
+		// a NEM-epoch timestamp the parser does not decode (it emits time()),
+		// so the oldest raw timestamp is unknown.
+		self::note_raw_page(count($rawTransactions), null);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {				
 			$transactions[] = new NMM_Transaction($rawTransaction->transaction->amount, 
@@ -1805,6 +2149,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (Horizon returns BOTH directions of payments) for
+		// the truncation check, before the to/account filtering below.
+		// ->created_at is an ISO string.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->created_at) ? strtotime($rawTransaction->created_at) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		
 		foreach ($rawTransactions as $rawTransaction) {
@@ -1863,30 +2220,72 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+		// Raw page (the Blockbook address txid list covers BOTH directions and
+		// is served in bounded pages; entries carry no timestamps) for the
+		// truncation check.
+		self::note_raw_page(count($transactionIds), null);
+
 		$transactions = array();
+		$detailFailed = false;
 
 		foreach ($transactionIds as $transactionId) {
 
 				$request2 = 'https://blockbook.myralicious.com/api/tx/' . $transactionId;
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
 				$rawTransaction = json_decode($response2['body']);
 
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
+					$detailFailed = true;
+					continue;
+				}
+
 				$vouts = $rawTransaction->vout;
 
 			foreach ($rawTransaction->vout as $vout) {
-				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
-														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+				$voutAddresses = (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) ? $vout->scriptPubKey->addresses : array();
+				if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+					// An output we cannot conclusively inspect might BE the
+					// payment, so this visit must never certify coverage (see
+					// vout_inspectable for the rule).
+					$detailFailed = true;
+					continue;
 				}
-			}		
+				if (isset($voutAddresses[0]) && $voutAddresses[0] === $address) {
+					$transactions[] = new NMM_Transaction($vout->value * 100000000,
+														  $rawTransaction->confirmations,
+														  $rawTransaction->time,
+														  $rawTransaction->txid);
+				}
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -1925,6 +2324,19 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (this endpoint returns BOTH directions) for the
+		// truncation check, before the Payment/Destination filtering below.
+		// ->date is an ISO string.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->date) ? strtotime($rawTransaction->date) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if (!isset($rawTransaction->TransactionType) || $rawTransaction->TransactionType !== 'Payment') {
@@ -1982,6 +2394,20 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page for the truncation check. TzKT already filters
+		// server-side to this target (incoming only), but the served page must
+		// still be reported before the amount filtering below. ->timestamp is
+		// an ISO string.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timestamp) ? strtotime($rawTransaction->timestamp) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 
 		foreach ($rawTransactions as $rawTransaction) {
@@ -2031,6 +2457,18 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page for the truncation check. Blockchair already
+		// filters server-side to this recipient, but the served page must still
+		// be reported before it is consumed below. ->time is a datetime string.
+		$rawOldestTs = null;
+		foreach ($body->data as $output) {
+			$ts = isset($output->time) ? strtotime($output->time) : null;
+			if ($ts !== false && $ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($body->data), $rawOldestTs);
 
 		// ZEC requires real confirmation counts; blockchair context carries the tip
 		$tipHeight = isset($body->context->state) ? (int) $body->context->state : 0;
@@ -2093,11 +2531,24 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+
+		// Report the RAW page (both directions) for the truncation check -
+		// the incoming-only subset below can look short while the page the
+		// explorer served was full.
+		$rawOldestTs = null;
+		foreach ($rawTransactions as $rawTransaction) {
+			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
 		$transactions = array();
 
 		foreach($rawTransactions as $rawTransaction) {
-			
-			
+
+
 			if (strtolower($rawTransaction->to) === strtolower($address)
 				&& isset($rawTransaction->contractAddress)
 				&& strtolower($rawTransaction->contractAddress) === strtolower($contract)) {
@@ -2143,6 +2594,17 @@ class NMM_Blockchain {
 				'message' => 'No transactions found',
 			);
 		}
+
+		// Report the RAW page (relatedAddress returns both directions) for
+		// the truncation check before the incoming-only filtering below.
+		$rawOldestTs = null;
+		foreach ($body->token_transfers as $transfer) {
+			$ts = isset($transfer->block_ts) ? (int) ($transfer->block_ts / 1000) : null;
+			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+				$rawOldestTs = $ts;
+			}
+		}
+		self::note_raw_page(count($body->token_transfers), $rawOldestTs);
 
 		$transactions = array();
 
@@ -2406,6 +2868,16 @@ class NMM_Blockchain {
 		// no payment", which is not true in those cases. When we did recover a
 		// payment we return it as success regardless, so the caller never discards
 		// it; the held cursor still guarantees the unstored signature is retried.
+		// Record this fetch's completeness for sol_address_fully_swept() in
+		// this same request. The persisted cursor/queue state alone cannot
+		// express one corner: a recovered retry makes the return a SUCCESS
+		// (the payment must not be discarded) while a failed signature-page
+		// fetch on a fresh (null) cursor leaves neither a cursor nor a queue
+		// row behind - the address would look fully swept although its history
+		// was never paged this tick, and the verifier could certify coverage
+		// for it.
+		self::$solFetchComplete[$address] = ($sweepComplete && !$hardError && !$enqueueFailed);
+
 		if (($hardError || $enqueueFailed) && empty($transactions)) {
 			return array(
 				'result' => 'error',
@@ -2419,12 +2891,142 @@ class NMM_Blockchain {
 		);
 	}
 
-	// Fetch and interpret a single Solana transaction. Returns
-	// array($inspected, $transactionOrNull): $inspected is false when the detail
-	// lookup failed or came back unusable in a way that could be transient (the
-	// caller should retry it), and true when we got a usable finalized result;
-	// the second element is an NMM_Transaction when the tx credited $address,
-	// otherwise null.
+	// Completeness of this request's get_sol_address_transactions() calls, by
+	// address - see the comment at the assignment above.
+	private static $solFetchComplete = array();
+
+	/**
+	 * Newest-page depth of each verification adapter: the maximum number of
+	 * transaction entries one successful fetch can return. The Autopay
+	 * verifier uses this to detect a possibly-truncated visit (a FULL page
+	 * whose oldest entry is still inside the matching window may hide older
+	 * in-window transactions below it) and withholds the cancellation
+	 * coverage stamp for that coin - see NMM_Payment::page_possibly_truncated.
+	 *
+	 * 0 means depth-complete within the matching window (no cap to hit).
+	 * Values for adapters that send no limit parameter are the explorer's
+	 * documented/observed default page size, chosen LOW where sources
+	 * disagree so possible truncation is flagged rather than missed. UTXO
+	 * adapters can return several entries per transaction (one per credited
+	 * output), which only trips the full-page check earlier - the safe
+	 * direction.
+	 */
+	/**
+	 * Whether one decoded transaction output is CONCLUSIVELY inspectable for
+	 * payment matching. The per-tx-detail adapters must never let an output
+	 * they cannot reason about pass silently - it might BE the payment - so:
+	 * - readable address list (all non-empty strings) + numeric value:
+	 *   inspectable, matchable;
+	 * - NO address list at all + genuinely numeric zero value: inspectable as
+	 *   a conclusive non-payment (OP_RETURN and kin);
+	 * - everything else (missing/nonnumeric value - note (float)'garbage'
+	 *   casts to 0 - blank or non-string address entries): NOT inspectable,
+	 *   and the visit must not certify coverage.
+	 */
+	private static function vout_inspectable($addresses, $value) {
+		if ($value === null || !is_numeric($value)) {
+			return false;
+		}
+
+		if (!is_array($addresses) || count($addresses) === 0) {
+			return (float) $value == 0.0;
+		}
+
+		foreach ($addresses as $voutAddress) {
+			if (!is_string($voutAddress) || $voutAddress === '') {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	// Raw newest-page metadata for the last adapter fetch in this request:
+	// array(rawEntryCount, oldestRawTimestamp|null). Adapters report the
+	// UNFILTERED page - the entry count and oldest entry time of what the
+	// explorer actually served, before directional (incoming-only) filtering
+	// - because the truncation check must reason about the page itself: a
+	// full raw page of mostly outgoing entries still proves nothing about
+	// what lies below it, even though the matcher's filtered result looks
+	// short. Consumed (and cleared) by the verifier via take_raw_page_meta()
+	// immediately after each fetch, so a value can never leak from one
+	// address's fetch to another's.
+	private static $lastRawPage = null;
+
+	public static function note_raw_page($count, $oldestTs) {
+		self::$lastRawPage = array((int) $count, ($oldestTs === null) ? null : (int) $oldestTs);
+	}
+
+	public static function take_raw_page_meta() {
+		$meta = self::$lastRawPage;
+		self::$lastRawPage = null;
+
+		return $meta;
+	}
+
+	public static function adapter_page_cap($cryptoId) {
+		static $caps = array(
+			// explicit limit params or client-side slices
+			'BTC' => 25, 'DGB' => 25, 'BCH' => 50, 'ADA' => 25, 'BLK' => 25,
+			'BSV' => 20, 'EOS' => 50, 'WAVES' => 100, 'XTZ' => 50, 'ZEC' => 50,
+			'USDTTRX' => 50,
+			// etherscan-style tokentx page (all ERC-20 / L2 tokens)
+			'REP' => 100, 'MLN' => 100, 'GNO' => 100, 'BAT' => 100, 'HOT' => 100,
+			'LINK' => 100, 'OMG' => 100, 'ZRX' => 100, 'USDC' => 100, 'USDT' => 100,
+			'MKR' => 100, 'DAI' => 100, 'PYUSD' => 100,
+			'USDTPOL' => 100, 'USDCPOL' => 100, 'USDTARB' => 100, 'USDCARB' => 100,
+			'USDCBAS' => 100,
+			// explorer default pages (adapter sends no limit parameter)
+			'DOGE' => 50, 'LTC' => 50, 'DASH' => 10, 'DCR' => 10, 'GRS' => 10,
+			'XLM' => 10, 'TRX' => 20, 'XRP' => 10,
+			// Blockscout txlist returns the full recent set (~10k hard cap)
+			'ETH' => 10000, 'ETC' => 10000,
+			// legacy endpoints, dead today (they throw = fetch failure); caps
+			// recorded in case a host is ever revived. Insight/Blockbook
+			// address txid lists are served in bounded pages, so BTX/XMY get
+			// conservative finite caps (their adapters report the raw list
+			// with no timestamps, so a full page always counts as truncated).
+			'LSK' => 10, 'XEM' => 25, 'ONION' => 25,
+			'BTX' => 10, 'XMY' => 1000,
+			// depth-complete within the matching window
+			'XMR' => 0, // height-bounded get_transfers batch covers the window
+			'SOL' => 0, // durable multi-tick sweep; sol_address_fully_swept() gates
+		);
+
+		if (isset($caps[$cryptoId])) {
+			return $caps[$cryptoId];
+		}
+
+		// Unknown/new adapter: assume the smallest real explorer default so
+		// possible truncation is flagged rather than silently certified.
+		return 10;
+	}
+
+	/**
+	 * Whether $address's in-window Solana history is FULLY inspected: this
+	 * request's fetch (if any) reached the end of the matching window without
+	 * a page failure or enqueue failure, the resume cursor is cleared, and no
+	 * failed detail lookups are pending in the durable retry queue.
+	 * get_sol_address_transactions() deliberately returns success for a
+	 * PARTIAL pass (progress is durable and payments already found must not
+	 * be discarded), so the Autopay verifier must consult this before
+	 * certifying the address as checked for the cancellation coverage stamp -
+	 * signatures below the cursor, in the queue, or in a page that failed to
+	 * fetch this tick are not yet verified, and an aged order's payment could
+	 * be among them.
+	 */
+	public static function sol_address_fully_swept($address) {
+		if (isset(self::$solFetchComplete[$address]) && !self::$solFetchComplete[$address]) {
+			return false;
+		}
+
+		if (get_transient('nmm_sol_cursor_' . md5($address)) !== false) {
+			return false;
+		}
+
+		return NMM_Sol_Retry_Repo::count_for($address) === 0;
+	}
+
 	// Seconds until the next retry for a signature on its Nth failed attempt: the
 	// first failure is retried on the next tick, later failures back off
 	// exponentially up to $maxSec so a persistent failure is polled sparsely.
@@ -2436,6 +3038,12 @@ class NMM_Blockchain {
 		return min($step, $maxSec);
 	}
 
+	// Fetch and interpret a single Solana transaction. Returns
+	// array($inspected, $transactionOrNull): $inspected is false when the detail
+	// lookup failed or came back unusable in a way that could be transient (the
+	// caller should retry it), and true when we got a usable finalized result;
+	// the second element is an NMM_Transaction when the tx credited $address,
+	// otherwise null.
 	private static function sol_inspect_signature($rpc, $signature, $address) {
 		$txResponse = self::api_post($rpc, array(
 			'headers' => array('Content-Type' => 'application/json'),

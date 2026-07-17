@@ -185,6 +185,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
         
         try {
             $order = wc_get_order($order_id);
+            if (!$order) {
+                // Deleted (or never existed) mid-flight: render nothing, like
+                // WooCommerce's own templates when an order is missing. Calling
+                // get_meta() on the false return would throw an Error that the
+                // \Exception catches below do not cover, and 500 the page.
+                return;
+            }
 
             // Fast path: the address is already allocated (a page refresh). No
             // lock is needed just to re-display it.
@@ -212,10 +219,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // the worker that held the lock just committed - a stale cache here
                 // would let us allocate a second, unmonitored address.
                 $order = wc_get_order($order_id);
-                if ($order) {
-                    $order->read_meta_data(true);
+                if (!$order) {
+                    // Deleted while we waited for the lock. Nothing to display
+                    // or allocate; the finally below still releases the lock.
+                    return;
                 }
-                if ($order && !empty($order->get_meta('wallet_address'))) {
+                $order->read_meta_data(true);
+                if (!empty($order->get_meta('wallet_address'))) {
                     $this->display_existing_payment($order, $order_id);
                     return;
                 }

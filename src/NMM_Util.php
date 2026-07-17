@@ -74,6 +74,19 @@ class NMM_Util {
 		return extension_loaded('gmp') || extension_loaded('bcmath');
 	}
 
+	// Site-scoped cron lock name. DB_NAME separates installs that share a MySQL
+	// server; $wpdb->prefix separates subsites on multisite (which share
+	// DB_NAME), so one subsite's slow cycle cannot make every other subsite
+	// skip its tick - each subsite has its own tables and backlog, so
+	// cross-site blocking buys no correctness, only starvation. Both are
+	// hashed to a fixed length, comfortably under MySQL's 64-char lock-name
+	// limit, so a long DB_NAME can never truncate into a collision.
+	public static function cron_lock_name() {
+		global $wpdb;
+
+		return 'nmm_cron_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
+	}
+
 	// Per-order advisory lock name. Scoped to this site AND this order so distinct
 	// orders never share a lock, and neither do same-numbered orders on different
 	// sites. The table prefix ($wpdb->prefix) is blog-specific on multisite, where

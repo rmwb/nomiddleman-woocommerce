@@ -6,41 +6,535 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class NMM_Payment {
 
-	public static function check_all_addresses_for_matching_payment($transactionLifetime) {		
+	// How far before an order's creation time a matching transaction may be dated
+	// and still be accepted, absorbing block-timestamp clock skew while rejecting
+	// genuinely pre-order transactions on reused addresses.
+	const TX_ORDER_SKEW_GRACE_SEC = 3600;
+
+	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
 		$paymentRepo = new NMM_Payment_Repo();
 
-		// get a unique list of unpaid "payments" to crypto addresses
-		$addressesToCheck = $paymentRepo->get_distinct_unpaid_addresses();
+		// Observe the cron cadence FIRST, on every tick INCLUDING empty ones.
+		// The gap since the previous run feeds scan_plan below: budget math uses
+		// it clamped (bounding the explorer burst per tick) while the matching
+		// window is widened by the REAL cadence, so even an hourly cron cannot
+		// let a payment age out between two visits. Recording it only on
+		// non-empty ticks would make the first order after an idle stretch read
+		// the whole idle period as one "interval" and request an enormous
+		// Monero/Solana history window. Written before the scan work so a
+		// mid-tick crash degrades to the nominal 60s assumption on the next run
+		// instead of compounding its budget.
+		$now = time();
+		$lastRun = (int) get_option('nmm_autopay_scan_last_run', 0);
+		update_option('nmm_autopay_scan_last_run', $now, false);
+		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
+
+		// Count only (a single scalar) so a large backlog is never loaded into PHP
+		// just to size the budget.
+		$total = $paymentRepo->count_distinct_unpaid_addresses();
+		if ($total < 1) {
+			// Nothing unpaid: drop any stale retry keys so they cannot linger,
+			// and keep the sweep-start fresh - an empty backlog is a trivially
+			// complete sweep, so the first sweep over newly arriving rows must
+			// not inherit a start time from before the idle stretch.
+			if (get_option('nmm_autopay_scan_retry', array())) {
+				update_option('nmm_autopay_scan_retry', array(), false);
+			}
+			update_option('nmm_autopay_scan_sweep_start', $now, false);
+			return;
+		}
 
 		$cryptos = NMM_Cryptocurrencies::get();
+		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
-		foreach ($addressesToCheck as $record) {
+		// The sweep must also finish before an order can be cancelled, or an order
+		// inserted just behind the cursor could reach cancel_expired_payments()
+		// (which runs the same tick) before its address is ever checked. Find the
+		// shortest cancellation window among the coins that actually have unpaid
+		// orders and let scan_plan keep the sweep inside it.
+		$shortestCancelSec = 0;
+		foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $unpaidCryptoId) {
+			$winSec = (int) ((float) $nmmSettings->get_autopay_cancellation_time($unpaidCryptoId) * 3600);
+			if ($winSec > 0 && ($shortestCancelSec === 0 || $winSec < $shortestCancelSec)) {
+				$shortestCancelSec = $winSec;
+			}
+		}
+
+		// Size the per-tick budget and the effective matching window together (see
+		// scan_plan). The baseline budget keeps normal stores gentle on explorers;
+		// a large backlog raises it so the sweep stays fast; and the matching window
+		// is widened by the sweep period so a payment seen still-unconfirmed on one
+		// visit is not rejected as too old before its address next comes round.
+		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
+
+		// When the current multi-tick sweep began (the tick that fetched the
+		// head of the address list). Initialized here on the very first run;
+		// thereafter reset by the wrap handling at the bottom. The coverage
+		// stamp uses this START time, never the wrap time - see below.
+		$sweepStart = (int) get_option('nmm_autopay_scan_sweep_start', 0);
+		if ($sweepStart < 1) {
+			$sweepStart = $now;
+			update_option('nmm_autopay_scan_sweep_start', $sweepStart, false);
+		}
+
+		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec, $cronIntervalSec);
+		$take = $plan['take'];
+		$effectiveLifetime = $plan['effective_lifetime'];
+
+		// Each coin's matching window must also reach back past ITS oldest
+		// unpaid order (plus the pre-order skew grace), or the coverage stamp
+		// would be hollow for aged rows: a days-old order met after an upgrade
+		// or cron outage may have been paid when it was fresh, and a sweep
+		// that only fetched the last few hours would "verify" its address
+		// without ever being able to see that payment - expiry would then
+		// cancel a paid order. Widening the window also lets such a payment
+		// actually MATCH (the per-order TX_ORDER_SKEW_GRACE_SEC lower bound
+		// still blocks pre-order transactions on reused addresses, and
+		// consumed-tx tracking still blocks replays). The widening is scoped
+		// PER CURRENCY: one coin's stale row (say, months-old BTC behind a
+		// dead explorer) must not inflate every other coin's history requests
+		// - an oversized Monero get_transfers or Solana signature sweep every
+		// tick would defeat the bounded-scan goal. Steady-state cost is small
+		// (a coin's oldest unpaid row is at most about its cancellation window
+		// old); after an outage that coin's window stays wide exactly until
+		// its aged backlog has been verified once and settled.
+		$lifetimeByCrypto = array();
+		foreach ($paymentRepo->oldest_unpaid_ordered_at_by_crypto() as $agedCryptoId => $agedOrderedAt) {
+			if ($agedOrderedAt > 0) {
+				$atRiskLifetime = ($now - $agedOrderedAt) + self::TX_ORDER_SKEW_GRACE_SEC;
+				if ($atRiskLifetime > $effectiveLifetime) {
+					$lifetimeByCrypto[$agedCryptoId] = $atRiskLifetime;
+				}
+			}
+		}
+
+		// Keyset pagination around the persisted cursor: fetch only the budgeted
+		// slice ordered strictly AFTER the previous tick's stopping point, then
+		// wrap to the head if that page ran off the end. Because we ask for rows
+		// "greater than" the cursor (not an exact key), a cursor row paid/removed
+		// between ticks simply advances to the next one - no restart-at-top that
+		// could starve later addresses. With $take <= $total the after/head pages
+		// never overlap, so no address is processed twice in a tick.
+		$cursor = get_option('nmm_autopay_scan_cursor', '');
+		$cursorParts = ($cursor !== '') ? explode('|', $cursor, 2) : array('', '');
+		$cursorCrypto = $cursorParts[0];
+		$cursorAddress = isset($cursorParts[1]) ? $cursorParts[1] : '';
+
+		$batch = $paymentRepo->get_unpaid_addresses_after($cursorCrypto, $cursorAddress, $take);
+		$wrapped = false;
+		if (count($batch) < $take) {
+			$head = $paymentRepo->get_unpaid_addresses_from_start($take - count($batch));
+			$batch = array_merge($batch, $head);
+			$wrapped = true;
+		}
+
+		// Re-check addresses whose fetch FAILED last tick BEFORE the fair sweep, so
+		// a transient explorer/RPC error is retried on the very next tick rather
+		// than waiting a whole sweep (by which time a payment could age out). The
+		// retry set is bounded, and only the fair-sweep batch advances the cursor.
+		$retrySet = get_option('nmm_autopay_scan_retry', array());
+		if (!is_array($retrySet)) {
+			$retrySet = array();
+		}
+
+		// Parse retry keys, then keep only those whose payment is STILL unpaid: a
+		// row paid/cancelled/deleted while its explorer was down must not be
+		// re-queried forever (which would peg the failing endpoint and, at up to
+		// the 200-key cap, occupy the cron lock indefinitely).
+		$retryPairs = array();
+		foreach ($retrySet as $key) {
+			$parts = explode('|', $key, 2);
+			if (count($parts) === 2) {
+				$retryPairs[] = array('cryptocurrency' => $parts[0], 'address' => $parts[1]);
+			}
+		}
+		$liveRetry = $paymentRepo->filter_unpaid_pairs($retryPairs);
+
+		$toProcess = array();
+		$seen = array();
+		foreach ($retryPairs as $pair) {
+			$key = $pair['cryptocurrency'] . '|' . $pair['address'];
+			if (isset($liveRetry[$key]) && !isset($seen[$key])) {
+				$toProcess[] = $pair;
+				$seen[$key] = true;
+			}
+		}
+
+		// Priority lane: a fresh customer is watching the thank-you page's
+		// 15-second poller, so their first check must not wait for the fair
+		// sweep to come around (up to the full sweep period under a backlog).
+		// Scan recently created payment records every tick, ADDITIVE to the
+		// sweep budget - carving the lane out of the sweep budget would slow
+		// the sweep and re-open the sweep-within-lifetime invariant - and
+		// bounded by the baseline so the worst-case extra explorer load per
+		// tick is one baseline's worth. The lane never advances the cursor: it
+		// is not part of the fair sweep, and an address in both the lane and
+		// the sweep page is scanned only once ($seen).
+		$priorityWindow = (int) apply_filters('nmm_autopay_priority_window', 30 * MINUTE_IN_SECONDS);
+		if ($priorityWindow > 0) {
+			foreach ($paymentRepo->get_recent_unpaid_addresses($priorityWindow, $baseBudget) as $record) {
+				$key = self::scan_key($record);
+				if (!isset($seen[$key])) {
+					$toProcess[] = $record;
+					$seen[$key] = true;
+				}
+			}
+		}
+
+		$lastKey = $cursor;
+		foreach ($batch as $record) {
+			$key = self::scan_key($record);
+			$lastKey = $key; // the cursor tracks the fair sweep only, never retries
+			if (!isset($seen[$key])) {
+				$toProcess[] = $record;
+				$seen[$key] = true;
+			}
+		}
+
+		// For Monero, fetch the account's incoming transfers ONCE per tick and
+		// group them by subaddress locally, instead of two wallet-RPC calls
+		// (get_address_index + get_transfers) for every address.
+		$xmrFetched = false;
+		$xmrOk = false;
+		$xmrByAddress = array();
+
+		$newFailed = array();
+		$partialCryptos = array();
+
+		foreach ($toProcess as $record) {
+			$cryptoId = $record['cryptocurrency'];
 			$address = $record['address'];
 
-			$cryptoId = $record['cryptocurrency'];
+			if (!isset($cryptos[$cryptoId])) {
+				// A ticker no longer in the registry (coin support removed)
+				// cannot be verified at all - it must not be certified covered,
+				// or expiry would cancel its orders without any payment check.
+				// Dirty (not failed): there is no point re-fetching it every
+				// tick, and the next sweep re-marks it for as long as its
+				// unpaid rows exist, so they are never auto-cancelled.
+				$partialCryptos[$cryptoId] = true;
+				continue;
+			}
 			$crypto = $cryptos[$cryptoId];
 
-			self::check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime);
+			// This coin's window, widened past its own oldest unpaid order.
+			$cryptoLifetime = isset($lifetimeByCrypto[$cryptoId]) ? $lifetimeByCrypto[$cryptoId] : $effectiveLifetime;
+
+			do_action('nmm_autopay_address_checked', $cryptoId, $address);
+
+			if ($cryptoId === 'XMR') {
+				if (!$xmrFetched) {
+					$xmrBatch = NMM_Monero::get_account_transactions($cryptoLifetime);
+					$xmrOk = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success');
+					$xmrByAddress = ($xmrOk && isset($xmrBatch['by_address'])) ? $xmrBatch['by_address'] : array();
+					$xmrFetched = true;
+				}
+				if (!$xmrOk) {
+					$newFailed[] = self::scan_key($record); // could not fetch; retry next tick
+					continue;
+				}
+				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
+				self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime);
+			}
+			else {
+				$fetched = self::check_address_transactions_for_matching_payments($crypto, $address, $cryptoLifetime);
+				if ($fetched === false) {
+					$newFailed[] = self::scan_key($record);
+				}
+				elseif ($cryptoId === 'SOL' && !NMM_Blockchain::sol_address_fully_swept($address)) {
+					// The bounded Solana sweep made durable progress but has
+					// not yet inspected this address's whole matching window
+					// (a busy or dusted address spans several ticks). Not a
+					// failure - collected payments were returned and progress
+					// is durable - but not verification either: the coin must
+					// not be certified covered while signatures below the
+					// internal cursor, or in its retry queue, are uninspected.
+					$partialCryptos[$cryptoId] = true;
+				}
+				elseif ($cryptoId !== 'SOL' && self::page_possibly_truncated($cryptoId, $fetched, $cryptoLifetime, $now)) {
+					// A full newest-page (raw, pre-filtering) whose oldest
+					// entry is still inside the matching window: in-window
+					// history may be hidden below the fixed-depth page (see
+					// page_possibly_truncated) - a valid check, but not
+					// certifiable coverage.
+					$partialCryptos[$cryptoId] = true;
+				}
+			}
+		}
+
+		// Persist the bounded retry set and the fair-sweep cursor. If the cap
+		// forces failed keys to be DROPPED (a wide outage: accumulated retries
+		// plus a full sweep page can exceed it), their addresses were passed by
+		// the cursor without ever being verified and will not be retried - so
+		// mark their currencies dirty. A dirty currency is excluded from the
+		// coverage stamp at the next wrap (then cleared: the following sweep
+		// revisits every address, so a clean wrap after that is trustworthy
+		// again). Without this, an endpoint recovering after drops would let a
+		// later clean wrap certify coverage for addresses that were never
+		// successfully checked, and an aged paid order could be cancelled.
+		$dirtyAdd = $partialCryptos;
+		$retryCap = max(1, (int) apply_filters('nmm_autopay_scan_retry_cap', 200));
+		$newFailed = array_values(array_unique($newFailed));
+		if (count($newFailed) > $retryCap) {
+			foreach (array_slice($newFailed, $retryCap) as $droppedKey) {
+				$droppedParts = explode('|', $droppedKey, 2);
+				$dirtyAdd[$droppedParts[0]] = true;
+			}
+			$newFailed = array_slice($newFailed, 0, $retryCap);
+		}
+		if (!empty($dirtyAdd)) {
+			$dirty = get_option('nmm_autopay_scan_dirty', array());
+			if (!is_array($dirty)) {
+				$dirty = array();
+			}
+			foreach (array_keys($dirtyAdd) as $dirtyAddCryptoId) {
+				$dirty[$dirtyAddCryptoId] = true;
+			}
+			update_option('nmm_autopay_scan_dirty', $dirty, false);
+		}
+		update_option('nmm_autopay_scan_retry', $newFailed, false);
+		update_option('nmm_autopay_scan_cursor', $lastKey, false);
+
+		// A full sweep has just completed: either this tick's page wrapped past
+		// the end of the address list, or the budget covered the whole backlog
+		// in one page. Stamp the coverage time - cancel_expired_payments() only
+		// treats a row as expired once its whole window lies behind this stamp,
+		// so a row that pre-dates the cursor (plugin upgrade with an aged
+		// backlog) or that aged out during a long cron outage is always checked
+		// at least once after expiring before it can be cancelled.
+		//
+		// The stamp is the completed sweep's START time, never the wrap time:
+		// the keyset sweep proves only that every row present throughout
+		// [start, wrap] was visited at some point in that interval, so the
+		// earliest such visit is all "checked after expiry" may assume. Using
+		// the wrap time would let a row checked early in the sweep - whose
+		// window closed before the wrap - be cancelled although a payment
+		// arriving after its check was never seen. This also covers the
+		// stale-cursor wrap (backlog churn leaving the cursor beyond every
+		// row): the head page alone completes a "sweep" whose start is old, so
+		// rows in the unscanned tail that expired after that start remain
+		// protected until a genuinely complete sweep finishes. A single page
+		// covering the whole backlog stamps this tick's own start.
+		//
+		// Coverage is stamped PER CURRENCY, and a currency with an unresolved
+		// fetch failure ($newFailed carries this tick's failures AND re-failed
+		// retries from earlier ticks) keeps its previous stamp: a failed
+		// address was not verified, and stamping it would let cancellation
+		// treat it as checked. Scoping this per currency matters - one
+		// permanently failing endpoint (say, an unconfigured Monero wallet
+		// RPC) must only hold back ITS coin's expirations, not freeze
+		// cancellation for every currency on the store. The retry path
+		// re-checks the failed address next tick, and that coin's stamp waits
+		// for the next wrap with all of its fetches clean.
+		//
+		// The stamp's claim is "every address of this coin was checked, with
+		// nothing relevant possibly hidden, after the row's window closed".
+		// Three incompleteness signals guard it: fetch failures (above),
+		// Solana's own multi-tick sweep state (sol_address_fully_swept), and
+		// the generic full-page truncation check (page_possibly_truncated) for
+		// the fixed-depth explorer adapters - all three route into the dirty
+		// marker below.
+		if ($wrapped || $take >= $total) {
+			$failedCryptos = array();
+			foreach ($newFailed as $failedKey) {
+				$failedParts = explode('|', $failedKey, 2);
+				$failedCryptos[$failedParts[0]] = true;
+			}
+
+			// Currencies marked dirty during this sweep - failed keys dropped
+			// from the retry set, or a Solana address whose bounded internal
+			// history sweep is still mid-window - have addresses that were not
+			// fully verified: exclude them from this stamp, then clear the
+			// marker. The sweep now starting revisits every address, and a
+			// still-incomplete address simply re-marks its coin dirty.
+			$dirty = get_option('nmm_autopay_scan_dirty', array());
+			if (is_array($dirty) && !empty($dirty)) {
+				foreach (array_keys($dirty) as $dirtyCryptoId) {
+					$failedCryptos[$dirtyCryptoId] = true;
+				}
+				update_option('nmm_autopay_scan_dirty', array(), false);
+			}
+
+			$stampAt = ($take >= $total) ? $now : $sweepStart;
+			$coveredMap = get_option('nmm_autopay_scan_covered_at', array());
+			if (!is_array($coveredMap)) {
+				$coveredMap = array();
+			}
+			foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
+				if (!isset($failedCryptos[$sweptCryptoId])) {
+					$coveredMap[$sweptCryptoId] = $stampAt;
+				}
+			}
+			update_option('nmm_autopay_scan_covered_at', $coveredMap, false);
+
+			// The next sweep begins with the head rows this tick just fetched.
+			update_option('nmm_autopay_scan_sweep_start', $now, false);
 		}
 	}
 
+	/**
+	 * Pure planner for one sweep tick. Given the distinct-unpaid backlog size, the
+	 * merchant baseline budget and the base matching lifetime, returns how many
+	 * addresses to check this tick ('take'/'budget') and the effective matching
+	 * lifetime to check them against ('effective_lifetime').
+	 *
+	 * A larger backlog raises the budget so a full sweep still completes within
+	 * about half the base lifetime (2x margin for late cron runs)
+	 * AND within half the shortest cancellation window, so an order can never be
+	 * cancelled before its address is checked at least once. Spreading the sweep
+	 * across ticks means an address is only revisited every sweep period, so a
+	 * payment still below its confirmation count on one visit could age past the
+	 * base lifetime before the next visit. Widening the matching window by the
+	 * actual sweep period closes that gap: any transaction that confirms within
+	 * the base lifetime is still matched on the next visit, regardless of the
+	 * (coin/config-dependent) confirmation delay. For a normal store the sweep is
+	 * ~1 tick, so the window is only nudged by a minute.
+	 *
+	 * $shortestCancelSec is the shortest order-cancellation window among coins with
+	 * unpaid orders; pass 0 when unknown to fall back to the lifetime bound alone.
+	 * $cronIntervalSec is the OBSERVED gap between cron runs, unclamped. The
+	 * budget math clamps it to [60s, 600s] - the floor keeps back-to-back manual
+	 * runs from shrinking the budget, the ceiling caps the explorer burst any one
+	 * tick can be asked to absorb - but the wall-clock sweep period (and so the
+	 * widened matching window) uses the REAL cadence: with an hourly cron the
+	 * burst cap means the sweep genuinely takes longer, and the matching window
+	 * must reflect the real revisit gap or a payment seen still-unconfirmed on
+	 * one visit would age out before its address next comes round.
+	 */
+	public static function scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec = 0, $cronIntervalSec = 60) {
+		$total = max(0, (int) $total);
+		$baseBudget = max(1, (int) $baseBudget);
+		$transactionLifetime = max(0, (int) $transactionLifetime);
+		$shortestCancelSec = max(0, (int) $shortestCancelSec);
+		$cronIntervalSec = max(1, (int) $cronIntervalSec);
+		$plannedIntervalSec = min(600, max(60, $cronIntervalSec));
+
+		// Target a full sweep within half the base lifetime, tightened to half the
+		// shortest cancellation window when that is smaller.
+		$targetSweepSec = max($plannedIntervalSec, (int) ($transactionLifetime / 2));
+		if ($shortestCancelSec > 0) {
+			$targetSweepSec = min($targetSweepSec, max($plannedIntervalSec, (int) ($shortestCancelSec / 2)));
+		}
+
+		$sweepTicks = max(1, (int) floor($targetSweepSec / $plannedIntervalSec));
+		$budget = max($baseBudget, (int) ceil($total / $sweepTicks));
+		$take = min($budget, $total);
+
+		// Actual ticks to sweep the whole backlog at this budget - 1 tick for a
+		// small store, more for a large one - converted to wall-clock seconds at
+		// the REAL observed cadence, not the clamped planning interval.
+		$sweepPeriodSec = ($budget > 0 ? (int) ceil($total / $budget) : 1) * $cronIntervalSec;
+
+		return array(
+			'budget' => $budget,
+			'take' => $take,
+			'effective_lifetime' => $transactionLifetime + $sweepPeriodSec,
+		);
+	}
+
+	// Stable identity of a distinct-unpaid-address row, for the sweep cursor.
+	private static function scan_key($record) {
+		return $record['cryptocurrency'] . '|' . $record['address'];
+	}
+
+	// Fetches and matches the address's transactions. Returns
+	// array('transactions' => NMM_Transaction[], 'page' => rawPageMeta|null)
+	// on success - so the sweep can inspect the served page for possible
+	// truncation before certifying coverage - or false if the fetch failed,
+	// so the sweep can retry a transient failure on the next tick instead of
+	// leaving it until the whole backlog is swept again.
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
 		$cryptoId = $crypto->get_id();
 
 		NMM_Util::log(__FILE__, __LINE__, '===========================================================================');
 		NMM_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
 
+		// Clear any stale raw-page note so the meta read after this fetch can
+		// only belong to this fetch.
+		NMM_Blockchain::take_raw_page_meta();
+
 		try {
 			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
 		}
 		catch (\Exception $e) {
 			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId);
-			return;
+			return false;
 		}
+
+		$pageMeta = NMM_Blockchain::take_raw_page_meta();
 
 		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
 
 		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
+
+		return array(
+			'transactions' => is_array($transactions) ? $transactions : array(),
+			'page' => $pageMeta,
+		);
+	}
+
+	/**
+	 * Whether one address visit "may be truncated within the matching window":
+	 * the fixed-depth explorer adapters return only the newest page of an
+	 * address's history, so when a page comes back FULL and even its oldest
+	 * entry is still inside the matching window, in-window transactions may
+	 * exist below the page, unseen. Such a visit is a valid payment check (it
+	 * sees exactly what the matcher can ever see) but it must NOT certify
+	 * coverage for cancellation: under the bounded sweep an address is
+	 * revisited less often than every tick, so a payment that was visible when
+	 * it arrived can be buried under a burst of later activity (e.g. dusting a
+	 * reused carousel address) before the cursor comes back - master's
+	 * every-tick scan would have matched it first. A page whose oldest entry
+	 * is OLDER than the window proves the whole window is visible; a short
+	 * page proves there is nothing below.
+	 *
+	 * Fullness is judged on the RAW page the explorer served (reported by the
+	 * adapter via NMM_Blockchain::note_raw_page BEFORE its incoming-only
+	 * filtering), never on the filtered result: a 25-entry page of 24
+	 * outgoing transfers and one payment filters down to a single entry, but
+	 * an older in-window payment may still be hidden below the full raw page.
+	 * When an adapter reports no raw metadata (not yet instrumented), the
+	 * filtered result is used as a floor - it can only under-detect, so
+	 * instrumenting an adapter strictly tightens the check.
+	 */
+	public static function page_possibly_truncated($cryptoId, $fetchResult, $transactionLifetime, $now) {
+		$cap = NMM_Blockchain::adapter_page_cap($cryptoId);
+		if ($cap < 1) {
+			return false;
+		}
+
+		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
+		$transactions = isset($fetchResult['transactions']) ? $fetchResult['transactions'] : array();
+
+		if (is_array($pageMeta)) {
+			$count = (int) $pageMeta[0];
+			$oldest = $pageMeta[1];
+		}
+		else {
+			$count = is_array($transactions) ? count($transactions) : 0;
+			$oldest = null;
+			foreach ($transactions as $transaction) {
+				$ts = (int) $transaction->get_time_stamp();
+				if ($oldest === null || $ts < $oldest) {
+					$oldest = $ts;
+				}
+			}
+		}
+
+		if ($count < $cap) {
+			return false;
+		}
+
+		// A full page whose oldest entry cannot be shown to pre-date the
+		// matching window may hide in-window history below it. An unknown
+		// oldest timestamp on a full page counts as truncated - reach past
+		// the window cannot be proven. The comparison is INCLUSIVE at the
+		// cutoff: the matcher accepts a transaction dated exactly at the
+		// boundary (only strictly older ones are rejected), and several
+		// transactions can share one block timestamp - an oldest entry
+		// sitting exactly on the cutoff proves nothing about eligible
+		// same-second history below the page.
+		return ($oldest === null) || ((int) $oldest >= ($now - (int) $transactionLifetime));
 	}
 
 	/**
@@ -91,6 +585,17 @@ class NMM_Payment {
 			$matchingPaymentRecords = [];
 
 			foreach ($paymentRecords as $record) {
+				// A transaction cannot pay an order that did not exist when it was
+				// made. On a reused static/carousel address an old, unconsumed
+				// transaction could otherwise complete a newly created order of the
+				// same amount - a risk the widened sweep window (which accepts ages
+				// beyond the base lifetime) would enlarge. Require the tx to be no
+				// older than the order, less a grace for block-timestamp clock skew.
+				$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
+				if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
+					continue;
+				}
+
 				$paymentAmount = $record['order_amount'];
 				$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());
 
@@ -360,10 +865,23 @@ class NMM_Payment {
 
 		$paymentRepo = new NMM_Payment_Repo();
 
-		// Single clock for the whole pass, shared by the coarse SQL cutoff below
-		// and the exact per-record check, so the two can never disagree by a
-		// second at a boundary.
-		$now = time();
+		// Single real-time clock for the whole pass. Each row's effective
+		// expiry clock is additionally capped at ITS currency's last
+		// full-sweep coverage stamp: a row only counts as expired once the
+		// bounded sweep has checked its address at least once AFTER its window
+		// closed. Otherwise rows that pre-date the scan cursor (plugin upgrade
+		// with an aged unpaid backlog) or that aged out during a long cron
+		// outage would be cancelled without ever being verified, and an
+		// on-chain-paid order could be cancelled. The stamp is per currency so
+		// one dead endpoint only pauses its own coin's expirations.
+		// Cancellation can therefore lag by up to one sweep period (<= half
+		// the shortest window) - late, never wrong. min() with real time keeps
+		// a fresh stamp from ever loosening the real-time expiry check.
+		$nowReal = time();
+		$coveredMap = get_option('nmm_autopay_scan_covered_at', array());
+		if (!is_array($coveredMap)) {
+			$coveredMap = array(); // unknown format: treat as no coverage (defer, never cancel unverified)
+		}
 
 		// Only rows old enough to be expirable for SOME configured coin can
 		// possibly be cancelled. The shortest cancellation window among the coins
@@ -377,23 +895,35 @@ class NMM_Payment {
 		}
 
 		$shortestWindowSec = null;
+		$latestCoveredAt = 0;
 		foreach ($unpaidCryptos as $unpaidCryptoId) {
 			$windowSec = (float) $nmmSettings->get_autopay_cancellation_time($unpaidCryptoId) * 60 * 60;
 			if ($shortestWindowSec === null || $windowSec < $shortestWindowSec) {
 				$shortestWindowSec = $windowSec;
 			}
+			if (isset($coveredMap[$unpaidCryptoId]) && (int) $coveredMap[$unpaidCryptoId] > $latestCoveredAt) {
+				$latestCoveredAt = (int) $coveredMap[$unpaidCryptoId];
+			}
 		}
 
-		$coarseCutoff = $now - $shortestWindowSec;
+		// The coarse cutoff must not exclude any row the per-record check below
+		// could cancel, so it pairs the shortest window with the LATEST per-coin
+		// coverage stamp; per-record filtering then applies each row's own
+		// window and its own coin's stamp. With no coverage at all the cutoff
+		// goes negative and nothing is fetched.
+		$coarseCutoff = min($nowReal, $latestCoveredAt) - $shortestWindowSec;
 		$unpaidPayments = $paymentRepo->get_unpaid($coarseCutoff);
 
 		foreach ($unpaidPayments as $paymentRecord) {
 			$orderTime = $paymentRecord['ordered_at'];
 			$cryptoId = $paymentRecord['cryptocurrency'];
 
+			$cryptoCoveredAt = isset($coveredMap[$cryptoId]) ? (int) $coveredMap[$cryptoId] : 0;
+			$cancelClock = min($nowReal, $cryptoCoveredAt);
+
 			$paymentCancellationTimeHr = $nmmSettings->get_autopay_cancellation_time($cryptoId);
 			$paymentCancellationTimeSec = $paymentCancellationTimeHr * 60 * 60;
-			$timeSinceOrder = $now - $orderTime;
+			$timeSinceOrder = $cancelClock - $orderTime;
 			NMM_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
 
 			if ($timeSinceOrder > $paymentCancellationTimeSec) {

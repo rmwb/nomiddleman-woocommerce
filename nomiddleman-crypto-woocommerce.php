@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.5
+Version: 2.9.6
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -71,7 +71,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.5');
+    define('NMM_VERSION', '2.9.6');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -322,6 +322,38 @@ function NMM_uninstall() {
     NMM_drop_payment_table();
     NMM_drop_carousel_table();
     NMM_drop_sol_retry_table();
+    NMM_delete_scan_options();
+}
+
+// The Autopay scan state is per site (options live in each blog's options
+// table), so on a network uninstall delete them per site alongside the per-site
+// tables; otherwise sub-sites would retain orphaned cursor/coverage state.
+function NMM_delete_scan_options() {
+    $scanOptions = array(
+        'nmm_autopay_scan_cursor',
+        'nmm_autopay_scan_retry',
+        'nmm_autopay_scan_last_run',
+        'nmm_autopay_scan_covered_at',
+        'nmm_autopay_scan_sweep_start',
+        'nmm_autopay_scan_dirty',
+    );
+
+    if (is_multisite()) {
+        global $wpdb;
+        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
+        foreach ($blogIds as $blogId) {
+            switch_to_blog($blogId);
+            foreach ($scanOptions as $scanOption) {
+                delete_option($scanOption);
+            }
+            restore_current_blog();
+        }
+        return;
+    }
+
+    foreach ($scanOptions as $scanOption) {
+        delete_option($scanOption);
+    }
 }
 
 // The retry table is created per site (each blog has its own prefix), so drop it

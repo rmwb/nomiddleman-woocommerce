@@ -73,6 +73,19 @@ $wpdb2->prefix = $main->prefix; // restore for the remaining checks
 lok('same order id on a DIFFERENT site is free', $mainHold === '1' && $site2 === '1', "$mainHold,$site2");
 if ($mainHold === '1') { NMM_Util::release_order_init_lock($orderA); }
 
+// Cron lock: scoped per site the same way - a second subsite's cron must not
+// contend with the main site's (each subsite has its own tables and backlog),
+// and the hashed name can never truncate into a collision.
+$mainCron = NMM_Util::cron_lock_name();
+$wpdb2->prefix = $main->prefix . 's2_';
+$GLOBALS['wpdb'] = $wpdb2;
+$site2Cron = NMM_Util::cron_lock_name();
+$GLOBALS['wpdb'] = $main;
+$wpdb2->prefix = $main->prefix;
+lok('cron lock differs across subsites',        $mainCron !== $site2Cron, "$mainCron vs $site2Cron");
+lok('cron lock stable for the same site',       $mainCron === NMM_Util::cron_lock_name());
+lok('cron lock stays under 64 chars',           strlen($mainCron) < 64, 'len=' . strlen($mainCron));
+
 // The lock name must be order-specific even if DB_NAME is long: two different
 // orders must never collide on one truncated 64-char lock name. Prove it by
 // holding both at once on connection 2.
@@ -142,6 +155,25 @@ if (function_exists('wc_create_order')) {
 	lok('forced re-read sees the committed address', $staleOrder->get_meta('wallet_address') === 'ADDR_FROM_HOLDER', 'got=' . $staleOrder->get_meta('wallet_address'));
 
 	$holder->delete(true);
+}
+
+// A deleted (or never-existing) order must not fatal the thank-you page:
+// wc_get_order() returns false, and calling get_meta() on it would throw an
+// Error that the page's \Exception handlers do not catch (a 500 for the
+// customer). The gateway must return silently, rendering nothing - matching
+// how WooCommerce's own templates behave when an order is missing.
+if (class_exists('NMM_Gateway') && function_exists('WC')) {
+	$gw = new NMM_Gateway();
+	ob_start();
+	$ghostThrew = false;
+	try {
+		$gw->thank_you_page(999999999);
+	} catch (\Throwable $t) {
+		$ghostThrew = true;
+	}
+	$ghostOut = ob_get_clean();
+	lok('missing order: thank-you page does not throw', !$ghostThrew);
+	lok('missing order: renders no payment html',       trim($ghostOut) === '', 'out=' . substr(trim($ghostOut), 0, 60));
 }
 
 echo $GLOBALS['ol_ok'] ? "\nORDER-INIT-LOCK CHECKS PASSED\n" : "\nORDER-INIT-LOCK CHECKS FAILED\n";

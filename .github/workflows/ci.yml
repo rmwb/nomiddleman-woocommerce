@@ -137,6 +137,12 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -qi "skipped" && { echo "::error::autopay test skipped"; exit 1; } || true
           echo "$OUT" | grep -q "AUTOPAY-CANCEL CHECKS PASSED" || { echo "::error::autopay test did not pass"; exit 1; }
+      - name: Bounded Autopay scan (budget + fair cursor + Monero batch) test (must run, not skip)
+        run: |
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-autopay-scan.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -qi "skipped" && { echo "::error::scan test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "AUTOPAY-SCAN CHECKS PASSED" || { echo "::error::scan test did not pass"; exit 1; }
       - name: Per-order initialization lock test (must run, not skip)
         run: |
           OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-order-init-lock.php" --path=wp 2>&1)
