@@ -570,7 +570,34 @@ $covMapK = get_option('nmm_autopay_scan_covered_at', array());
 sok('truncated detail body does not certify',      !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
 sok('truncated detail body goes to the retry set', in_array('BLK|blk_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
 
+// Malformed output entries must be just as uninspectable: a nonnumeric value
+// casts to (float) 0 and would otherwise look like ignorable OP_RETURN, and a
+// blank-string address is not a readable address.
+$GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 'garbage', 'scriptPubKey' => array('addresses' => array('someone_else')))));
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+as_tick(3 * 3600);
+$covMapK = get_option('nmm_autopay_scan_covered_at', array());
+sok('nonnumeric output value does not certify',    !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+
+$GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 1.0, 'scriptPubKey' => array('addresses' => array('')))));
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+as_tick(3 * 3600);
+$covMapK = get_option('nmm_autopay_scan_covered_at', array());
+sok('blank-string address does not certify',       !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+
+// A genuine OP_RETURN-class output (numeric zero, NO address list) is a
+// conclusive non-payment and must not block certification.
+$GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 0)));
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+as_tick(3 * 3600);
+$covMapK = get_option('nmm_autopay_scan_covered_at', array());
+sok('zero-value addressless output still certifies', is_array($covMapK) && isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+
 $GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 1.0, 'scriptPubKey' => array('addresses' => array('someone_else')))), 'confirmations' => 100, 'time' => time() - 600, 'txid' => 'blk_tx1');
+delete_option('nmm_autopay_scan_covered_at');
 as_tick(3 * 3600);
 $covMapK = get_option('nmm_autopay_scan_covered_at', array());
 sok('well-formed detail body certifies',           is_array($covMapK) && isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));

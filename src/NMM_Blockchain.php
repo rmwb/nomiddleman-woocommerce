@@ -749,16 +749,11 @@ class NMM_Blockchain {
 						$voutAddresses = array($vout->scriptPubKey->address);
 					}
 
-					if (empty($voutAddresses) || !isset($vout->value)) {
-						// An output we cannot conclusively inspect - no
-						// readable address while carrying (or possibly
-						// carrying) value - might BE the payment, so this
-						// visit must never certify coverage. Zero-value
-						// address-less outputs (OP_RETURN and kin) are
-						// conclusively not payments and stay ignorable.
-						if (!isset($vout->value) || (float) $vout->value > 0) {
-							$detailFailed = true;
-						}
+					if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+						// An output we cannot conclusively inspect might BE
+						// the payment, so this visit must never certify
+						// coverage (see vout_inspectable for the rule).
+						$detailFailed = true;
 						continue;
 					}
 
@@ -1085,19 +1080,15 @@ class NMM_Blockchain {
 				$vouts = $rawTransaction->vout;
 
 			foreach ($rawTransaction->vout as $vout) {
-				if (!isset($vout->scriptPubKey->addresses[0]) || !isset($vout->value)) {
-					// An output we cannot conclusively inspect - no readable
-					// address while carrying (or possibly carrying) value -
-					// might BE the payment, so this visit must never certify
-					// coverage. Zero-value address-less outputs (OP_RETURN
-					// and kin) are conclusively not payments and stay
-					// ignorable.
-					if (!isset($vout->value) || (float) $vout->value > 0) {
-						$detailFailed = true;
-					}
+				$voutAddresses = (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) ? $vout->scriptPubKey->addresses : array();
+				if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+					// An output we cannot conclusively inspect might BE the
+					// payment, so this visit must never certify coverage (see
+					// vout_inspectable for the rule).
+					$detailFailed = true;
 					continue;
 				}
-				if ($vout->scriptPubKey->addresses[0] === $address) {
+				if (isset($voutAddresses[0]) && $voutAddresses[0] === $address) {
 					$transactions[] = new NMM_Transaction($vout->value * 100000000,
 														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
@@ -1915,16 +1906,11 @@ class NMM_Blockchain {
 						$voutAddresses = array($vout->scriptPubKey->address);
 					}
 
-					if (empty($voutAddresses) || !isset($vout->value)) {
-						// An output we cannot conclusively inspect - no
-						// readable address while carrying (or possibly
-						// carrying) value - might BE the payment, so this
-						// visit must never certify coverage. Zero-value
-						// address-less outputs (OP_RETURN and kin) are
-						// conclusively not payments and stay ignorable.
-						if (!isset($vout->value) || (float) $vout->value > 0) {
-							$detailFailed = true;
-						}
+					if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+						// An output we cannot conclusively inspect might BE
+						// the payment, so this visit must never certify
+						// coverage (see vout_inspectable for the rule).
+						$detailFailed = true;
 						continue;
 					}
 
@@ -2270,19 +2256,15 @@ class NMM_Blockchain {
 				$vouts = $rawTransaction->vout;
 
 			foreach ($rawTransaction->vout as $vout) {
-				if (!isset($vout->scriptPubKey->addresses[0]) || !isset($vout->value)) {
-					// An output we cannot conclusively inspect - no readable
-					// address while carrying (or possibly carrying) value -
-					// might BE the payment, so this visit must never certify
-					// coverage. Zero-value address-less outputs (OP_RETURN
-					// and kin) are conclusively not payments and stay
-					// ignorable.
-					if (!isset($vout->value) || (float) $vout->value > 0) {
-						$detailFailed = true;
-					}
+				$voutAddresses = (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) ? $vout->scriptPubKey->addresses : array();
+				if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
+					// An output we cannot conclusively inspect might BE the
+					// payment, so this visit must never certify coverage (see
+					// vout_inspectable for the rule).
+					$detailFailed = true;
 					continue;
 				}
-				if ($vout->scriptPubKey->addresses[0] === $address) {
+				if (isset($voutAddresses[0]) && $voutAddresses[0] === $address) {
 					$transactions[] = new NMM_Transaction($vout->value * 100000000,
 														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
@@ -2929,6 +2911,36 @@ class NMM_Blockchain {
 	 * output), which only trips the full-page check earlier - the safe
 	 * direction.
 	 */
+	/**
+	 * Whether one decoded transaction output is CONCLUSIVELY inspectable for
+	 * payment matching. The per-tx-detail adapters must never let an output
+	 * they cannot reason about pass silently - it might BE the payment - so:
+	 * - readable address list (all non-empty strings) + numeric value:
+	 *   inspectable, matchable;
+	 * - NO address list at all + genuinely numeric zero value: inspectable as
+	 *   a conclusive non-payment (OP_RETURN and kin);
+	 * - everything else (missing/nonnumeric value - note (float)'garbage'
+	 *   casts to 0 - blank or non-string address entries): NOT inspectable,
+	 *   and the visit must not certify coverage.
+	 */
+	private static function vout_inspectable($addresses, $value) {
+		if ($value === null || !is_numeric($value)) {
+			return false;
+		}
+
+		if (!is_array($addresses) || count($addresses) === 0) {
+			return (float) $value == 0.0;
+		}
+
+		foreach ($addresses as $voutAddress) {
+			if (!is_string($voutAddress) || $voutAddress === '') {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	// Raw newest-page metadata for the last adapter fetch in this request:
 	// array(rawEntryCount, oldestRawTimestamp|null). Adapters report the
 	// UNFILTERED page - the entry count and oldest entry time of what the
