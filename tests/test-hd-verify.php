@@ -159,6 +159,47 @@ $underThrew = false;
 try { hd_sweep($underMock); } catch (\Throwable $t) { $underThrew = true; }
 hok('a deleted order on the underpayment branch is safe',  !$underThrew);
 
+// --- the reconcile pass must be able to see every held address ---
+// Now that a late payment no longer (wrongly) completes a dead order, an
+// 'underpaid' row on a cancelled order has to be reconciled somewhere, or the
+// verifier polls that address on every sweep forever and never retires it. The
+// pass looked at 'assigned' rows only.
+$underCancelled = hd_mkorder('cancelled');
+hd_row('hd_addr_under_cancelled', $underCancelled, 'underpaid', '0.10000000');
+$assignedCancelled = hd_mkorder('cancelled');
+hd_row('hd_addr_assigned_cancelled', $assignedCancelled, 'assigned', '0.00000000');
+$liveOnHold = hd_mkorder('on-hold');
+hd_row('hd_addr_live_onhold', $liveOnHold, 'underpaid', '0.10000000');
+
+NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+
+hok('an underpaid row on a cancelled order is retired',   hd_status('hd_addr_under_cancelled') === 'dirty', 'row=' . hd_status('hd_addr_under_cancelled'));
+hok('an assigned row on a cancelled order is quarantined', hd_status('hd_addr_assigned_cancelled') === 'quarantine', 'row=' . hd_status('hd_addr_assigned_cancelled'));
+hok('an underpaid row on a LIVE order is left alone',     hd_status('hd_addr_live_onhold') === 'underpaid', 'row=' . hd_status('hd_addr_live_onhold'));
+hok('  and its live order is not cancelled',              hd_order_status($liveOnHold) === 'on-hold', 'status=' . hd_order_status($liveOnHold));
+
+// --- a failed completion must not strand the payment ---
+// WooCommerce catches a throwing hook inside payment_complete() and REPORTS
+// failure by returning false. We hold the claim at that point, so the row reads
+// 'complete' over an unpaid order - and nothing sweeps a 'complete' row. The
+// claim must be handed back and the cached total rolled back, or this customer's
+// money is stranded forever.
+$boomOrder = hd_mkorder('on-hold');
+hd_row('hd_addr_boom', $boomOrder);
+$boom = function ($orderId) { throw new \RuntimeException('a third-party hook exploded'); };
+add_action('woocommerce_payment_complete', $boom, 10, 1);
+hd_sweep($paidMock);
+remove_action('woocommerce_payment_complete', $boom, 10);
+hok('a failed completion releases the claim',              hd_status('hd_addr_boom') === 'assigned', 'row=' . hd_status('hd_addr_boom'));
+hok('  and rolls back the cached total for a retry',       hd_total('hd_addr_boom') === 0.0, 'total=' . hd_total('hd_addr_boom'));
+
+// The retry must then settle it. WooCommerce's payment_complete() sets the
+// status before firing the hook that threw, so this order is in fact already
+// paid: the retry has to recognise that and settle the row WITHOUT paying twice.
+hd_sweep($paidMock);
+hok('  the next sweep settles the row',                    hd_status('hd_addr_boom') === 'complete', 'row=' . hd_status('hd_addr_boom'));
+hok('  and the order ends up paid exactly once',           in_array(hd_order_status($boomOrder), array('processing', 'completed'), true), 'status=' . hd_order_status($boomOrder));
+
 // --- the claim itself ---
 $repo = new NMM_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
 

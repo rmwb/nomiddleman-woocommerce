@@ -172,8 +172,9 @@ class NMM_Hd_Repo {
 			 WHERE `address` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
+			 AND `mpk` = %s
 			 AND (`status` = 'assigned' OR `status` = 'underpaid')",
-			$address, $this->cryptoId, $this->hdMode
+			$address, $this->cryptoId, $this->hdMode, $this->mpk
 		));
 
 		if ($affected === false) {
@@ -182,6 +183,30 @@ class NMM_Hd_Repo {
 		}
 
 		return $affected > 0 ? self::CLAIM_CLAIMED : self::CLAIM_ALREADY;
+	}
+
+	/**
+	 * Hand a claimed row back to $toStatus after the completion attempt that
+	 * claimed it failed, so a later sweep retries it rather than leaving a
+	 * 'complete' row above an order that was never paid.
+	 *
+	 * Deliberately does not touch assigned_at, which set_status('assigned')
+	 * would refresh: the address was assigned when it was assigned, and
+	 * restarting that clock would push out the reconcile pass's expiry checks.
+	 */
+	public function release_claim($address, $toStatus) {
+		global $wpdb;
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = %s
+			 WHERE `address` = %s
+			 AND `cryptocurrency` = %s
+			 AND `hd_mode` = %d
+			 AND `mpk` = %s
+			 AND `status` = 'complete'",
+			$toStatus, $address, $this->cryptoId, $this->hdMode, $this->mpk
+		));
 	}
 
 	public function get_pending() {
@@ -199,7 +224,17 @@ class NMM_Hd_Repo {
 		return $results;
 	}
 
-	public function get_assigned() {
+	/**
+	 * Rows the reconcile pass must settle against their live order: every state
+	 * in which an address is still held for an order and awaiting payment.
+	 *
+	 * 'underpaid' belongs here as much as 'assigned' does. An address that took
+	 * a part payment for an order that is later cancelled is just as dead as one
+	 * that took nothing, and if the reconcile pass cannot see it, nothing else
+	 * ever will - the verifier keeps polling it on every sweep, forever, and it
+	 * is never retired as dirty.
+	 */
+	public function get_reconcilable() {
 		global $wpdb;
 
 		$results = $wpdb->get_results($wpdb->prepare(
@@ -207,7 +242,7 @@ class NMM_Hd_Repo {
 			 WHERE `mpk` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
-			 AND `status` = 'assigned'",
+			 AND (`status` = 'assigned' OR `status` = 'underpaid')",
 			$this->mpk, $this->cryptoId, $this->hdMode
 		), ARRAY_A);
 
