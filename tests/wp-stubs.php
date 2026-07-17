@@ -16,6 +16,43 @@ if (!function_exists('apply_filters')) {
 	function apply_filters($tag, $value) { return $value; }
 }
 
+// Translation and escaping helpers. The plugin reaches for these on its ERROR
+// paths (exception messages, admin notices), so without them a suite that
+// provokes a failure - two dead fiat-rate services, say - dies on an undefined
+// function inside the very code path it set out to exercise, and takes the
+// harness down before it can report. Escaping is a no-op here: nothing in the
+// offline suites renders HTML.
+if (!function_exists('__')) {
+	function __($text, $domain = 'default') { return $text; }
+}
+if (!function_exists('esc_html__')) {
+	function esc_html__($text, $domain = 'default') { return $text; }
+}
+if (!function_exists('esc_attr__')) {
+	function esc_attr__($text, $domain = 'default') { return $text; }
+}
+if (!function_exists('_x')) {
+	function _x($text, $context, $domain = 'default') { return $text; }
+}
+if (!function_exists('_e')) {
+	function _e($text, $domain = 'default') { echo $text; }
+}
+if (!function_exists('esc_html_e')) {
+	function esc_html_e($text, $domain = 'default') { echo $text; }
+}
+if (!function_exists('esc_html')) {
+	function esc_html($text) { return $text; }
+}
+if (!function_exists('esc_attr')) {
+	function esc_attr($text) { return $text; }
+}
+if (!function_exists('esc_textarea')) {
+	function esc_textarea($text) { return $text; }
+}
+if (!function_exists('esc_url')) {
+	function esc_url($url) { return $url; }
+}
+
 class WP_Error_Stub {}
 
 function is_wp_error($thing) {

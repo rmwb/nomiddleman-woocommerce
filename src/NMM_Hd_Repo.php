@@ -7,6 +7,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Repository for hd mpk storage in WP Database
 class NMM_Hd_Repo {
 
+	// Outcomes of claim_for_complete(). Tri-state for the same reason Autopay's
+	// claim is (see NMM_Payment_Repo): a genuine race loss (CLAIM_ALREADY) is
+	// conclusive, whereas a transient database failure (CLAIM_DB_ERROR) must be
+	// retried rather than treated as settled.
+	const CLAIM_CLAIMED = 'claimed';
+	const CLAIM_ALREADY = 'already';
+	const CLAIM_DB_ERROR = 'db_error';
+
 	private $mpk;
 	private $tableName;
 	private $cryptoId;
@@ -141,6 +149,39 @@ class NMM_Hd_Repo {
 
 		NMM_Util::log(__FILE__, __LINE__, 'claim_oldest_ready exhausted retries for ' . $this->cryptoId, 'warning');
 		return null;
+	}
+
+	/**
+	 * Atomically claim a payable row so exactly one worker can complete its
+	 * order. Only 'assigned'/'underpaid' rows - the two states get_pending()
+	 * returns - can be claimed, so a row already carried to 'complete' or
+	 * quarantined/retired by the reconcile pass yields CLAIM_ALREADY and the
+	 * caller must not call payment_complete().
+	 *
+	 * Without this, two overlapping verifier runs that both saw the same
+	 * confirmed payment would each complete the order.
+	 *
+	 * @return string One of the CLAIM_* constants.
+	 */
+	public function claim_for_complete($address) {
+		global $wpdb;
+
+		$affected = $wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = 'complete'
+			 WHERE `address` = %s
+			 AND `cryptocurrency` = %s
+			 AND `hd_mode` = %d
+			 AND (`status` = 'assigned' OR `status` = 'underpaid')",
+			$address, $this->cryptoId, $this->hdMode
+		));
+
+		if ($affected === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'claim_for_complete DB error for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
+			return self::CLAIM_DB_ERROR;
+		}
+
+		return $affected > 0 ? self::CLAIM_CLAIMED : self::CLAIM_ALREADY;
 	}
 
 	public function get_pending() {

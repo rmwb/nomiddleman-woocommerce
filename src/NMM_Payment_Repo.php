@@ -13,16 +13,35 @@ class NMM_Payment_Repo {
 		$this->tableName = $wpdb->prefix . NMM_PAYMENT_TABLE;
 	}
 
+	/**
+	 * Record an address to monitor. Returns true only once the row is committed.
+	 *
+	 * The caller MUST NOT show the customer an address for which this returned
+	 * false: the row is what Autopay sweeps, so without it the address is
+	 * unmonitored and any funds sent to it would never credit the order. The
+	 * insert can fail for reasons the checkout cannot foresee - a damaged
+	 * schema, a dropped connection, or the UNIQUE(order_id, order_amount)
+	 * constraint rejecting a leftover from an earlier attempt.
+	 *
+	 * @return bool
+	 */
 	public function insert($address, $cryptocurrency, $orderId, $paymentAmount, $status, $hdAddress = '0') {
 		NMM_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status . ' with order amount of: ' . $paymentAmount);
 		global $wpdb;
 
-		$wpdb->query($wpdb->prepare(
+		$affected = $wpdb->query($wpdb->prepare(
 			"INSERT INTO `$this->tableName`
 				(`address`, `cryptocurrency`, `order_id`, `order_amount`, `status`, `ordered_at`, `hd_address`) VALUES
 				(%s, %s, %d, %s, %s, %d, %s)",
 			$address, $cryptocurrency, $orderId, $paymentAmount, $status, time(), $hdAddress
 		));
+
+		if ($affected === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'Failed to insert payment row for order ' . $orderId . ' (' . $cryptocurrency . ' ' . $address . '): ' . $wpdb->last_error, 'error');
+			return false;
+		}
+
+		return $affected > 0;
 	}
 
 	/**

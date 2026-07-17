@@ -5,10 +5,80 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class NMM_Settings {
+
+	/**
+	 * Bounds for every numeric setting, keyed by option-name suffix (the stored
+	 * key is the crypto id plus this suffix). Single source of truth: the
+	 * getters below clamp against it and NMM_Admin renders its min/max/step
+	 * from it, so the constraint the browser shows and the one the server
+	 * enforces cannot drift apart.
+	 *
+	 * These values are merchant-supplied, and an HTML min/max is only a hint to
+	 * a cooperating browser - a crafted POST, a direct database edit, a bad
+	 * import or a damaged option row all bypass it. Left unchecked, the results
+	 * are not cosmetic: a negative confirmation requirement accepts unconfirmed
+	 * payments, a zero cancellation timer cancels orders the moment they are
+	 * placed, and a low processing percentage matches payments well under what
+	 * was owed. Clamping in the getter protects every consumer without each one
+	 * having to remember to validate.
+	 *
+	 * Defaults deliberately live at the call sites rather than here: the getter
+	 * default (used when a key is absent) and the admin's displayed default
+	 * already differ for some settings, and reconciling them would change
+	 * behaviour on stores that have never saved the field.
+	 */
+	const NUMERIC_BOUNDS = array(
+		'_markup'                                 => array('min' => -99.9, 'max' => 100.0, 'step' => '0.1'),
+		'_hd_percent_to_process'                  => array('min' => 0.8,   'max' => 1.0,   'step' => '0.001'),
+		'_hd_required_confirmations'              => array('min' => 0,     'max' => 100,   'step' => '1'),
+		'_hd_order_cancellation_time_hr'          => array('min' => 0.01,  'max' => 168.0, 'step' => '0.01'),
+		'_autopayment_percent_to_process'         => array('min' => 0.985, 'max' => 1.0,   'step' => '0.0001'),
+		'_autopayment_required_confirmations'     => array('min' => 0,     'max' => 100,   'step' => '1'),
+		'_autopayment_order_cancellation_time_hr' => array('min' => 0.01,  'max' => 168.0, 'step' => '0.01'),
+	);
+
 	private $settings;
-	
+
 	public function __construct($settings) {
 		$this->settings = $settings;
+	}
+
+	/**
+	 * Clamp a stored numeric setting into its documented range.
+	 *
+	 * @param string $suffix   Key into NUMERIC_BOUNDS.
+	 * @param mixed  $value    The raw stored value.
+	 * @param string $fallback Returned when the stored value is not a number at
+	 *                         all (missing, blank, an array, or junk) - there is
+	 *                         no sensible way to clamp a non-number, and the
+	 *                         documented default is safer than 0.
+	 * @return string
+	 */
+	private static function clamp_numeric($suffix, $value, $fallback) {
+		$bounds = self::NUMERIC_BOUNDS[$suffix];
+
+		$candidate = is_string($value) ? trim($value) : $value;
+
+		if (!is_scalar($candidate) || !is_numeric($candidate)) {
+			NMM_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is not numeric; falling back to ' . $fallback . '.', 'warning');
+			return $fallback;
+		}
+
+		$number = (float) $candidate;
+
+		if ($number < $bounds['min']) {
+			NMM_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is below its minimum; clamping ' . $number . ' to ' . $bounds['min'] . '.', 'warning');
+			return (string) $bounds['min'];
+		}
+
+		if ($number > $bounds['max']) {
+			NMM_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is above its maximum; clamping ' . $number . ' to ' . $bounds['max'] . '.', 'warning');
+			return (string) $bounds['max'];
+		}
+
+		// In range: hand back the stored text, so the merchant's own precision
+		// survives the round trip.
+		return (string) $candidate;
 	}
 
 	public function get_selected_cryptos() {		
@@ -127,7 +197,7 @@ class NMM_Settings {
 		$markupKey = $cryptoId . '_markup';
 		if (is_array($this->settings)) {
 			if (array_key_exists($markupKey, $this->settings)) {
-				return trim($this->settings[$markupKey]);
+				return self::clamp_numeric('_markup', $this->settings[$markupKey], '0.0');
 			}
 		}
 
@@ -139,23 +209,23 @@ class NMM_Settings {
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($hdPercentKey, $this->settings)) {
-				return $this->settings[$hdPercentKey];
+				return self::clamp_numeric('_hd_percent_to_process', $this->settings[$hdPercentKey], '0.99');
 			}
 		}
-		
+
 		return '0.99';
 	}
 
 	public function get_hd_required_confirmations($cryptoId) {
 		$hdConfirmationsKey = $cryptoId . '_hd_required_confirmations';
-		
+
 		if (is_array($this->settings)) {
 			if (array_key_exists($hdConfirmationsKey, $this->settings)) {
-				return round($this->settings[$hdConfirmationsKey]);
-			}			
-		}		
+				return round(self::clamp_numeric('_hd_required_confirmations', $this->settings[$hdConfirmationsKey], '2'));
+			}
+		}
 
-		return '2';		
+		return '2';
 	}
 
 	public function get_hd_cancellation_time($cryptoId) {
@@ -163,11 +233,11 @@ class NMM_Settings {
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($hdCancellationKey, $this->settings)) {
-				return $this->settings[$hdCancellationKey];
-			}			
+				return self::clamp_numeric('_hd_order_cancellation_time_hr', $this->settings[$hdCancellationKey], '24');
+			}
 		}
 
-		return '24';		
+		return '24';
 	}
 
 	public function get_autopay_processing_percent($cryptoId) {
@@ -175,11 +245,11 @@ class NMM_Settings {
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($autopayPercentKey, $this->settings)) {
-				return $this->settings[$autopayPercentKey];
-			}	
+				return self::clamp_numeric('_autopayment_percent_to_process', $this->settings[$autopayPercentKey], '0.999');
+			}
 		}
 
-		return '0.999';		
+		return '0.999';
 	}
 
 	public function get_autopay_required_confirmations($cryptoId) {
@@ -187,10 +257,10 @@ class NMM_Settings {
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($autopayConfirmationsKey, $this->settings)) {
-				return round($this->settings[$autopayConfirmationsKey]);
+				return round(self::clamp_numeric('_autopayment_required_confirmations', $this->settings[$autopayConfirmationsKey], '2'));
 			}
 		}
-		
+
 		return '2';
 	}
 
@@ -199,8 +269,8 @@ class NMM_Settings {
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($autopayCancellationKey, $this->settings)) {
-				return $this->settings[$autopayCancellationKey];
-			}			
+				return self::clamp_numeric('_autopayment_order_cancellation_time_hr', $this->settings[$autopayCancellationKey], '24');
+			}
 		}
 
 		return '24';

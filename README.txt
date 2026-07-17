@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.7
+Stable Tag: 2.9.8
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -182,6 +182,13 @@ Yes. Filters are available for redirecting verification requests, customizing th
 Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
 
 == Changelog ==
+
+= 2.9.8 =
+* Checkout: if the payment address cannot be recorded for monitoring, the order now fails with a clear message instead of displaying an address that Autopay is not watching - previously a database error at this moment could send a customer to an address whose payment would never be credited
+* Privacy Mode (HD): a late payment to an order that was already cancelled, failed or refunded no longer completes that order. The payment is recorded as an order note for manual reconciliation, and each verified payment is now claimed atomically so two overlapping background runs cannot both complete the same order
+* Carousel: payment addresses are now handed out through an atomic database counter, so two simultaneous checkouts can no longer be given the same address. A carousel with no usable address fails the order with a clear message instead of hanging the checkout page
+* Hardening: confirmation counts, cancellation timers, markups and processing percentages are now validated on the server against the same limits the settings screen shows, so an out-of-range stored value can no longer weaken payment matching or cancel orders immediately
+* Hardening: the Privacy Mode verifier no longer aborts part-way through when an order has been deleted
 
 = 2.9.7 =
 * Autopay: verification completeness is now tracked per address instead of per currency - a single very busy (or deliberately dust-flooded) payment address can no longer pause automatic order expiry for every order of that cryptocurrency; only orders on the affected address wait until it can be conclusively checked

@@ -61,26 +61,95 @@ class NMM_Hd {
 				if ($paymentAmountVerified) {
 
 					$orderId = $record['order_id'];
-					$order = new WC_Order( $orderId );
+
+					// Re-fetch the order and check its LIVE status before completing
+					// it. The row we are iterating was read at the top of this sweep
+					// and says nothing about the order: it may since have been
+					// cancelled by the customer or the merchant, failed at checkout,
+					// or already been paid out-of-band. Completing such an order
+					// from a late payment would resurrect it. This mirrors the
+					// checks the reconcile pass already makes in
+					// process_assigned_addresses().
+					$order = $orderId ? wc_get_order($orderId) : false;
+
+					if (!$order) {
+						// Order deleted. The row keeps a non-zero total_received, so
+						// the reconcile pass retires the address rather than
+						// recycling it toward a different order.
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received ' . NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived) . ' ' . $cryptoId . ' but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
+						continue;
+					}
+
+					if ($order->is_paid()) {
+						// Already completed through some other path; just settle the
+						// row so it stops being swept.
+						$hdRepo->claim_for_complete($address);
+						continue;
+					}
+
+					if (!$order->has_status(array('pending', 'on-hold'))) {
+						// Cancelled, failed, refunded, or some other state that is
+						// not awaiting payment. Record the payment against the order
+						// for the merchant, but do NOT complete it. The note fires
+						// once per newly-observed payment, not once per sweep,
+						// because total_received was updated above.
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but the order is ' . $order->get_status() . ' - not completing it. Please reconcile manually.', 'warning');
+						$order->add_order_note(sprintf(
+							/* translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address, 4: order status */
+							__('Late payment of %1$s %2$s received at Privacy Mode address %3$s after this order became %4$s. The order has NOT been completed automatically - please reconcile this payment manually.', 'nomiddleman-crypto-payments-for-woocommerce'),
+							NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
+							$cryptoId,
+							$address,
+							$order->get_status()));
+						continue;
+					}
+
+					// Atomically claim the row before completing. Two overlapping
+					// verifier runs can both reach this point with the same
+					// confirmed payment; the conditional update lets exactly one
+					// through.
+					$claim = $hdRepo->claim_for_complete($address);
+
+					if ($claim === NMM_Hd_Repo::CLAIM_DB_ERROR) {
+						// Row state unknown - it may well still be payable. Leave
+						// everything untouched so a later tick retries rather than
+						// completing an order we could not claim.
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: database error claiming ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . '; leaving it for retry.', 'error');
+						continue;
+					}
+
+					if ($claim === NMM_Hd_Repo::CLAIM_ALREADY) {
+						// Another worker claimed it, or the reconcile pass moved it
+						// out of a payable state. Not ours to complete.
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' was already claimed; not completing the order again.', 'warning');
+						continue;
+					}
 
 					$orderNote = sprintf(
 						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time */
 						__('Order payment of %1$s %2$s verified at %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
 						NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 						$cryptoId,
-						date('Y-m-d H:i:s', time()));			
-					
-					//$order->update_status('wc-processing', $orderNote);					
+						date('Y-m-d H:i:s', time()));
+
 					$order->payment_complete();
 					$order->add_order_note($orderNote);
-					
-					$hdRepo->set_status($address, 'complete');
 				}
 				// we received payment but it was not enough to meet store admin's processing requirement
 				else {
 					$orderId = $record['order_id'];
-					$order = new WC_Order( $orderId );
-					
+
+					// wc_get_order() rather than new WC_Order(): the constructor
+					// throws for a deleted order, and that Exception is outside the
+					// try above, so it would abort the whole sweep and leave every
+					// later address unchecked.
+					$order = $orderId ? wc_get_order($orderId) : false;
+
+					if (!$order) {
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received an underpayment but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
+						continue;
+					}
+
 					// handle multiple underpayments, just add a new note
 					if ($record['status'] === 'underpaid') {
 						$orderNote = sprintf(

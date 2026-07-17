@@ -86,6 +86,8 @@ jobs:
         run: php tests/test-sol-pagination.php
       - name: Monero RPC URL SSRF-guard tests
         run: php tests/test-monero-url.php
+      - name: Settings bounds (server-side clamping) tests
+        run: php tests/test-settings-bounds.php
 
   db-integration:
     name: Autopay + retry queue (WordPress + WooCommerce + MariaDB)
@@ -149,3 +151,15 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -qi "skipped" && { echo "::error::order-init-lock test skipped"; exit 1; } || true
           echo "$OUT" | grep -q "ORDER-INIT-LOCK CHECKS PASSED" || { echo "::error::order-init-lock test did not pass"; exit 1; }
+      - name: Carousel atomic allocation test (must run, not skip)
+        run: |
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-carousel.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -qi "skipped" && { echo "::error::carousel test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "CAROUSEL CHECKS PASSED" || { echo "::error::carousel test did not pass"; exit 1; }
+      - name: Privacy Mode (HD) verify vs order-status test (must run, not skip)
+        run: |
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-hd-verify.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -qi "skipped" && { echo "::error::hd-verify test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "HD-VERIFY CHECKS PASSED" || { echo "::error::hd-verify test did not pass"; exit 1; }
