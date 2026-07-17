@@ -540,6 +540,42 @@ sok('full raw page, one incoming: not certified',  !is_array($covMapB) || !isset
 remove_filter('pre_http_request', $btcMockTrunc, 10);
 delete_option('nmmpro_BTC_transactions_consumed_for_btctrunc_addr');
 
+// --- partial detail bodies: an uninspectable tx must not certify ------------
+// The per-tx-detail adapters (Iquidus and kin) fetch each transaction
+// individually. An HTTP 200 whose body is truncated (empty vout - impossible
+// on a real transaction) means the transaction was NOT inspected: the visit
+// must fail (nothing collected) and never certify coverage. Once the body is
+// well-formed again, the short raw page certifies normally.
+$GLOBALS['blk_tx_body'] = array('vout' => array()); // truncated detail body
+$blkMock = function ($pre, $args, $url) {
+	if (strpos($url, 'explorer.blackcoin.nl/ext/getaddress/') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode(array(
+			'last_txs' => array(array('addresses' => 'blk_tx1', 'type' => 'vout')),
+		)), 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'explorer.blackcoin.nl/api/getrawtransaction') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode($GLOBALS['blk_tx_body']), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $blkMock, 10, 3);
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('blk_cov_addr','BLK','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 795000));
+as_tick(3 * 3600);
+$covMapK = get_option('nmm_autopay_scan_covered_at', array());
+sok('truncated detail body does not certify',      !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+sok('truncated detail body goes to the retry set', in_array('BLK|blk_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
+
+$GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 1.0, 'scriptPubKey' => array('addresses' => array('someone_else')))), 'confirmations' => 100, 'time' => time() - 600, 'txid' => 'blk_tx1');
+as_tick(3 * 3600);
+$covMapK = get_option('nmm_autopay_scan_covered_at', array());
+sok('well-formed detail body certifies',           is_array($covMapK) && isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+remove_filter('pre_http_request', $blkMock, 10);
+
 // --- unknown ticker: cannot be verified, must never be certified -----------
 // A row whose coin was removed from the registry is skipped by the scan; it
 // must be marked dirty rather than silently certified, or expiry would cancel

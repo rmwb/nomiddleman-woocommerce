@@ -728,9 +728,11 @@ class NMM_Blockchain {
 
 				$rawTransaction = json_decode($response2['body']);
 
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
 					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure.
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
 					$detailFailed = true;
 					continue;
 				}
@@ -745,6 +747,19 @@ class NMM_Blockchain {
 					}
 					elseif (isset($vout->scriptPubKey->address)) {
 						$voutAddresses = array($vout->scriptPubKey->address);
+					}
+
+					if (empty($voutAddresses) || !isset($vout->value)) {
+						// An output we cannot conclusively inspect - no
+						// readable address while carrying (or possibly
+						// carrying) value - might BE the payment, so this
+						// visit must never certify coverage. Zero-value
+						// address-less outputs (OP_RETURN and kin) are
+						// conclusively not payments and stay ignorable.
+						if (!isset($vout->value) || (float) $vout->value > 0) {
+							$detailFailed = true;
+						}
+						continue;
 					}
 
 					if (in_array($address, $voutAddresses, true)) {
@@ -1058,9 +1073,11 @@ class NMM_Blockchain {
 
 				$rawTransaction = json_decode($response2['body']);
 
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
 					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure.
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
 					$detailFailed = true;
 					continue;
 				}
@@ -1068,6 +1085,18 @@ class NMM_Blockchain {
 				$vouts = $rawTransaction->vout;
 
 			foreach ($rawTransaction->vout as $vout) {
+				if (!isset($vout->scriptPubKey->addresses[0]) || !isset($vout->value)) {
+					// An output we cannot conclusively inspect - no readable
+					// address while carrying (or possibly carrying) value -
+					// might BE the payment, so this visit must never certify
+					// coverage. Zero-value address-less outputs (OP_RETURN
+					// and kin) are conclusively not payments and stay
+					// ignorable.
+					if (!isset($vout->value) || (float) $vout->value > 0) {
+						$detailFailed = true;
+					}
+					continue;
+				}
 				if ($vout->scriptPubKey->addresses[0] === $address) {
 					$transactions[] = new NMM_Transaction($vout->value * 100000000,
 														  $rawTransaction->confirmations,
@@ -1865,9 +1894,11 @@ class NMM_Blockchain {
 
 				$rawTransaction = json_decode($response2['body']);
 
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
 					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure.
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
 					$detailFailed = true;
 					continue;
 				}
@@ -1882,6 +1913,19 @@ class NMM_Blockchain {
 					}
 					elseif (isset($vout->scriptPubKey->address)) {
 						$voutAddresses = array($vout->scriptPubKey->address);
+					}
+
+					if (empty($voutAddresses) || !isset($vout->value)) {
+						// An output we cannot conclusively inspect - no
+						// readable address while carrying (or possibly
+						// carrying) value - might BE the payment, so this
+						// visit must never certify coverage. Zero-value
+						// address-less outputs (OP_RETURN and kin) are
+						// conclusively not payments and stay ignorable.
+						if (!isset($vout->value) || (float) $vout->value > 0) {
+							$detailFailed = true;
+						}
+						continue;
 					}
 
 					if (in_array($address, $voutAddresses, true)) {
@@ -2214,9 +2258,11 @@ class NMM_Blockchain {
 
 				$rawTransaction = json_decode($response2['body']);
 
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
 					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure.
+					// as uninspected as a transport failure. That includes an
+					// EMPTY vout list: every real transaction has outputs, so
+					// an empty list means the body was truncated.
 					$detailFailed = true;
 					continue;
 				}
@@ -2224,6 +2270,18 @@ class NMM_Blockchain {
 				$vouts = $rawTransaction->vout;
 
 			foreach ($rawTransaction->vout as $vout) {
+				if (!isset($vout->scriptPubKey->addresses[0]) || !isset($vout->value)) {
+					// An output we cannot conclusively inspect - no readable
+					// address while carrying (or possibly carrying) value -
+					// might BE the payment, so this visit must never certify
+					// coverage. Zero-value address-less outputs (OP_RETURN
+					// and kin) are conclusively not payments and stay
+					// ignorable.
+					if (!isset($vout->value) || (float) $vout->value > 0) {
+						$detailFailed = true;
+					}
+					continue;
+				}
 				if ($vout->scriptPubKey->addresses[0] === $address) {
 					$transactions[] = new NMM_Transaction($vout->value * 100000000,
 														  $rawTransaction->confirmations,
