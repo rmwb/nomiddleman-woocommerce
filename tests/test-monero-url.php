@@ -131,4 +131,14 @@ $GLOBALS['nmm_is_ms'] = true;
 define('NMM_XMR_ALLOW_PRIVATE_RPC', true);
 mok('constant opt-in allows private on multisite', allowed('http://127.0.0.1:18082/json_rpc'));
 
+// --- batched get_transfers request shape ---------------------------------
+// max_height must be EXPLICIT: upstream wallet-rpc defaults an absent field to
+// the max block number, but older builds/forks default it to 0 under
+// filter_by_height and silently return zero confirmed transfers.
+$p = NMM_Monero::account_transfers_params(1000000, 3 * 3600);
+mok('batch params: filters by height',      $p['filter_by_height'] === true);
+mok('batch params: min matches lookback',   $p['min_height'] === NMM_Monero::lookback_min_height(1000000, 3 * 3600));
+mok('batch params: max_height explicit',    isset($p['max_height']) && $p['max_height'] > 1000000);
+mok('batch params: includes pool',          $p['pool'] === true && $p['in'] === true);
+
 exit($failed ? 1 : 0);

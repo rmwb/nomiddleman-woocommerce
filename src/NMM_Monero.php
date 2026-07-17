@@ -361,6 +361,25 @@ class NMM_Monero {
 		return max(0, (int) $currentHeight - $lookbackBlocks);
 	}
 
+	// Full parameter set for the batched get_transfers call. Pure, so the
+	// request shape is unit-testable. max_height is set EXPLICITLY: upstream
+	// monero-wallet-rpc defaults an absent max_height to the maximum block
+	// number (KV_SERIALIZE_OPT), but older builds and forks default it to 0
+	// under filter_by_height, which silently excludes every confirmed transfer
+	// and would fail all XMR verification with nothing in the logs. The +720
+	// margin (~1 day of blocks) covers blocks mined between the get_height
+	// call and this query.
+	public static function account_transfers_params($currentHeight, $lifetimeSeconds) {
+		return array(
+			'in' => true,
+			'pool' => true,
+			'account_index' => 0,
+			'filter_by_height' => true,
+			'min_height' => self::lookback_min_height((int) $currentHeight, $lifetimeSeconds),
+			'max_height' => (int) $currentHeight + 720,
+		);
+	}
+
 	/**
 	 * Incoming transfers for account 0 within roughly the payment window, in ONE
 	 * get_transfers call, grouped by the receiving subaddress. The cron uses this
@@ -395,13 +414,7 @@ class NMM_Monero {
 			return array('result' => 'error');
 		}
 
-		$result = self::rpc('get_transfers', array(
-			'in' => true,
-			'pool' => true,
-			'account_index' => 0,
-			'filter_by_height' => true,
-			'min_height' => self::lookback_min_height((int) $heightResult->height, $lifetimeSeconds),
-		));
+		$result = self::rpc('get_transfers', self::account_transfers_params((int) $heightResult->height, $lifetimeSeconds));
 
 		if (is_wp_error($result)) {
 			NMM_Util::log(__FILE__, __LINE__, 'XMR batch get_transfers failed: ' . $result->get_error_message());
