@@ -15,9 +15,10 @@ function NMM_do_cron_job() {
 	// see "free" and both proceed. Use a MySQL advisory lock instead - GET_LOCK
 	// is atomic across connections, owned by the acquiring connection, and is
 	// released automatically if that PHP process dies, so a crashed run can
-	// never wedge the cron. The lock name is scoped to this database so sites
-	// sharing a MySQL server do not block one another.
-	$lockName = substr('nmm_cron_' . DB_NAME, 0, 64);
+	// never wedge the cron. The lock name is scoped to this site (database +
+	// table prefix) so neither sites sharing a MySQL server nor subsites on
+	// one multisite network block one another.
+	$lockName = NMM_Util::cron_lock_name();
 	$lockAcquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName));
 
 	if ($lockAcquired === '0') {

@@ -73,6 +73,19 @@ $wpdb2->prefix = $main->prefix; // restore for the remaining checks
 lok('same order id on a DIFFERENT site is free', $mainHold === '1' && $site2 === '1', "$mainHold,$site2");
 if ($mainHold === '1') { NMM_Util::release_order_init_lock($orderA); }
 
+// Cron lock: scoped per site the same way - a second subsite's cron must not
+// contend with the main site's (each subsite has its own tables and backlog),
+// and the hashed name can never truncate into a collision.
+$mainCron = NMM_Util::cron_lock_name();
+$wpdb2->prefix = $main->prefix . 's2_';
+$GLOBALS['wpdb'] = $wpdb2;
+$site2Cron = NMM_Util::cron_lock_name();
+$GLOBALS['wpdb'] = $main;
+$wpdb2->prefix = $main->prefix;
+lok('cron lock differs across subsites',        $mainCron !== $site2Cron, "$mainCron vs $site2Cron");
+lok('cron lock stable for the same site',       $mainCron === NMM_Util::cron_lock_name());
+lok('cron lock stays under 64 chars',           strlen($mainCron) < 64, 'len=' . strlen($mainCron));
+
 // The lock name must be order-specific even if DB_NAME is long: two different
 // orders must never collide on one truncated 64-char lock name. Prove it by
 // holding both at once on connection 2.
