@@ -317,7 +317,8 @@ add_filter('nmm_xmr_account_transactions', function () { return array('result' =
 NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
 remove_all_filters('nmm_xmr_account_transactions');
 $covMap = get_option('nmm_autopay_scan_covered_at', array());
-aok('failed fetch does not stamp coverage',      !is_array($covMap) || !isset($covMap['XMR']));
+$exclMap = get_option('nmm_autopay_scan_incomplete', array());
+aok('failed addresses excluded from certification', is_array($exclMap) && isset($exclMap['XMR|xmr_aged']), 'excl=' . (is_array($exclMap) ? implode(',', array_keys($exclMap)) : '(scalar)'));
 NMM_Payment::cancel_expired_payments();
 aok('aged row survives a failed check',          rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
 
@@ -365,10 +366,58 @@ remove_filter('pre_http_request', $btcMock, 10);
 remove_all_filters('nmm_xmr_account_transactions');
 
 $covMap = get_option('nmm_autopay_scan_covered_at', array());
-aok('healthy coin stamped while other coin fails', is_array($covMap) && isset($covMap['BTC']) && !isset($covMap['XMR']), 'map=' . print_r($covMap, true));
+$exclMap = get_option('nmm_autopay_scan_incomplete', array());
+aok('healthy coin stamped while other coin fails', is_array($covMap) && isset($covMap['BTC']), 'map=' . (is_array($covMap) ? implode(',', array_keys($covMap)) : '(scalar)'));
+aok('failing coin address excluded',               is_array($exclMap) && isset($exclMap['XMR|xmr_aged2']), 'excl=' . (is_array($exclMap) ? implode(',', array_keys($exclMap)) : '(scalar)'));
 NMM_Payment::cancel_expired_payments();
 aok('healthy coin: aged row expires normally',    rec_status($wpdb,$pt,$oBtcAged) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oBtcAged));
 aok('failing coin: aged row stays protected',     rec_status($wpdb,$pt,$oXmrAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oXmrAged));
+
+// Address-level granularity: a permanently busy (dusted) address must defer
+// only ITS OWN rows - the coin's other aged orders still expire normally.
+// This is the whole-coin-freeze regression: previously one dusted carousel
+// address marked BTC dirty on every sweep and NO BTC order ever auto-cancelled.
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
+delete_option('nmm_autopay_scan_sweep_start');
+$oBusy = mkorder('pending');
+$oQuiet = mkorder('pending');
+$agedTime2 = time() - 3 * 24 * 3600;
+$wpdb->query($wpdb->prepare(
+	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
+	 VALUES ('btc_busy','BTC','unpaid',%d,%d,'0.00100000',0), ('btc_quiet','BTC','unpaid',%d,%d,'0.00200000',0)",
+	$agedTime2, $oBusy, $agedTime2, $oQuiet));
+
+$btcAddrMock = function ($pre, $args, $url) {
+	if (strpos($url, 'mempool.space/api/blocks/tip/height') !== false) {
+		return array('response' => array('code' => 200), 'body' => '105', 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'mempool.space/api/address/btc_busy') !== false) {
+		// permanently full page of recent unrelated activity (dusting)
+		$txs = array();
+		for ($i = 0; $i < 25; $i++) {
+			$txs[] = array('txid' => sprintf('busy_%02d', $i), 'status' => array('confirmed' => true, 'block_height' => 100, 'block_time' => time() - 120 - $i), 'vout' => array(array('scriptpubkey_address' => 'someone_else', 'value' => 1000)));
+		}
+		return array('response' => array('code' => 200), 'body' => json_encode($txs), 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'mempool.space/api/address/btc_quiet') !== false) {
+		return array('response' => array('code' => 200), 'body' => '[]', 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $btcAddrMock, 10, 3);
+NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // one page: wrap
+remove_filter('pre_http_request', $btcAddrMock, 10);
+NMM_Payment::cancel_expired_payments();
+aok('quiet address: aged row expires normally',   rec_status($wpdb,$pt,$oQuiet) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oQuiet));
+aok('busy (dusted) address: its rows defer',      rec_status($wpdb,$pt,$oBusy) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oBusy));
+$covMap = get_option('nmm_autopay_scan_covered_at', array());
+aok('  coin stamp still advanced',                is_array($covMap) && isset($covMap['BTC']), 'map=' . (is_array($covMap) ? implode(',', array_keys($covMap)) : '(scalar)'));
 
 $wpdb->query("DELETE FROM `$pt`");
 delete_option('nmm_autopay_scan_cursor');
@@ -377,4 +426,6 @@ delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_sweep_start');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

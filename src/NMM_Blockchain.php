@@ -534,11 +534,23 @@ class NMM_Blockchain {
 			}
 
 			$utxoRows = json_decode($response2['body']);
+			if (!is_array($utxoRows)) {
+				NMM_Util::log(__FILE__, __LINE__, 'koios tx_utxos: malformed bulk response body; failing the visit for retry.');
 
-			foreach ((array) $utxoRows as $utxoRow) {
-				if (!isset($utxoRow->outputs) || !is_array($utxoRow->outputs)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+
+			$seenHashes = array();
+			foreach ($utxoRows as $utxoRow) {
+				if (!isset($utxoRow->tx_hash) || !isset($utxoRow->outputs) || !is_array($utxoRow->outputs)) {
+					// Malformed row: leave its hash unaccounted so the check
+					// below fails the whole visit.
 					continue;
 				}
+				$seenHashes[$utxoRow->tx_hash] = true;
 
 				// amounts are in lovelace (1e-6 ADA), matching ADA's round precision
 				$received = 0;
@@ -553,6 +565,23 @@ class NMM_Blockchain {
 														  10000,
 														  isset($txTimes[$utxoRow->tx_hash]) ? $txTimes[$utxoRow->tx_hash] : time(),
 														  $utxoRow->tx_hash);
+				}
+			}
+
+			// Account for every requested hash: Koios can return HTTP 200 with
+			// an empty or partial result set, and a transaction missing from
+			// (or malformed in) the bulk response was NOT inspected - treating
+			// it as "no payment" would let a short address page certify
+			// coverage over an unverified payment. Fail the visit so the
+			// verifier retries it instead.
+			foreach ($txHashes as $requestedHash) {
+				if (!isset($seenHashes[$requestedHash])) {
+					NMM_Util::log(__FILE__, __LINE__, 'koios tx_utxos: transaction ' . $requestedHash . ' missing from the bulk response; failing the visit for retry.');
+
+					return array(
+						'result' => 'error',
+						'total_received' => '',
+					);
 				}
 			}
 		}
@@ -678,8 +707,11 @@ class NMM_Blockchain {
 
 		$body = json_decode($response['body']);
 
-		if (property_exists($body, 'error')) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . $body->error);
+		// A malformed 200 body decodes to null/scalar; property_exists() on a
+		// non-object throws a TypeError on PHP 8, which would escape the
+		// verifier's fetch boundary - treat it as the fetch failure it is.
+		if (!is_object($body) || property_exists($body, 'error')) {
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
 			$result = array(
 				'result' => 'error',
 				'total_received' => '',
@@ -865,10 +897,24 @@ class NMM_Blockchain {
 				);
 			}
 
-			foreach ((array) json_decode($response2['body']) as $rawTransaction) {
-				if (!isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+			$rawTransactions = json_decode($response2['body']);
+			if (!is_array($rawTransactions)) {
+				NMM_Util::log(__FILE__, __LINE__, 'whatsonchain bulk txs: malformed bulk response body; failing the visit for retry.');
+
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+
+			$seenHashes = array();
+			foreach ($rawTransactions as $rawTransaction) {
+				if (!isset($rawTransaction->txid) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+					// Malformed row: leave its hash unaccounted so the check
+					// below fails the whole visit.
 					continue;
 				}
+				$seenHashes[$rawTransaction->txid] = true;
 
 				$height = isset($txHeights[$rawTransaction->txid]) ? $txHeights[$rawTransaction->txid] : 0;
 				$confirmations = ($height > 0 && $tipHeight > 0) ? $tipHeight - $height + 1 : 0;
@@ -880,6 +926,23 @@ class NMM_Blockchain {
 															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
 															  $rawTransaction->txid);
 					}
+				}
+			}
+
+			// Account for every requested hash: WhatsOnChain can return HTTP
+			// 200 with an empty or partial result set (null entries for
+			// unknown txids), and a transaction missing from the bulk response
+			// was NOT inspected - treating it as "no payment" would let a
+			// short address page certify coverage over an unverified payment.
+			// Fail the visit so the verifier retries it instead.
+			foreach ($txHashes as $requestedHash) {
+				if (!isset($seenHashes[$requestedHash])) {
+					NMM_Util::log(__FILE__, __LINE__, 'whatsonchain bulk txs: transaction ' . $requestedHash . ' missing from the bulk response; failing the visit for retry.');
+
+					return array(
+						'result' => 'error',
+						'total_received' => '',
+					);
 				}
 			}
 		}
@@ -1834,8 +1897,11 @@ class NMM_Blockchain {
 
 		$body = json_decode($response['body']);
 
-		if (property_exists($body, 'error')) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . $body->error);
+		// A malformed 200 body decodes to null/scalar; property_exists() on a
+		// non-object throws a TypeError on PHP 8, which would escape the
+		// verifier's fetch boundary - treat it as the fetch failure it is.
+		if (!is_object($body) || property_exists($body, 'error')) {
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
 			$result = array(
 				'result' => 'error',
 				'total_received' => '',

@@ -199,7 +199,8 @@ class NMM_Payment {
 		$xmrByAddress = array();
 
 		$newFailed = array();
-		$partialCryptos = array();
+		$coinDirty = array();       // whole-coin exclusions (unverifiable ticker)
+		$incompleteKeys = array();  // per-ADDRESS exclusions ("crypto|address")
 
 		foreach ($toProcess as $record) {
 			$cryptoId = $record['cryptocurrency'];
@@ -209,10 +210,10 @@ class NMM_Payment {
 				// A ticker no longer in the registry (coin support removed)
 				// cannot be verified at all - it must not be certified covered,
 				// or expiry would cancel its orders without any payment check.
-				// Dirty (not failed): there is no point re-fetching it every
-				// tick, and the next sweep re-marks it for as long as its
-				// unpaid rows exist, so they are never auto-cancelled.
-				$partialCryptos[$cryptoId] = true;
+				// Coin-level dirty (not failed): there is no point re-fetching
+				// it every tick, and the next sweep re-marks it for as long as
+				// its unpaid rows exist, so they are never auto-cancelled.
+				$coinDirty[$cryptoId] = true;
 				continue;
 			}
 			$crypto = $cryptos[$cryptoId];
@@ -246,18 +247,24 @@ class NMM_Payment {
 					// not yet inspected this address's whole matching window
 					// (a busy or dusted address spans several ticks). Not a
 					// failure - collected payments were returned and progress
-					// is durable - but not verification either: the coin must
-					// not be certified covered while signatures below the
+					// is durable - but not verification either: THIS ADDRESS
+					// must not be certified while signatures below its
 					// internal cursor, or in its retry queue, are uninspected.
-					$partialCryptos[$cryptoId] = true;
+					// Address-level, not coin-level: one busy address must not
+					// freeze expiry for the whole currency.
+					$incompleteKeys[self::scan_key($record)] = true;
 				}
 				elseif ($cryptoId !== 'SOL' && self::page_possibly_truncated($cryptoId, $fetched, $cryptoLifetime, $now)) {
 					// A full newest-page (raw, pre-filtering) whose oldest
 					// entry is still inside the matching window: in-window
 					// history may be hidden below the fixed-depth page (see
 					// page_possibly_truncated) - a valid check, but not
-					// certifiable coverage.
-					$partialCryptos[$cryptoId] = true;
+					// certifiable coverage for THIS ADDRESS. Address-level,
+					// not coin-level: a permanently busy (or deliberately
+					// dusted) address would otherwise mark the coin dirty on
+					// every sweep and no order of that currency would ever
+					// auto-cancel.
+					$incompleteKeys[self::scan_key($record)] = true;
 				}
 			}
 		}
@@ -272,23 +279,47 @@ class NMM_Payment {
 		// again). Without this, an endpoint recovering after drops would let a
 		// later clean wrap certify coverage for addresses that were never
 		// successfully checked, and an aged paid order could be cancelled.
-		$dirtyAdd = $partialCryptos;
 		$retryCap = max(1, (int) apply_filters('nmm_autopay_scan_retry_cap', 200));
 		$newFailed = array_values(array_unique($newFailed));
 		if (count($newFailed) > $retryCap) {
+			// Dropped keys will not be retried, so their addresses stay
+			// unverified until the next sweep visits them - exclude exactly
+			// those addresses (not their whole coins) from certification.
 			foreach (array_slice($newFailed, $retryCap) as $droppedKey) {
-				$droppedParts = explode('|', $droppedKey, 2);
-				$dirtyAdd[$droppedParts[0]] = true;
+				$incompleteKeys[$droppedKey] = true;
 			}
 			$newFailed = array_slice($newFailed, 0, $retryCap);
 		}
-		if (!empty($dirtyAdd)) {
+
+		// Accumulate this tick's per-address incompleteness (truncated pages,
+		// mid-window Solana sweeps, dropped retries) into the BUILDER set for
+		// the sweep in progress; the wrap below promotes it to the active
+		// exclusion set that cancel_expired_payments() consults. Bounded: past
+		// the cap we can no longer track addresses individually, so the
+		// overflow's coins fall back to the coarse coin-level dirty marker.
+		if (!empty($incompleteKeys)) {
+			$builder = get_option('nmm_autopay_scan_incomplete_next', array());
+			if (!is_array($builder)) {
+				$builder = array();
+			}
+			foreach (array_keys($incompleteKeys) as $incompleteKey) {
+				if (count($builder) >= 500 && !isset($builder[$incompleteKey])) {
+					$incompleteParts = explode('|', $incompleteKey, 2);
+					$coinDirty[$incompleteParts[0]] = true;
+					continue;
+				}
+				$builder[$incompleteKey] = true;
+			}
+			update_option('nmm_autopay_scan_incomplete_next', $builder, false);
+		}
+
+		if (!empty($coinDirty)) {
 			$dirty = get_option('nmm_autopay_scan_dirty', array());
 			if (!is_array($dirty)) {
 				$dirty = array();
 			}
-			foreach (array_keys($dirtyAdd) as $dirtyAddCryptoId) {
-				$dirty[$dirtyAddCryptoId] = true;
+			foreach (array_keys($coinDirty) as $dirtyCryptoId) {
+				$dirty[$dirtyCryptoId] = true;
 			}
 			update_option('nmm_autopay_scan_dirty', $dirty, false);
 		}
@@ -316,41 +347,31 @@ class NMM_Payment {
 		// protected until a genuinely complete sweep finishes. A single page
 		// covering the whole backlog stamps this tick's own start.
 		//
-		// Coverage is stamped PER CURRENCY, and a currency with an unresolved
-		// fetch failure ($newFailed carries this tick's failures AND re-failed
-		// retries from earlier ticks) keeps its previous stamp: a failed
-		// address was not verified, and stamping it would let cancellation
-		// treat it as checked. Scoping this per currency matters - one
-		// permanently failing endpoint (say, an unconfigured Monero wallet
-		// RPC) must only hold back ITS coin's expirations, not freeze
-		// cancellation for every currency on the store. The retry path
-		// re-checks the failed address next tick, and that coin's stamp waits
-		// for the next wrap with all of its fetches clean.
-		//
-		// The stamp's claim is "every address of this coin was checked, with
-		// nothing relevant possibly hidden, after the row's window closed".
-		// Three incompleteness signals guard it: fetch failures (above),
-		// Solana's own multi-tick sweep state (sol_address_fully_swept), and
-		// the generic full-page truncation check (page_possibly_truncated) for
-		// the fixed-depth explorer adapters - all three route into the dirty
-		// marker below.
+		// Coverage is stamped PER CURRENCY, with incompleteness tracked PER
+		// ADDRESS. The stamp's claim is "every address of this coin was
+		// checked, with nothing relevant possibly hidden, after the row's
+		// window closed - EXCEPT the addresses in the active exclusion set,
+		// whose rows defer". The exclusion set (promoted from the builder at
+		// each wrap, plus the keys still failing in the retry set) carries the
+		// addresses the sweep could not conclusively verify: fetch failures,
+		// Solana mid-window sweeps, possibly-truncated fixed-depth pages, and
+		// dropped retries. Address-level granularity matters in both
+		// directions: one permanently failing endpoint or one busy/dusted
+		// address must only hold back ITS OWN rows' expirations, never freeze
+		// cancellation for a whole currency - and conversely an excluded
+		// address's rows never expire until a sweep verifies it cleanly (the
+		// next wrap then simply drops it from the set). Only a ticker missing
+		// from the registry (nothing of that coin can ever be verified) still
+		// blocks its coin's stamp via the coin-level dirty marker.
 		if ($wrapped || $take >= $total) {
-			$failedCryptos = array();
-			foreach ($newFailed as $failedKey) {
-				$failedParts = explode('|', $failedKey, 2);
-				$failedCryptos[$failedParts[0]] = true;
-			}
-
-			// Currencies marked dirty during this sweep - failed keys dropped
-			// from the retry set, or a Solana address whose bounded internal
-			// history sweep is still mid-window - have addresses that were not
-			// fully verified: exclude them from this stamp, then clear the
-			// marker. The sweep now starting revisits every address, and a
-			// still-incomplete address simply re-marks its coin dirty.
+			// Coin-level exclusions: unverifiable tickers and address-tracking
+			// overflow. Cleared after use - the sweep now starting re-marks
+			// them for as long as their rows exist.
+			$excludedCryptos = array();
 			$dirty = get_option('nmm_autopay_scan_dirty', array());
 			if (is_array($dirty) && !empty($dirty)) {
 				foreach (array_keys($dirty) as $dirtyCryptoId) {
-					$failedCryptos[$dirtyCryptoId] = true;
+					$excludedCryptos[$dirtyCryptoId] = true;
 				}
 				update_option('nmm_autopay_scan_dirty', array(), false);
 			}
@@ -361,11 +382,26 @@ class NMM_Payment {
 				$coveredMap = array();
 			}
 			foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
-				if (!isset($failedCryptos[$sweptCryptoId])) {
+				if (!isset($excludedCryptos[$sweptCryptoId])) {
 					$coveredMap[$sweptCryptoId] = $stampAt;
 				}
 			}
 			update_option('nmm_autopay_scan_covered_at', $coveredMap, false);
+
+			// Promote the completed sweep's incomplete addresses to the ACTIVE
+			// exclusion set cancel_expired_payments() consults, adding the
+			// keys still failing in the retry set (they were visited but never
+			// verified). The builder resets: the sweep now starting revisits
+			// every address, and a still-incomplete one re-enters the builder.
+			$promoted = get_option('nmm_autopay_scan_incomplete_next', array());
+			if (!is_array($promoted)) {
+				$promoted = array();
+			}
+			foreach ($newFailed as $failedKey) {
+				$promoted[$failedKey] = true;
+			}
+			update_option('nmm_autopay_scan_incomplete', $promoted, false);
+			update_option('nmm_autopay_scan_incomplete_next', array(), false);
 
 			// The next sweep begins with the head rows this tick just fetched.
 			update_option('nmm_autopay_scan_sweep_start', $now, false);
@@ -456,8 +492,13 @@ class NMM_Payment {
 		try {
 			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
 		}
-		catch (\Exception $e) {
-			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId);
+		catch (\Throwable $e) {
+			// \Throwable, not \Exception: adapter parsing of a malformed
+			// HTTP-200 body can raise TypeError/Error on PHP 8, and an
+			// uncaught one would abort the whole sweep BEFORE the cursor and
+			// retry state persist - the same bad address would then terminate
+			// every cron run. A throw here is just a failed fetch: retry it.
+			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId . ': ' . $e->getMessage(), 'warning');
 			return false;
 		}
 
@@ -883,6 +924,15 @@ class NMM_Payment {
 			$coveredMap = array(); // unknown format: treat as no coverage (defer, never cancel unverified)
 		}
 
+		// Addresses the last completed sweep could not conclusively verify
+		// (failing endpoint, possibly-truncated page, mid-window Solana sweep,
+		// dropped retry). Their rows defer - only theirs; the coin's other
+		// orders expire normally against the coin's stamp.
+		$incompleteAddrs = get_option('nmm_autopay_scan_incomplete', array());
+		if (!is_array($incompleteAddrs)) {
+			$incompleteAddrs = array();
+		}
+
 		// Only rows old enough to be expirable for SOME configured coin can
 		// possibly be cancelled. The shortest cancellation window among the coins
 		// that actually have unpaid rows is a safe coarse cutoff: anything newer
@@ -927,6 +977,16 @@ class NMM_Payment {
 			NMM_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
 
 			if ($timeSinceOrder > $paymentCancellationTimeSec) {
+				if (isset($incompleteAddrs[$cryptoId . '|' . $paymentRecord['address']])) {
+					// This address was not conclusively verified by the last
+					// completed sweep - a payment may be hidden from view, so
+					// its rows must not expire yet. The exclusion refreshes at
+					// every wrap: once a sweep verifies the address cleanly,
+					// expiry resumes on the next cancellation pass.
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: deferring expiry for ' . $cryptoId . ' address ' . $paymentRecord['address'] . ' (not conclusively verified by the last sweep).');
+					continue;
+				}
+
 				$orderId = $paymentRecord['order_id'];
 				$orderAmount = $paymentRecord['order_amount'];
 				$address = $paymentRecord['address'];
