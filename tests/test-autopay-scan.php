@@ -23,6 +23,8 @@ delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_sweep_start');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 
 $GLOBALS['as_ok'] = true;
 function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['as_ok'] = false; } }
@@ -43,6 +45,13 @@ function as_tick($lifetime) {
 function as_cov() {
 	$m = get_option('nmm_autopay_scan_covered_at', array());
 	return (is_array($m) && isset($m['XMR'])) ? (int) $m['XMR'] : 0;
+}
+
+// Whether "crypto|address" is in the ACTIVE per-address exclusion set that
+// cancel_expired_payments() consults (promoted from the builder at each wrap).
+function as_excluded($key) {
+	$m = get_option('nmm_autopay_scan_incomplete', array());
+	return is_array($m) && isset($m[$key]);
 }
 
 // scan_plan (pure): budget/window sizing. Small store stays at baseline with the
@@ -303,9 +312,11 @@ $retryNow = get_option('nmm_autopay_scan_retry', array());
 $goneKey = $retryNow[0]; // e.g. 'XMR|xmrf_0'
 $goneParts = explode('|', $goneKey, 2);
 $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE address=%s", $goneParts[1])); // as if paid/removed
-as_tick(3 * 3600); // still failing fetches; this tick wraps past the list end
+as_tick(3 * 3600); // still failing fetches
 sok('stale retry key dropped once not unpaid',  !in_array($goneKey, get_option('nmm_autopay_scan_retry', array()), true), 'gone=' . $goneKey);
-sok('no coverage stamp while fetches fail',     as_cov() === 0);
+as_tick(3 * 3600); // wraps past the list end, still failing
+sok('failing addresses excluded at the wrap',   as_excluded('XMR|xmrf_1'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
+sok('coin still stamps despite failing addrs',  as_cov() > 0);
 
 // Once fetches succeed again, the retry set drains.
 remove_all_filters('nmm_xmr_account_transactions');
@@ -316,6 +327,7 @@ sok('retry set drains after fetches succeed',    count(get_option('nmm_autopay_s
 // A few more clean ticks guarantee a failure-free wrap, which may stamp again.
 for ($t = 0; $t < 4; $t++) { as_tick(3 * 3600); }
 sok('coverage resumes once fetches succeed',     as_cov() > 0);
+sok('exclusions drain once fetches succeed',     !as_excluded('XMR|xmrf_1'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 
 // --- coverage stamp semantics: sweep START time, and stale-cursor wraps ----
 // The stamp must be the completed sweep's start, not its wrap time: a row
@@ -365,6 +377,8 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 for ($i = 0; $i < 9; $i++) {
 	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrd_%d', $i), time() - 2 * HOUR_IN_SECONDS, 770000 + $i));
 }
@@ -375,11 +389,13 @@ add_filter('nmm_xmr_account_transactions', function () { return array('result' =
 as_tick(3 * 3600); // recovery: retries 0,1 + sweep 3,4,5 all clean
 as_tick(3 * 3600); // 6,7,8 - end of list
 as_tick(3 * 3600); // wraps clean, but xmrd_2 was dropped unverified -> no stamp
-sok('dropped failure blocks the recovery wrap',   as_cov() === 0, 'covered=' . as_cov());
+sok('dropped failure excluded at recovery wrap',  as_excluded('XMR|xmrd_2'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
+sok('coin still stamps at the recovery wrap',     as_cov() > 0, 'covered=' . as_cov());
 as_tick(3 * 3600); // fresh sweep re-visits everything: 3,4,5
 as_tick(3 * 3600); // 6,7,8
 as_tick(3 * 3600); // wraps - genuinely clean now
 sok('next fully-clean sweep stamps coverage',     as_cov() > 0, 'covered=' . as_cov());
+sok('clean sweep clears the dropped exclusion',   !as_excluded('XMR|xmrd_2'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 remove_all_filters('nmm_autopay_scan_retry_cap');
 
 // --- partial Solana history sweep must not certify coverage ----------------
@@ -430,6 +446,8 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 delete_transient('nmm_sol_cursor_' . md5($solAddr));
 $wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'SOL','unpaid',%d,%d,'0.10000000',0)", $solAddr, time() - 2 * HOUR_IN_SECONDS, 780000));
 // 30 in-window signatures > the 25-per-tick inspection budget -> partial pass.
@@ -437,7 +455,8 @@ for ($i = 0; $i < 30; $i++) { $GLOBALS['scov_sigs'][] = array('signature' => spr
 
 as_tick(3 * 3600); // single-page backlog: wrap-equivalent, but SOL is partial
 $covMapSol = get_option('nmm_autopay_scan_covered_at', array());
-sok('partial SOL sweep does not certify coverage', !is_array($covMapSol) || !isset($covMapSol['SOL']), 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
+sok('partial SOL sweep excludes the address',      as_excluded('SOL|' . $solAddr), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
+sok('partial SOL sweep still stamps the coin',     is_array($covMapSol) && isset($covMapSol['SOL']), 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
 
 as_tick(3 * 3600); // remaining 5 signatures: internal sweep completes mid-tick
 $covMapSol = get_option('nmm_autopay_scan_covered_at', array());
@@ -450,6 +469,8 @@ sok('completed SOL sweep certifies coverage',      is_array($covMapSol) && isset
 // so the sweep is incomplete and must NOT certify SOL coverage.
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 $srt = $wpdb->prefix . NMM_SOL_RETRY_TABLE;
 $wpdb->query($wpdb->prepare("DELETE FROM `$srt` WHERE address=%s", $solAddr));
 $wpdb->query($wpdb->prepare("INSERT INTO `$srt` (address, signature, first_failed_at, attempts, next_retry_at, block_time) VALUES (%s,'screc_sig',%d,1,%d,%d)", $solAddr, time() - 300, time() - 10, time() - 300));
@@ -457,7 +478,7 @@ $GLOBALS['scov_sigs_fail'] = true;
 $GLOBALS['scov_tx_credit'] = 5; // recovered, but nowhere near the order amount
 as_tick(3 * 3600);
 $covMapSol = get_option('nmm_autopay_scan_covered_at', array());
-sok('recovered retry + failed page never certifies', !is_array($covMapSol) || !isset($covMapSol['SOL']), 'map=' . (is_array($covMapSol) ? implode(',', array_keys($covMapSol)) : '(scalar)'));
+sok('recovered retry + failed page excludes addr',   as_excluded('SOL|' . $solAddr), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 $GLOBALS['scov_sigs_fail'] = false;
 $GLOBALS['scov_tx_credit'] = 0;
 $wpdb->query($wpdb->prepare("DELETE FROM `$srt` WHERE address=%s", $solAddr));
@@ -506,24 +527,29 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 $wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('btctrunc_addr','BTC','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 785000));
 
 $GLOBALS['btr_txs'] = $btrPage(25, 1800); // FULL page, oldest entry well inside the window
 as_tick(3 * 3600);
 $covMapB = get_option('nmm_autopay_scan_covered_at', array());
-sok('full in-window page does not certify',        !is_array($covMapB) || !isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+sok('full in-window page excludes the address',    as_excluded('BTC|btctrunc_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
+sok('full in-window page still stamps the coin',   is_array($covMapB) && isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
 
 $GLOBALS['btr_txs'] = $btrPage(25, 10 * 24 * 3600); // full page reaching PAST the window
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 as_tick(3 * 3600);
 $covMapB = get_option('nmm_autopay_scan_covered_at', array());
-sok('page spanning past the window certifies',     is_array($covMapB) && isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+sok('page spanning past the window certifies',     is_array($covMapB) && isset($covMapB['BTC']) && !as_excluded('BTC|btctrunc_addr'), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
 
 $GLOBALS['btr_txs'] = $btrPage(3, 1800); // short page: nothing below it
 delete_option('nmm_autopay_scan_covered_at');
 as_tick(3 * 3600);
 $covMapB = get_option('nmm_autopay_scan_covered_at', array());
-sok('short page certifies',                        is_array($covMapB) && isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+sok('short page certifies',                        is_array($covMapB) && isset($covMapB['BTC']) && !as_excluded('BTC|btctrunc_addr'), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
 
 // Mixed directions: fullness must be judged on the RAW page, not the
 // incoming-filtered result. 25 raw in-window entries of which only ONE pays
@@ -534,9 +560,11 @@ for ($i = 1; $i < 25; $i++) { $btrMixed[$i]['vout'] = array(array('scriptpubkey_
 $GLOBALS['btr_txs'] = $btrMixed;
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 as_tick(3 * 3600);
 $covMapB = get_option('nmm_autopay_scan_covered_at', array());
-sok('full raw page, one incoming: not certified',  !is_array($covMapB) || !isset($covMapB['BTC']), 'map=' . (is_array($covMapB) ? implode(',', array_keys($covMapB)) : '(scalar)'));
+sok('full raw page, one incoming: addr excluded',  as_excluded('BTC|btctrunc_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 remove_filter('pre_http_request', $btcMockTrunc, 10);
 delete_option('nmmpro_BTC_transactions_consumed_for_btctrunc_addr');
 
@@ -564,10 +592,12 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 $wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('blk_cov_addr','BLK','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 795000));
 as_tick(3 * 3600);
 $covMapK = get_option('nmm_autopay_scan_covered_at', array());
-sok('truncated detail body does not certify',      !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+sok('truncated detail body excludes the address',  as_excluded('BLK|blk_cov_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 sok('truncated detail body goes to the retry set', in_array('BLK|blk_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
 
 // Malformed output entries must be just as uninspectable: a nonnumeric value
@@ -576,32 +606,126 @@ sok('truncated detail body goes to the retry set', in_array('BLK|blk_cov_addr', 
 $GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 'garbage', 'scriptPubKey' => array('addresses' => array('someone_else')))));
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 as_tick(3 * 3600);
 $covMapK = get_option('nmm_autopay_scan_covered_at', array());
-sok('nonnumeric output value does not certify',    !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+sok('nonnumeric output value excludes the addr',   as_excluded('BLK|blk_cov_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 
 $GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 1.0, 'scriptPubKey' => array('addresses' => array('')))));
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 as_tick(3 * 3600);
 $covMapK = get_option('nmm_autopay_scan_covered_at', array());
-sok('blank-string address does not certify',       !is_array($covMapK) || !isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+sok('blank-string address excludes the addr',      as_excluded('BLK|blk_cov_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
 
 // A genuine OP_RETURN-class output (numeric zero, NO address list) is a
 // conclusive non-payment and must not block certification.
 $GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 0)));
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 as_tick(3 * 3600);
 $covMapK = get_option('nmm_autopay_scan_covered_at', array());
-sok('zero-value addressless output still certifies', is_array($covMapK) && isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+sok('zero-value addressless output still certifies', is_array($covMapK) && isset($covMapK['BLK']) && !as_excluded('BLK|blk_cov_addr'), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
 
 $GLOBALS['blk_tx_body'] = array('vout' => array(array('value' => 1.0, 'scriptPubKey' => array('addresses' => array('someone_else')))), 'confirmations' => 100, 'time' => time() - 600, 'txid' => 'blk_tx1');
 delete_option('nmm_autopay_scan_covered_at');
 as_tick(3 * 3600);
 $covMapK = get_option('nmm_autopay_scan_covered_at', array());
-sok('well-formed detail body certifies',           is_array($covMapK) && isset($covMapK['BLK']), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
+sok('well-formed detail body certifies',           is_array($covMapK) && isset($covMapK['BLK']) && !as_excluded('BLK|blk_cov_addr'), 'map=' . (is_array($covMapK) ? implode(',', array_keys($covMapK)) : '(scalar)'));
 remove_filter('pre_http_request', $blkMock, 10);
+
+// A malformed TOP-LEVEL body (json null) previously threw a TypeError through
+// property_exists() that escaped the \Exception-only fetch boundary and killed
+// the whole cron run before cursor/retry state persisted. It must now be an
+// ordinary fetch failure: the tick completes and the address is retried.
+$blkNullMock = function ($pre, $args, $url) {
+	if (strpos($url, 'explorer.blackcoin.nl/ext/getaddress/') !== false) {
+		return array('response' => array('code' => 200), 'body' => 'null', 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $blkNullMock, 10, 3);
+delete_option('nmm_autopay_scan_retry');
+as_tick(3 * 3600); // must not fatal
+sok('null top-level body survives as a retry',     in_array('BLK|blk_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
+remove_filter('pre_http_request', $blkNullMock, 10);
+
+// --- bulk-detail accounting: every requested hash must come back ------------
+// Koios (ADA) and WhatsOnChain (BSV) are asked for details of a LIST of tx
+// hashes and can answer HTTP 200 with an empty or partial set. A transaction
+// missing from the bulk response was not inspected: treating it as "no
+// payment" would let a short address page certify coverage over an unverified
+// payment. The visit must fail (retry) until the response accounts for every
+// requested hash.
+$GLOBALS['ada_bulk_partial'] = true;
+$adaMock = function ($pre, $args, $url) {
+	if (strpos($url, 'api.koios.rest/api/v1/address_txs') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode(array(
+			array('tx_hash' => 'ada_t1', 'block_time' => time() - 600),
+			array('tx_hash' => 'ada_t2', 'block_time' => time() - 700),
+		)), 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'api.koios.rest/api/v1/tx_utxos') !== false) {
+		$rows = array(array('tx_hash' => 'ada_t1', 'outputs' => array(array('payment_addr' => array('bech32' => 'someone_else'), 'value' => '1000'))));
+		if (!$GLOBALS['ada_bulk_partial']) {
+			$rows[] = array('tx_hash' => 'ada_t2', 'outputs' => array(array('payment_addr' => array('bech32' => 'someone_else'), 'value' => '1000')));
+		}
+		return array('response' => array('code' => 200), 'body' => json_encode($rows), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $adaMock, 10, 3);
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('ada_cov_addr','ADA','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 796000));
+as_tick(3 * 3600); // bulk response missing ada_t2 -> visit fails
+sok('partial ADA bulk response goes to retry',     in_array('ADA|ada_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
+sok('partial ADA bulk response excluded',          as_excluded('ADA|ada_cov_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
+$GLOBALS['ada_bulk_partial'] = false;
+as_tick(3 * 3600); // complete response: retry succeeds, next wrap certifies
+$covMapA = get_option('nmm_autopay_scan_covered_at', array());
+sok('complete ADA bulk response certifies',        is_array($covMapA) && isset($covMapA['ADA']) && !as_excluded('ADA|ada_cov_addr'), 'map=' . (is_array($covMapA) ? implode(',', array_keys($covMapA)) : '(scalar)'));
+remove_filter('pre_http_request', $adaMock, 10);
+
+$GLOBALS['bsv_bulk_partial'] = true;
+$bsvMock = function ($pre, $args, $url) {
+	if (strpos($url, 'api.whatsonchain.com/v1/bsv/main/address/') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode(array(array('tx_hash' => 'bsv_t1', 'height' => 100))), 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'api.whatsonchain.com/v1/bsv/main/chain/info') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode(array('blocks' => 105)), 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'api.whatsonchain.com/v1/bsv/main/txs') !== false) {
+		$rows = $GLOBALS['bsv_bulk_partial'] ? array() : array(array('txid' => 'bsv_t1', 'time' => time() - 600, 'vout' => array(array('value' => 0.5, 'scriptPubKey' => array('addresses' => array('someone_else'))))));
+		return array('response' => array('code' => 200), 'body' => json_encode($rows), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $bsvMock, 10, 3);
+$wpdb->query("DELETE FROM `$pt`");
+delete_option('nmm_autopay_scan_cursor');
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('bsv_cov_addr','BSV','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 797000));
+as_tick(3 * 3600); // empty bulk response for a non-empty request -> visit fails
+sok('partial BSV bulk response goes to retry',     in_array('BSV|bsv_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
+$GLOBALS['bsv_bulk_partial'] = false;
+as_tick(3 * 3600);
+$covMapV = get_option('nmm_autopay_scan_covered_at', array());
+sok('complete BSV bulk response certifies',        is_array($covMapV) && isset($covMapV['BSV']) && !as_excluded('BSV|bsv_cov_addr'), 'map=' . (is_array($covMapV) ? implode(',', array_keys($covMapV)) : '(scalar)'));
+remove_filter('pre_http_request', $bsvMock, 10);
 
 // --- unknown ticker: cannot be verified, must never be certified -----------
 // A row whose coin was removed from the registry is skipped by the scan; it
@@ -612,6 +736,8 @@ delete_option('nmm_autopay_scan_cursor');
 delete_option('nmm_autopay_scan_retry');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 $wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES ('zombie_addr','ZZZFAKE','unpaid',%d,%d,'0.00100000',0)", time() - 2 * HOUR_IN_SECONDS, 790000));
 as_tick(3 * 3600);
 $covMapZ = get_option('nmm_autopay_scan_covered_at', array());
@@ -673,5 +799,7 @@ delete_option('nmm_autopay_scan_last_run');
 delete_option('nmm_autopay_scan_covered_at');
 delete_option('nmm_autopay_scan_sweep_start');
 delete_option('nmm_autopay_scan_dirty');
+delete_option('nmm_autopay_scan_incomplete');
+delete_option('nmm_autopay_scan_incomplete_next');
 
 echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";
