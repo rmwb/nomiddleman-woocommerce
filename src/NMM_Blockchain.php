@@ -707,17 +707,22 @@ class NMM_Blockchain {
 		self::note_raw_page(count($rawTransactionIds), null);
 
 		$transactions = array();
-		
-		foreach ($rawTransactionIds as $rawTransactionId) {			
+		$detailFailed = false;
+
+		foreach ($rawTransactionIds as $rawTransactionId) {
 			if ($rawTransactionId->type === 'vout' || $rawTransactionId->type === 'vin') {
 
 				$txId = $rawTransactionId->addresses;
 
 				$request2 = 'https://explorer.blackcoin.nl/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
@@ -744,8 +749,23 @@ class NMM_Blockchain {
 				}
 
 
-				
-			}			
+
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -1007,15 +1027,25 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+		// Raw page (the Insight /addr txid list covers BOTH directions and may
+		// be a bounded page; entries carry no timestamps) for the truncation
+		// check.
+		self::note_raw_page(count($transactionIds), null);
+
 		$transactions = array();
+		$detailFailed = false;
 
 		foreach ($transactionIds as $transactionId) {
 
 				$request2 = 'https://insight.bitcore.cc/api/tx/' . $transactionId;
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
@@ -1025,12 +1055,27 @@ class NMM_Blockchain {
 
 			foreach ($rawTransaction->vout as $vout) {
 				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
+					$transactions[] = new NMM_Transaction($vout->value * 100000000,
+														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+														  $rawTransaction->txid);
 				}
-			}		
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -1040,7 +1085,7 @@ class NMM_Blockchain {
 
 		return $result;
 	}
-	
+
 	public static function get_dash_address_transactions($address) {		
 		
 		$request = 'https://insight.dash.org/insight-api/txs/?address=' . $address;
@@ -1785,17 +1830,22 @@ class NMM_Blockchain {
 		self::note_raw_page(count($rawTransactionIds), null);
 
 		$transactions = array();
-		
-		foreach ($rawTransactionIds as $rawTransactionId) {			
+		$detailFailed = false;
+
+		foreach ($rawTransactionIds as $rawTransactionId) {
 			if ($rawTransactionId->type === 'vout' || $rawTransactionId->type === 'vin') {
 
 				$txId = $rawTransactionId->addresses;
 
 				$request2 = 'https://explorer.deeponion.org/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
@@ -1822,8 +1872,23 @@ class NMM_Blockchain {
 				}
 
 
-				
-			}			
+
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -1832,7 +1897,7 @@ class NMM_Blockchain {
 		);
 
 		return $result;
-	}	
+	}
 
 	public static function get_trx_address_transactions($address) {
 		
@@ -2104,15 +2169,25 @@ class NMM_Blockchain {
 
 			return $result;
 		}
+		// Raw page (the Blockbook address txid list covers BOTH directions and
+		// is served in bounded pages; entries carry no timestamps) for the
+		// truncation check.
+		self::note_raw_page(count($transactionIds), null);
+
 		$transactions = array();
+		$detailFailed = false;
 
 		foreach ($transactionIds as $transactionId) {
 
 				$request2 = 'https://blockbook.myralicious.com/api/tx/' . $transactionId;
-				
+
 				$response2 = self::api_get($request2);
 
 				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
+					// A skipped detail lookup is an UNverified potential
+					// payment - remember it so this visit can never certify
+					// coverage (see below), then keep collecting the rest.
+					$detailFailed = true;
 					continue;
 				}
 
@@ -2122,12 +2197,27 @@ class NMM_Blockchain {
 
 			foreach ($rawTransaction->vout as $vout) {
 				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
+					$transactions[] = new NMM_Transaction($vout->value * 100000000,
+														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+														  $rawTransaction->txid);
 				}
-			}		
+			}
+		}
+
+		if ($detailFailed) {
+			// With nothing collected the whole visit failed - report an error
+			// so the verifier retries next tick. With payments collected,
+			// return them (never discard a found payment) but overwrite the
+			// raw-page note with the unbounded-incomplete sentinel so the
+			// truncation check can never certify this visit as coverage.
+			if (empty($transactions)) {
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+			self::note_raw_page(PHP_INT_MAX, null);
 		}
 
 		$result = array (
@@ -2794,13 +2884,15 @@ class NMM_Blockchain {
 			// Blockscout txlist returns the full recent set (~10k hard cap)
 			'ETH' => 10000, 'ETC' => 10000,
 			// legacy endpoints, dead today (they throw = fetch failure); caps
-			// recorded in case a host is ever revived
+			// recorded in case a host is ever revived. Insight/Blockbook
+			// address txid lists are served in bounded pages, so BTX/XMY get
+			// conservative finite caps (their adapters report the raw list
+			// with no timestamps, so a full page always counts as truncated).
 			'LSK' => 10, 'XEM' => 25, 'ONION' => 25,
+			'BTX' => 10, 'XMY' => 1000,
 			// depth-complete within the matching window
 			'XMR' => 0, // height-bounded get_transfers batch covers the window
 			'SOL' => 0, // durable multi-tick sweep; sol_address_fully_swept() gates
-			'BTX' => 0, // full unpaginated txid list
-			'XMY' => 0, // Blockbook full page covers real payment addresses
 		);
 
 		if (isset($caps[$cryptoId])) {
