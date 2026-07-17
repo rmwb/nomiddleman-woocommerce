@@ -728,6 +728,13 @@ class NMM_Blockchain {
 
 				$rawTransaction = json_decode($response2['body']);
 
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure.
+					$detailFailed = true;
+					continue;
+				}
+
 				$vouts = $rawTransaction->vout;
 
 				foreach ($vouts as $vout) {
@@ -1050,6 +1057,13 @@ class NMM_Blockchain {
 				}
 
 				$rawTransaction = json_decode($response2['body']);
+
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure.
+					$detailFailed = true;
+					continue;
+				}
 
 				$vouts = $rawTransaction->vout;
 
@@ -1851,6 +1865,13 @@ class NMM_Blockchain {
 
 				$rawTransaction = json_decode($response2['body']);
 
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure.
+					$detailFailed = true;
+					continue;
+				}
+
 				$vouts = $rawTransaction->vout;
 
 				foreach ($vouts as $vout) {
@@ -2192,6 +2213,13 @@ class NMM_Blockchain {
 				}
 
 				$rawTransaction = json_decode($response2['body']);
+
+				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout)) {
+					// HTTP 200 with a malformed, partial or error body is just
+					// as uninspected as a transport failure.
+					$detailFailed = true;
+					continue;
+				}
 
 				$vouts = $rawTransaction->vout;
 
