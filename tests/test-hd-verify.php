@@ -291,6 +291,11 @@ hok('an expired order is NOT cancelled when the re-check fails', hd_order_status
 // full front-to-back run would see autopay-cancel/scan misfire. Clear them here
 // so this suite leaves no backoff pollution behind.
 $wpdb->query("DELETE FROM `{$wpdb->prefix}options` WHERE `option_name` LIKE '%nmm_backoff%' OR `option_name` LIKE '%nmm_apifail%' OR `option_name` LIKE '%nmm_cooldown%'");
+// The SQL delete alone is not enough WITHIN this process: get_transient()
+// serves from the in-memory object cache, which still holds the tripped
+// backoffs and would make every later explorer call in this suite return a
+// synthetic 429 (fetches throw, observations never get recorded). Flush it.
+wp_cache_flush();
 
 // --- the expiry pass reuses the verifier's same-run observation ---
 // In a real cron cycle the verifier runs immediately before the expiry pass and
