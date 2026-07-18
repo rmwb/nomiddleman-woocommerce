@@ -208,10 +208,17 @@ hok('  and its live order is not cancelled',              hd_order_status($liveO
 // transitioning such an order - the verifier must notice the order never became
 // paid and release its claim instead of stranding a settled row over an unpaid
 // order.
+// The status must be REGISTERED, not just declared payable: set_status()
+// silently coerces any status missing from wc_get_order_statuses() to
+// 'pending', and a genuinely pending order IS completable - the scenario under
+// test would never occur.
+$statusFilter = function ($statuses) { $statuses['wc-custom-await'] = 'Custom Await'; return $statuses; };
+add_filter('wc_order_statuses', $statusFilter, 10, 1);
 $payableFilter = function ($statuses) { $statuses[] = 'custom-await'; return $statuses; };
 add_filter('woocommerce_valid_order_statuses_for_payment', $payableFilter, 10, 1);
 $customOrder = hd_mkorder('on-hold');
 $co = wc_get_order($customOrder); $co->set_status('custom-await'); $co->save();
+hok('the custom status actually sticks',                   hd_order_status($customOrder) === 'custom-await', 'status=' . hd_order_status($customOrder));
 hd_row('hd_addr_custom_status', $customOrder);
 hd_sweep($paidMock);
 hok('a custom payable status is not completed by the lying return value', hd_order_status($customOrder) === 'custom-await', 'status=' . hd_order_status($customOrder));
@@ -220,6 +227,7 @@ hok('  and the funds are cached',                          hd_total('hd_addr_cus
 NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
 hok('  the reconcile pass does not retire the awaiting row', hd_status('hd_addr_custom_status') === 'assigned', 'row=' . hd_status('hd_addr_custom_status'));
 remove_filter('woocommerce_valid_order_statuses_for_payment', $payableFilter, 10);
+remove_filter('wc_order_statuses', $statusFilter, 10);
 
 // --- a failed completion must not strand the payment OR cancel the order ---
 // A hook on woocommerce_pre_payment_complete throws BEFORE WooCommerce sets the
