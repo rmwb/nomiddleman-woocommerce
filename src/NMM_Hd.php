@@ -87,7 +87,17 @@ class NMM_Hd {
 				// order still being payable). Caching here rather than after the
 				// claim also closes the crash window in which a row could reach
 				// 'completing' with a zero total and then be wrongly cancelled.
-				$hdRepo->set_total_received($address, $blockchainTotalReceived);
+				//
+				// If this write cannot be confirmed, do NOT go on to claim or
+				// complete: the invariant that a verified row carries its funds is
+				// the whole basis of the expiry pass's safety. Leave the row as-is
+				// for the next sweep to retry. (Belt-and-braces: the expiry pass
+				// also re-checks the chain before cancelling, so even here a funded
+				// order is not cancelled.)
+				if (!$hdRepo->set_total_received($address, $blockchainTotalReceived)) {
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not record the received total for ' . $cryptoId . ' address ' . $address . '; deferring completion to the next sweep.', 'error');
+					continue;
+				}
 
 				if (!$order) {
 					// Order deleted. The cached non-zero total makes the reconcile
@@ -134,29 +144,30 @@ class NMM_Hd {
 					continue;
 				}
 
-				// The order is live and fully funded. Claim it for completion unless
-				// we are already resuming a claim we made on an earlier sweep.
-				if (!$isResuming) {
-					// Atomic CAS assigned/underpaid -> 'completing'. 'completing' is
-					// deliberately non-terminal and still swept, so if this process
-					// dies before the order is completed, the next sweep resumes it
-					// (unlike a terminal 'complete' row, which nothing would revisit).
-					$claim = $hdRepo->claim_for_complete($address);
+				// The order is live and fully funded. Claim it for completion. The
+				// claim is a single atomic CAS that both takes a payable
+				// ('assigned'/'underpaid') row AND resumes a 'completing' row whose
+				// lease has expired (a claim abandoned by a crashed run) - so a
+				// row we are resuming goes through exactly the same gate, and a
+				// 'completing' row a concurrent run still holds is refused.
+				// 'completing' is non-terminal and still swept, so a crash between
+				// the claim and the completion is picked up by a later sweep.
+				$claim = $hdRepo->claim_for_complete($address);
 
-					if ($claim === NMM_Hd_Repo::CLAIM_DB_ERROR) {
-						// Row state unknown; the funds are cached, and the next sweep
-						// re-evaluates (still verified, still payable) and retries.
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: database error claiming ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . '; leaving it for retry.', 'error');
-						continue;
-					}
+				if ($claim === NMM_Hd_Repo::CLAIM_DB_ERROR) {
+					// Row state unknown; the funds are cached, and the next sweep
+					// re-evaluates (still verified, still payable) and retries.
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: database error claiming ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . '; leaving it for retry.', 'error');
+					continue;
+				}
 
-					if ($claim === NMM_Hd_Repo::CLAIM_ALREADY) {
-						// Another concurrent sweep (only possible on a host without
-						// the cron advisory lock) holds the claim. If that worker
-						// fails to complete, it releases the row for a later retry.
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' was already claimed by a concurrent run; not completing it here.', 'warning');
-						continue;
-					}
+				if ($claim === NMM_Hd_Repo::CLAIM_ALREADY) {
+					// Either a concurrent run holds a live claim (only possible
+					// without the cron advisory lock), or the row was moved out of a
+					// claimable state between get_pending() and here. If a holder
+					// fails to complete, it releases the row for a later retry.
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' is already being completed by another run; not completing it here.', 'warning');
+					continue;
 				}
 
 				// We hold the claim (row is 'completing'). Complete the order, then
@@ -383,7 +394,7 @@ class NMM_Hd {
 		throw new \Exception("Unable to get XMY HD address information from external sources.");
 	}
 
-	public static function cancel_expired_addresses($cryptoId, $mpk, $orderCancellationTimeSec, $hdMode) {
+	public static function cancel_expired_addresses($cryptoId, $mpk, $orderCancellationTimeSec, $hdMode, $requiredConfirmations = 1) {
 		global $woocommerce;
 		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 
@@ -423,25 +434,47 @@ class NMM_Hd {
 				continue;
 			}
 
-			if ($order->has_status(array('cancelled', 'failed'))) {
-				// Terminal non-paid state reached through some other path (a
-				// customer/admin cancellation, or the checkout catch-block
-				// failing the order after it claimed an address).
-				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'order ' . $order->get_status());
-				continue;
-			}
-
 			if (!$order->has_status(array('on-hold', 'pending'))) {
-				// Some other non-terminal, non-awaiting state; leave it be.
+				// Any state that is neither paid nor awaiting payment - cancelled,
+				// failed, refunded, or a custom terminal status - means this address
+				// is done. Retire it (dirty if it saw funds, else quarantine for
+				// fresh-check verification). Leaving 'refunded' and the like here was
+				// a leak: the verifier's payable gate rejects them too, so the row
+				// would otherwise be swept forever and never retired.
+				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'order ' . $order->get_status());
 				continue;
 			}
 
 			$assignedFor = time() - $assignedAt;
 			NMM_Util::log(__FILE__, __LINE__, 'address ' . $address . ' has been assigned for ' . $assignedFor . '... cancel time: ' . $orderCancellationTimeSec);
 			if ($assignedFor > $orderCancellationTimeSec && $totalReceived == 0) {
+				// The row's cached balance is zero and its window has passed. Before
+				// cancelling, do one final on-chain check: a payment may have landed
+				// since the last (possibly failed) verifier check, or the verifier
+				// may have been unable to record it. Cancelling a funded order is the
+				// one thing this pass must never do, so a fresh non-zero balance
+				// aborts the cancellation - the row keeps the funds and the next
+				// verifier sweep completes the order.
+				try {
+					$freshTotal = self::get_total_received_for_address($cryptoId, $address, $requiredConfirmations);
+				}
+				catch ( \Exception $e ) {
+					// Could not confirm a zero balance (explorer down). Do NOT cancel
+					// on an unverified assumption; try again next cycle.
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not re-check ' . $cryptoId . ' address ' . $address . ' before expiry; leaving the order for the next cycle.', 'warning');
+					continue;
+				}
+
+				if ($freshTotal > 0) {
+					// Funds are present after all. Record them and let the verifier
+					// handle the order; never cancel it.
+					$hdRepo->set_total_received($address, $freshTotal);
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' has an on-chain balance at expiry time; not cancelling order ' . $orderId . '.', 'warning');
+					continue;
+				}
+
 				// Cancel the unpaid, expired order and quarantine its address for
-				// fresh-check verification before any reuse - a payment could
-				// have landed after the last (possibly failed) explorer check.
+				// fresh-check verification before any reuse.
 				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'expired unpaid');
 
 				$orderNote = sprintf(
