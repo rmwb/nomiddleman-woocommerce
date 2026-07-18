@@ -130,6 +130,18 @@ if (defined('NMM_PAYMENT_TABLE')) {
 	$repo->delete_unpaid_for_order($orderA);
 	lok('paid row is never cleared',                (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `$pt` WHERE order_id=%d AND status='paid'", $orderA)) === 1);
 	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
+
+	// insert() must REPORT whether the row landed. The row is the monitoring, so
+	// checkout uses this return value to decide whether it may show the address
+	// at all: a silent failure here would send the customer to an address
+	// Autopay never sweeps, and the funds would never credit the order.
+	lok('insert() reports success',                 $repo->insert('addr_ok', 'BTC', $orderA, '0.00300000', 'unpaid') === true);
+	$wpdb->suppress_errors(true);
+	$dupe = $repo->insert('addr_dupe', 'BTC', $orderA, '0.00300000', 'unpaid'); // UNIQUE(order_id, order_amount)
+	$wpdb->suppress_errors(false);
+	lok('insert() reports a rejected duplicate',    $dupe === false, 'got=' . var_export($dupe, true));
+	lok('the rejected address was never recorded',  (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `$pt` WHERE address=%s", 'addr_dupe')) === 0);
+	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
 }
 
 $wpdb2->close();

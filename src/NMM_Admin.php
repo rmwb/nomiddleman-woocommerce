@@ -345,34 +345,28 @@ class NMM_Admin {
                     </td>
                 </tr>
                 <?php
-                self::render_number_row($cid . '_hd_percent_to_process', __('HD Wallet Auto-Confirm Percentage', 'nomiddleman-crypto-payments-for-woocommerce'),
-                    self::value($values, $cid . '_hd_percent_to_process', '1.000'),
-                    '0.800', '1.000', '0.001', '2',
+                self::render_number_row($cid, '_hd_percent_to_process', __('HD Wallet Auto-Confirm Percentage', 'nomiddleman-crypto-payments-for-woocommerce'),
+                    self::value($values, $cid . '_hd_percent_to_process', '1.000'), '2',
                     __('Privacy Mode will automatically confirm payments that are this percentage of the total amount requested. (1 = 100%), (0.94 = 94%)', 'nomiddleman-crypto-payments-for-woocommerce'));
-                self::render_number_row($cid . '_hd_required_confirmations', __('Privacy Mode Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
-                    self::value($values, $cid . '_hd_required_confirmations', '2'),
-                    '0', '100', '1', '2',
+                self::render_number_row($cid, '_hd_required_confirmations', __('Privacy Mode Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
+                    self::value($values, $cid . '_hd_required_confirmations', '2'), '2',
                     __('The number of confirmations a payment needs before it is considered a valid payment.', 'nomiddleman-crypto-payments-for-woocommerce'));
-                self::render_number_row($cid . '_hd_order_cancellation_time_hr', __('Privacy Mode Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
-                    self::value($values, $cid . '_hd_order_cancellation_time_hr', '24'),
-                    '0.01', '168', '0.01', '2',
+                self::render_number_row($cid, '_hd_order_cancellation_time_hr', __('Privacy Mode Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
+                    self::value($values, $cid . '_hd_order_cancellation_time_hr', '24'), '2',
                     __('Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)', 'nomiddleman-crypto-payments-for-woocommerce'));
                 endif; ?>
 
                 <?php if ($autopayAvailable) :
-                self::render_number_row($cid . '_autopayment_percent_to_process', __('Auto-Confirm Percentage', 'nomiddleman-crypto-payments-for-woocommerce'),
-                    self::value($values, $cid . '_autopayment_percent_to_process', '0.9999'),
-                    '0.9850', '1.0000', '0.0001', '1',
+                self::render_number_row($cid, '_autopayment_percent_to_process', __('Auto-Confirm Percentage', 'nomiddleman-crypto-payments-for-woocommerce'),
+                    self::value($values, $cid . '_autopayment_percent_to_process', '0.9999'), '1',
                     __('Auto-Payment will automatically confirm payments within this percentage of the total requested. Lowering it increases the risk of matching the wrong payment - change with care.', 'nomiddleman-crypto-payments-for-woocommerce'));
                 if ($crypto->needs_confirmations()) {
-                    self::render_number_row($cid . '_autopayment_required_confirmations', __('Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
-                        self::value($values, $cid . '_autopayment_required_confirmations', '2'),
-                        '0', '100', '1', '1',
+                    self::render_number_row($cid, '_autopayment_required_confirmations', __('Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
+                        self::value($values, $cid . '_autopayment_required_confirmations', '2'), '1',
                         __('The number of confirmations a payment needs before it is considered a valid payment.', 'nomiddleman-crypto-payments-for-woocommerce'));
                 }
-                self::render_number_row($cid . '_autopayment_order_cancellation_time_hr', __('Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
-                    self::value($values, $cid . '_autopayment_order_cancellation_time_hr', '1'),
-                    '0.01', '168', '0.01', '1',
+                self::render_number_row($cid, '_autopayment_order_cancellation_time_hr', __('Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
+                    self::value($values, $cid . '_autopayment_order_cancellation_time_hr', '1'), '1',
                     __('Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)', 'nomiddleman-crypto-payments-for-woocommerce'));
                 endif; ?>
             </table>
@@ -407,14 +401,19 @@ class NMM_Admin {
         <?php
     }
 
+    // $cid: crypto id; $suffix: option-name suffix, also the key into
+    // NMM_Settings::NUMERIC_BOUNDS - the min/max/step offered to the browser come
+    // from the same table NMM_Settings clamps against, so the two cannot drift.
     // $modes: comma-separated list of crypto modes ('0','1','2') the row applies to
-    private static function render_number_row($id, $title, $value, $min, $max, $step, $modes, $desc) {
+    private static function render_number_row($cid, $suffix, $title, $value, $modes, $desc) {
+        $id = $cid . $suffix;
+        $bounds = NMM_Settings::NUMERIC_BOUNDS[$suffix];
         ?>
         <tr class="nmm-requires-mode" data-modes="<?php echo esc_attr($modes); ?>">
             <th scope="row"><label for="<?php echo esc_attr($id); ?>"><?php echo esc_html($title); ?></label></th>
             <td>
                 <input type="number" id="<?php echo esc_attr($id); ?>"
-                       min="<?php echo esc_attr($min); ?>" max="<?php echo esc_attr($max); ?>" step="<?php echo esc_attr($step); ?>"
+                       min="<?php echo esc_attr($bounds['min']); ?>" max="<?php echo esc_attr($bounds['max']); ?>" step="<?php echo esc_attr($bounds['step']); ?>"
                        name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"
                        value="<?php echo esc_attr($value); ?>" />
                 <p class="description"><?php echo esc_html($desc); ?></p>

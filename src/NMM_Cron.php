@@ -44,6 +44,11 @@ function NMM_do_cron_job() {
 		$startTime = time();
 		NMM_Util::log(__FILE__, __LINE__, 'Starting Cron Job...');
 
+		// Each cycle starts with a clean observation cache. A long-lived process
+		// that runs many cycles (a CLI cron runner, a multisite loop) must never
+		// let the expiry pass act on a PREVIOUS cycle's balance observations.
+		NMM_Hd::reset_observed_totals();
+
 		NMM_warm_price_caches($nmmSettings);
 
 		NMM_Carousel_Repo::init();

@@ -361,7 +361,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 if ($nmmSettings->autopay_enabled($cryptoId)) {
                     $paymentRepo = new NMM_Payment_Repo();
 
-                    $paymentRepo->insert($orderWalletAddress, $cryptoId, $order_id, $formattedCryptoTotal, 'unpaid');
+                    // The row IS the monitoring: Autopay only ever sweeps addresses
+                    // it finds in this table. If the insert fails we must fail the
+                    // order rather than fall through and display the address - an
+                    // unmonitored address would take the customer's funds and never
+                    // credit the order. Throwing here is before the wallet_address
+                    // meta write below, so nothing is ever shown or persisted.
+                    if (!$paymentRepo->insert($orderWalletAddress, $cryptoId, $order_id, $formattedCryptoTotal, 'unpaid')) {
+                        throw new \Exception(esc_html__('We could not set up payment monitoring for your order, so no payment address has been issued. This order has been cancelled and you have not been charged. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                    }
                 }
 
                 $orderNote = sprintf(

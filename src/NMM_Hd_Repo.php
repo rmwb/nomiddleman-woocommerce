@@ -7,6 +7,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Repository for hd mpk storage in WP Database
 class NMM_Hd_Repo {
 
+	// Outcomes of claim_for_complete(). Tri-state for the same reason Autopay's
+	// claim is (see NMM_Payment_Repo): a genuine race loss (CLAIM_ALREADY) is
+	// conclusive, whereas a transient database failure (CLAIM_DB_ERROR) must be
+	// retried rather than treated as settled.
+	const CLAIM_CLAIMED = 'claimed';
+	const CLAIM_ALREADY = 'already';
+	const CLAIM_DB_ERROR = 'db_error';
+
+	// How long a 'completing' claim is considered live before another run may
+	// take it over as abandoned. A real completion holds 'completing' only for
+	// the sub-second span of payment_complete(), so any lease comfortably longer
+	// than that (here 10 minutes, generous for slow hooks or a slow database)
+	// can never be stolen from a live worker - it only lets a genuinely crashed
+	// claim be resumed. This matters solely on hosts where the cron advisory
+	// lock is unavailable and two runs can overlap; under the lock there is only
+	// ever one worker.
+	const COMPLETING_LEASE_SEC = 600;
+
 	private $mpk;
 	private $tableName;
 	private $cryptoId;
@@ -143,6 +161,89 @@ class NMM_Hd_Repo {
 		return null;
 	}
 
+	/**
+	 * Atomically claim a row for completion, moving it to the intermediate
+	 * 'completing' status so exactly one worker proceeds.
+	 *
+	 * The target is deliberately NOT the terminal 'complete': the caller marks
+	 * that only AFTER WooCommerce has actually completed the order. A 'completing'
+	 * row is still returned by get_pending()/get_reconcilable(), so if the
+	 * process dies between the claim and the completion, a later sweep resumes it
+	 * - whereas a row moved straight to 'complete' would be swept by nothing and
+	 * the paid order would be stranded unpaid for good.
+	 *
+	 * A single CAS handles both the first claim and crash recovery: it matches a
+	 * payable ('assigned'/'underpaid') row, OR a 'completing' row whose lease has
+	 * expired (an abandoned claim from a crashed run). It re-stamps last_checked
+	 * as the lease each time, so only one of two overlapping runs (possible only
+	 * without the cron advisory lock) can take an abandoned claim - the loser
+	 * sees the fresh lease and gets CLAIM_ALREADY. A 'complete' or reconciled row,
+	 * or a 'completing' row still within its lease (a live worker holds it),
+	 * yields CLAIM_ALREADY.
+	 *
+	 * @return string One of the CLAIM_* constants.
+	 */
+	public function claim_for_complete($address) {
+		global $wpdb;
+
+		// The lease is stamped and compared with the DATABASE clock, not PHP
+		// time(): every app server shares the one database, so clock skew
+		// between web hosts can neither steal a live claim early nor hold an
+		// abandoned one past its lease.
+		$affected = $wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = 'completing', `last_checked` = UNIX_TIMESTAMP()
+			 WHERE `address` = %s
+			 AND `cryptocurrency` = %s
+			 AND `hd_mode` = %d
+			 AND `mpk` = %s
+			 AND (
+				`status` = 'assigned'
+				OR `status` = 'underpaid'
+				OR (`status` = 'completing' AND `last_checked` < UNIX_TIMESTAMP() - %d)
+			 )",
+			$address, $this->cryptoId, $this->hdMode, $this->mpk, self::COMPLETING_LEASE_SEC
+		));
+
+		if ($affected === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'claim_for_complete DB error for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
+			return self::CLAIM_DB_ERROR;
+		}
+
+		return $affected > 0 ? self::CLAIM_CLAIMED : self::CLAIM_ALREADY;
+	}
+
+	/**
+	 * Hand a 'completing' row back to the payable 'assigned' state after a
+	 * completion attempt failed, so a later sweep retries it. A single write, and
+	 * it deliberately does NOT touch total_received (which the caller has already
+	 * cached with the observed amount): rolling that back to zero would let the
+	 * reconcile pass, which runs later in the same cron cycle and cancels only
+	 * zero-balance expired rows, cancel an order whose payment was just verified.
+	 *
+	 * Also deliberately does not touch assigned_at, which set_status('assigned')
+	 * would refresh: restarting that clock would push out the reconcile pass's
+	 * expiry checks for an address that was assigned long ago.
+	 */
+	public function release_claim($address) {
+		global $wpdb;
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = 'assigned'
+			 WHERE `address` = %s
+			 AND `cryptocurrency` = %s
+			 AND `hd_mode` = %d
+			 AND `mpk` = %s
+			 AND `status` = 'completing'",
+			$address, $this->cryptoId, $this->hdMode, $this->mpk
+		));
+	}
+
+	// Rows awaiting payment that the verifier must poll: 'assigned' and
+	// 'underpaid' as before, plus 'completing' so an interrupted completion
+	// (process died, or payment_complete() failed) is resumed rather than
+	// stranded - nothing else would ever revisit it.
 	public function get_pending() {
 		global $wpdb;
 
@@ -151,14 +252,26 @@ class NMM_Hd_Repo {
 			 WHERE `mpk` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
-			 AND (`status` = 'assigned' OR `status` = 'underpaid')",
+			 AND (`status` = 'assigned' OR `status` = 'underpaid' OR `status` = 'completing')",
 			$this->mpk, $this->cryptoId, $this->hdMode
 		), ARRAY_A);
 
 		return $results;
 	}
 
-	public function get_assigned() {
+	/**
+	 * Rows the reconcile pass must settle against their live order: every state
+	 * in which an address is still held for an order and awaiting payment.
+	 *
+	 * 'underpaid' belongs here as much as 'assigned' does. An address that took
+	 * a part payment for an order that is later cancelled is just as dead as one
+	 * that took nothing, and if the reconcile pass cannot see it, nothing else
+	 * ever will - the verifier keeps polling it on every sweep, forever, and it
+	 * is never retired as dirty. 'completing' belongs here for the same reason:
+	 * an order can die while its row is mid-completion, and that row must still
+	 * be retired rather than polled forever.
+	 */
+	public function get_reconcilable() {
 		global $wpdb;
 
 		$results = $wpdb->get_results($wpdb->prepare(
@@ -166,7 +279,7 @@ class NMM_Hd_Repo {
 			 WHERE `mpk` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
-			 AND `status` = 'assigned'",
+			 AND (`status` = 'assigned' OR `status` = 'underpaid' OR `status` = 'completing')",
 			$this->mpk, $this->cryptoId, $this->hdMode
 		), ARRAY_A);
 
@@ -220,14 +333,29 @@ class NMM_Hd_Repo {
 		));
 	}
 
+	/**
+	 * Cache the observed on-chain total for an address.
+	 *
+	 * @return bool True once the write is committed. The verifier relies on this:
+	 *         the cached total is what stops the expiry pass cancelling a funded
+	 *         order, so it must not proceed to claim/complete on a write it cannot
+	 *         confirm landed.
+	 */
 	public function set_total_received($address, $totalReceived) {
 		global $wpdb;
 		NMM_Util::log(__FILE__, __LINE__, 'Updating total received at ' . $address .' to: ' . $totalReceived);
 
-		$wpdb->query($wpdb->prepare(
+		$affected = $wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName` SET `total_received` = %s WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d",
 			$totalReceived, $address, $this->cryptoId, $this->hdMode
 		));
+
+		if ($affected === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'Failed to update total_received for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
+			return false;
+		}
+
+		return true;
 	}
 
 	public function set_order_amount($address, $orderAmount) {

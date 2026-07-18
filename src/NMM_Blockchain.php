@@ -490,6 +490,22 @@ class NMM_Blockchain {
 			return $result;
 		}
 
+		// Every row has to carry the fields the ordering and the outputs lookup
+		// below depend on. A row missing block_height would sort as null and
+		// could push a real payment out of the newest-25 slice, where it would
+		// read as "no payment" over an address we never actually inspected -
+		// so a malformed row fails the visit for retry, like a bad response.
+		foreach ($rawTxList as $row) {
+			if (!is_object($row) || !isset($row->block_height) || !isset($row->tx_hash) || !isset($row->block_time)) {
+				NMM_Util::log(__FILE__, __LINE__, 'koios address_txs: malformed transaction row; failing the visit for retry.');
+
+				return array(
+					'result' => 'error',
+					'total_received' => '',
+				);
+			}
+		}
+
 		// most recent first, and cap the outputs lookup to a sane batch
 		usort($rawTxList, function($a, $b) {
 			return $b->block_height <=> $a->block_height;
@@ -502,8 +518,8 @@ class NMM_Blockchain {
 		// longer list above it. block_time is unix seconds.
 		$rawOldestTs = null;
 		foreach ($rawTxList as $row) {
-			$ts = isset($row->block_time) ? (int) $row->block_time : null;
-			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
+			$ts = (int) $row->block_time;
+			if ($rawOldestTs === null || $ts < $rawOldestTs) {
 				$rawOldestTs = $ts;
 			}
 		}
