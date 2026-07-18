@@ -6,20 +6,39 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class NMM_Hd {
 
-	// On-chain totals the verifier observed during THIS cron run, keyed by
-	// "cryptoId|address". The expiry pass consults this instead of making its
-	// own explorer calls: the verifier runs immediately before it in the same
-	// process and has already fetched every reconcilable address's balance, so
-	// re-fetching would (a) double every explorer call under a large backlog
-	// and (b) livelock on hosts with a per-host cooldown (chainz for BTX: the
-	// verifier's own successful call starts the cooldown, so an immediate
-	// second call is refused every cycle and the expired order is never
-	// cancelled).
+	// On-chain totals the verifier observed during THIS cron run. The expiry
+	// pass consults this instead of making its own explorer calls: the verifier
+	// runs immediately before it in the same process and has already fetched
+	// every reconcilable address's balance, so re-fetching would (a) double
+	// every explorer call under a large backlog and (b) livelock on hosts with
+	// a per-host cooldown (chainz for BTX: the verifier's own successful call
+	// starts the cooldown, so an immediate second call is refused every cycle
+	// and the expired order is never cancelled).
+	//
+	// Entries are array('total' => float, 'at' => unix ts) and are trusted only
+	// while younger than OBSERVATION_MAX_AGE_SEC: under a pathologically large
+	// backlog the verifier's observation can be minutes old by the time the
+	// expiry pass runs, and a payment landing in that window must not be missed
+	// - so a stale entry falls back to a fresh fetch (safe: by then any short
+	// per-host cooldown has lapsed too). NMM_Cron resets the cache at the start
+	// of every acquired cycle, so a long-lived process (CLI cron runner,
+	// multisite loop) can never act on a previous cycle's observations.
+	const OBSERVATION_MAX_AGE_SEC = 120;
+
 	private static $observedTotals = array();
 
-	// Test hook: a fresh cron run starts with no observations.
+	// A fresh cron run starts with no observations. Called by NMM_Cron at the
+	// top of every acquired cycle (and by tests).
 	public static function reset_observed_totals() {
 		self::$observedTotals = array();
+	}
+
+	// Scoped by site (table prefix), coin, wallet (mpk + hd_mode) and address,
+	// so a multisite loop or a runner serving several wallets in one process
+	// can never consume another site's or wallet's observation.
+	private static function observation_key($cryptoId, $mpk, $hdMode, $address) {
+		global $wpdb;
+		return $wpdb->prefix . '|' . $cryptoId . '|' . (int) $hdMode . '|' . md5((string) $mpk) . '|' . $address;
 	}
 
 	/**
@@ -79,7 +98,10 @@ class NMM_Hd {
 
 			// Record every successful observation (zero included) for the expiry
 			// pass, which runs right after this in the same cron process.
-			self::$observedTotals[$cryptoId . '|' . $record['address']] = $blockchainTotalReceived;
+			self::$observedTotals[self::observation_key($cryptoId, $mpk, $hdMode, $record['address'])] = array(
+				'total' => $blockchainTotalReceived,
+				'at'    => time(),
+			);
 
 			$address = $record['address'];
 			$orderId = $record['order_id'];
@@ -230,6 +252,18 @@ class NMM_Hd {
 				}
 				catch ( \Throwable $t ) {
 					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: completing order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . ' raised: ' . $t->getMessage(), 'error');
+					$completed = false;
+				}
+
+				// payment_complete()'s return value alone is not proof: for a
+				// status outside ITS OWN allowlist (a different filter -
+				// woocommerce_valid_order_statuses_for_payment_complete - from the
+				// one needs_payment() consults) it performs no transition yet still
+				// returns true. Marking the row 'complete' on that lie would strand
+				// a paid-but-never-transitioned order forever, so require the order
+				// to actually BE paid before settling.
+				if ($completed && !$order->is_paid()) {
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: payment_complete() did not transition order ' . $orderId . ' (status ' . $order->get_status() . ' is payable but not completable); releasing the claim. Please reconcile manually.', 'error');
 					$completed = false;
 				}
 
@@ -504,17 +538,22 @@ class NMM_Hd {
 				// is the one thing this pass must never do.
 				//
 				// The verifier ran moments ago in this same process and already
-				// fetched this address's balance - reuse that observation. It costs
-				// no extra explorer call (a large abandonment backlog would double
-				// every call otherwise) and sidesteps per-host cooldowns (chainz:
-				// the verifier's own call starts the cooldown, so a second call
-				// here would be refused every cycle and the order never cancelled).
-				// Only when the verifier has no observation (its fetch failed) do
-				// we try the explorer ourselves.
-				$observedKey = $cryptoId . '|' . $address;
+				// fetched this address's balance - reuse that observation while it
+				// is still fresh (OBSERVATION_MAX_AGE_SEC). It costs no extra
+				// explorer call (a large abandonment backlog would double every
+				// call otherwise) and sidesteps per-host cooldowns (chainz: the
+				// verifier's own call starts the cooldown, so a second call here
+				// would be refused every cycle and the order never cancelled). An
+				// observation older than the age bound - a huge backlog between
+				// the verifier touching this address and this pass reaching it -
+				// is NOT trusted for a cancellation: a payment could have landed
+				// in that window, so we fetch fresh instead (safe from the
+				// cooldown too: any short per-host cooldown lapsed long ago).
+				$observedKey = self::observation_key($cryptoId, $mpk, $hdMode, $address);
+				$observation = isset(self::$observedTotals[$observedKey]) ? self::$observedTotals[$observedKey] : null;
 
-				if (array_key_exists($observedKey, self::$observedTotals)) {
-					$freshTotal = self::$observedTotals[$observedKey];
+				if ($observation !== null && (time() - $observation['at']) <= self::OBSERVATION_MAX_AGE_SEC) {
+					$freshTotal = $observation['total'];
 				}
 				else {
 					try {

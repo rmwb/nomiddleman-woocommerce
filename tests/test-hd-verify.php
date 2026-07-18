@@ -201,6 +201,26 @@ hok('a row on a REFUNDED order is retired (not swept forever)', hd_status('hd_ad
 hok('an underpaid row on a LIVE order is left alone',     hd_status('hd_addr_live_onhold') === 'underpaid', 'row=' . hd_status('hd_addr_live_onhold'));
 hok('  and its live order is not cancelled',              hd_order_status($liveOnHold) === 'on-hold', 'status=' . hd_order_status($liveOnHold));
 
+// --- custom payable statuses (WooCommerce's filter) ---
+// A status made payable via woocommerce_valid_order_statuses_for_payment must
+// be treated as awaiting: not retired by the reconcile pass, and - because
+// payment_complete() uses a DIFFERENT filter and returns true WITHOUT
+// transitioning such an order - the verifier must notice the order never became
+// paid and release its claim instead of stranding a settled row over an unpaid
+// order.
+$payableFilter = function ($statuses) { $statuses[] = 'custom-await'; return $statuses; };
+add_filter('woocommerce_valid_order_statuses_for_payment', $payableFilter, 10, 1);
+$customOrder = hd_mkorder('on-hold');
+$co = wc_get_order($customOrder); $co->set_status('custom-await'); $co->save();
+hd_row('hd_addr_custom_status', $customOrder);
+hd_sweep($paidMock);
+hok('a custom payable status is not completed by the lying return value', hd_order_status($customOrder) === 'custom-await', 'status=' . hd_order_status($customOrder));
+hok('  its row is released, not stranded as complete',     hd_status('hd_addr_custom_status') === 'assigned', 'row=' . hd_status('hd_addr_custom_status'));
+hok('  and the funds are cached',                          hd_total('hd_addr_custom_status') === 1.0, 'total=' . hd_total('hd_addr_custom_status'));
+NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+hok('  the reconcile pass does not retire the awaiting row', hd_status('hd_addr_custom_status') === 'assigned', 'row=' . hd_status('hd_addr_custom_status'));
+remove_filter('woocommerce_valid_order_statuses_for_payment', $payableFilter, 10);
+
 // --- a failed completion must not strand the payment OR cancel the order ---
 // A hook on woocommerce_pre_payment_complete throws BEFORE WooCommerce sets the
 // order paid, so payment_complete() returns false with the order genuinely still
