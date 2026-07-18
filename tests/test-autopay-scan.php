@@ -666,8 +666,8 @@ $GLOBALS['ada_bulk_partial'] = true;
 $adaMock = function ($pre, $args, $url) {
 	if (strpos($url, 'api.koios.rest/api/v1/address_txs') !== false) {
 		return array('response' => array('code' => 200), 'body' => json_encode(array(
-			array('tx_hash' => 'ada_t1', 'block_time' => time() - 600),
-			array('tx_hash' => 'ada_t2', 'block_time' => time() - 700),
+			array('tx_hash' => 'ada_t1', 'block_height' => 100, 'block_time' => time() - 600),
+			array('tx_hash' => 'ada_t2', 'block_height' => 99, 'block_time' => time() - 700),
 		)), 'headers' => array(), 'cookies' => array());
 	}
 	if (strpos($url, 'api.koios.rest/api/v1/tx_utxos') !== false) {
@@ -696,6 +696,26 @@ as_tick(3 * 3600); // complete response: retry succeeds, next wrap certifies
 $covMapA = get_option('nmm_autopay_scan_covered_at', array());
 sok('complete ADA bulk response certifies',        is_array($covMapA) && isset($covMapA['ADA']) && !as_excluded('ADA|ada_cov_addr'), 'map=' . (is_array($covMapA) ? implode(',', array_keys($covMapA)) : '(scalar)'));
 remove_filter('pre_http_request', $adaMock, 10);
+
+// An address_txs row missing block_height cannot be ordered, so the newest-25
+// slice taken after the sort is not trustworthy: a real payment could fall out
+// of it and read as "no payment". The visit must fail (retry), not read the
+// absent property as null.
+$adaPartialRowMock = function ($pre, $args, $url) {
+	if (strpos($url, 'api.koios.rest/api/v1/address_txs') !== false) {
+		return array('response' => array('code' => 200), 'body' => json_encode(array(
+			array('tx_hash' => 'ada_t1', 'block_time' => time() - 600),
+		)), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $adaPartialRowMock, 10, 3);
+delete_option('nmm_autopay_scan_retry');
+delete_option('nmm_autopay_scan_covered_at');
+as_tick(3 * 3600); // row without block_height -> visit fails
+sok('ADA row missing block_height goes to retry',  in_array('ADA|ada_cov_addr', get_option('nmm_autopay_scan_retry', array()), true), 'retry=' . implode(',', get_option('nmm_autopay_scan_retry', array())));
+sok('ADA row missing block_height excluded',       as_excluded('ADA|ada_cov_addr'), 'excl=' . implode(',', array_keys(get_option('nmm_autopay_scan_incomplete', array()))));
+remove_filter('pre_http_request', $adaPartialRowMock, 10);
 
 $GLOBALS['bsv_bulk_partial'] = true;
 $bsvMock = function ($pre, $args, $url) {
