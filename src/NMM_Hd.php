@@ -6,6 +6,44 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class NMM_Hd {
 
+	// On-chain totals the verifier observed during THIS cron run, keyed by
+	// "cryptoId|address". The expiry pass consults this instead of making its
+	// own explorer calls: the verifier runs immediately before it in the same
+	// process and has already fetched every reconcilable address's balance, so
+	// re-fetching would (a) double every explorer call under a large backlog
+	// and (b) livelock on hosts with a per-host cooldown (chainz for BTX: the
+	// verifier's own successful call starts the cooldown, so an immediate
+	// second call is refused every cycle and the expired order is never
+	// cancelled).
+	private static $observedTotals = array();
+
+	// Test hook: a fresh cron run starts with no observations.
+	public static function reset_observed_totals() {
+		self::$observedTotals = array();
+	}
+
+	/**
+	 * Is this order still legitimately awaiting its crypto payment?
+	 *
+	 * The gateway's own awaiting states are on-hold and pending, but a site may
+	 * declare additional payable statuses through WooCommerce's
+	 * woocommerce_valid_order_statuses_for_payment filter (a custom payment
+	 * workflow, say); needs_payment() honours that filter. Such an order must
+	 * be neither refused completion by the verifier nor retired by the
+	 * reconcile pass.
+	 *
+	 * Terminal states are checked FIRST and always lose: WooCommerce's default
+	 * for that filter includes 'failed', and a failed/cancelled/refunded order
+	 * receiving a late payment must never be resurrected by it.
+	 */
+	private static function order_awaits_payment($order) {
+		if ($order->has_status(array('cancelled', 'refunded', 'failed', 'trash'))) {
+			return false;
+		}
+
+		return $order->has_status(array('on-hold', 'pending')) || $order->needs_payment();
+	}
+
 	public static function buffer_ready_addresses($cryptoId, $mpk, $amount, $hdMode) {
 		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 		$readyCount = $hdRepo->count_ready();		
@@ -35,9 +73,13 @@ class NMM_Hd {
 				$blockchainTotalReceived = self::get_total_received_for_address($cryptoId, $record['address'], $requiredConfirmations);
 			}
 			catch ( \Exception $e ) {
-				// just go to next record if the endpoint is not responding			
+				// just go to next record if the endpoint is not responding
 				continue;
 			}
+
+			// Record every successful observation (zero included) for the expiry
+			// pass, which runs right after this in the same cron process.
+			self::$observedTotals[$cryptoId . '|' . $record['address']] = $blockchainTotalReceived;
 
 			$address = $record['address'];
 			$orderId = $record['order_id'];
@@ -118,7 +160,7 @@ class NMM_Hd {
 					continue;
 				}
 
-				if (!$order->has_status(array('pending', 'on-hold'))) {
+				if (!self::order_awaits_payment($order)) {
 					// Cancelled, failed, refunded - not awaiting payment. Leave the
 					// row payable; the reconcile pass retires it (non-zero total ->
 					// dirty). Do NOT complete the order: that is the
@@ -304,9 +346,12 @@ class NMM_Hd {
 
 		// The mempool.space / blockstream address summaries report confirmed
 		// (>=1 conf) totals only - they cannot express "N confirmations". Use
-		// them only when a single confirmation is acceptable; otherwise wait
-		// for the primary source rather than under-counting the requirement.
-		if ($requiredConfirmations <= 1) {
+		// them only when the requirement is EXACTLY one confirmation. A zero-
+		// confirmation merchant must not fall through to them either: they
+		// cannot see an unconfirmed payment, so they would report zero for an
+		// order the merchant considers paid - and a zero observation is what
+		// lets the expiry pass cancel. Wait for the primary source instead.
+		if ((int) $requiredConfirmations === 1) {
 			$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 			if ($secondaryResult['result'] === 'success') {
@@ -331,9 +376,11 @@ class NMM_Hd {
 		}
 
 		// litecoinspace's address summary reports confirmed (>=1 conf) totals
-		// only and cannot express "N confirmations"; only use it as a fallback
-		// when a single confirmation is acceptable.
-		if ($requiredConfirmations <= 1) {
+		// only and cannot express "N confirmations"; only use it when the
+		// requirement is EXACTLY one confirmation (see the BTC note above - a
+		// zero-confirmation requirement must not fall through to a source that
+		// cannot see unconfirmed payments).
+		if ((int) $requiredConfirmations === 1) {
 			$secondaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
 
 			if ($secondaryResult['result'] === 'success') {
@@ -434,13 +481,15 @@ class NMM_Hd {
 				continue;
 			}
 
-			if (!$order->has_status(array('on-hold', 'pending'))) {
+			if (!self::order_awaits_payment($order)) {
 				// Any state that is neither paid nor awaiting payment - cancelled,
 				// failed, refunded, or a custom terminal status - means this address
 				// is done. Retire it (dirty if it saw funds, else quarantine for
 				// fresh-check verification). Leaving 'refunded' and the like here was
 				// a leak: the verifier's payable gate rejects them too, so the row
-				// would otherwise be swept forever and never retired.
+				// would otherwise be swept forever and never retired. A custom
+				// payable status declared via WooCommerce's filter counts as
+				// awaiting (see order_awaits_payment) and is protected.
 				self::quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, 'order ' . $order->get_status());
 				continue;
 			}
@@ -449,20 +498,34 @@ class NMM_Hd {
 			NMM_Util::log(__FILE__, __LINE__, 'address ' . $address . ' has been assigned for ' . $assignedFor . '... cancel time: ' . $orderCancellationTimeSec);
 			if ($assignedFor > $orderCancellationTimeSec && $totalReceived == 0) {
 				// The row's cached balance is zero and its window has passed. Before
-				// cancelling, do one final on-chain check: a payment may have landed
-				// since the last (possibly failed) verifier check, or the verifier
-				// may have been unable to record it. Cancelling a funded order is the
-				// one thing this pass must never do, so a fresh non-zero balance
-				// aborts the cancellation - the row keeps the funds and the next
-				// verifier sweep completes the order.
-				try {
-					$freshTotal = self::get_total_received_for_address($cryptoId, $address, $requiredConfirmations);
+				// cancelling, confirm a zero balance against a FRESH observation: a
+				// payment may have landed since the last verifier check, or the
+				// verifier may have failed to record one. Cancelling a funded order
+				// is the one thing this pass must never do.
+				//
+				// The verifier ran moments ago in this same process and already
+				// fetched this address's balance - reuse that observation. It costs
+				// no extra explorer call (a large abandonment backlog would double
+				// every call otherwise) and sidesteps per-host cooldowns (chainz:
+				// the verifier's own call starts the cooldown, so a second call
+				// here would be refused every cycle and the order never cancelled).
+				// Only when the verifier has no observation (its fetch failed) do
+				// we try the explorer ourselves.
+				$observedKey = $cryptoId . '|' . $address;
+
+				if (array_key_exists($observedKey, self::$observedTotals)) {
+					$freshTotal = self::$observedTotals[$observedKey];
 				}
-				catch ( \Exception $e ) {
-					// Could not confirm a zero balance (explorer down). Do NOT cancel
-					// on an unverified assumption; try again next cycle.
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not re-check ' . $cryptoId . ' address ' . $address . ' before expiry; leaving the order for the next cycle.', 'warning');
-					continue;
+				else {
+					try {
+						$freshTotal = self::get_total_received_for_address($cryptoId, $address, $requiredConfirmations);
+					}
+					catch ( \Exception $e ) {
+						// Could not confirm a zero balance (explorer down). Do NOT
+						// cancel on an unverified assumption; try again next cycle.
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not re-check ' . $cryptoId . ' address ' . $address . ' before expiry; leaving the order for the next cycle.', 'warning');
+						continue;
+					}
 				}
 
 				if ($freshTotal > 0) {

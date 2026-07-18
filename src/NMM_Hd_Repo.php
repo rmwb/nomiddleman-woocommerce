@@ -186,12 +186,13 @@ class NMM_Hd_Repo {
 	public function claim_for_complete($address) {
 		global $wpdb;
 
-		$now = time();
-		$leaseCutoff = $now - self::COMPLETING_LEASE_SEC;
-
+		// The lease is stamped and compared with the DATABASE clock, not PHP
+		// time(): every app server shares the one database, so clock skew
+		// between web hosts can neither steal a live claim early nor hold an
+		// abandoned one past its lease.
 		$affected = $wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName`
-			 SET `status` = 'completing', `last_checked` = %d
+			 SET `status` = 'completing', `last_checked` = UNIX_TIMESTAMP()
 			 WHERE `address` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
@@ -199,9 +200,9 @@ class NMM_Hd_Repo {
 			 AND (
 				`status` = 'assigned'
 				OR `status` = 'underpaid'
-				OR (`status` = 'completing' AND `last_checked` < %d)
+				OR (`status` = 'completing' AND `last_checked` < UNIX_TIMESTAMP() - %d)
 			 )",
-			$now, $address, $this->cryptoId, $this->hdMode, $this->mpk, $leaseCutoff
+			$address, $this->cryptoId, $this->hdMode, $this->mpk, self::COMPLETING_LEASE_SEC
 		));
 
 		if ($affected === false) {

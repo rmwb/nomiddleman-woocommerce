@@ -252,6 +252,9 @@ hok('a completing row on a dead order is retired',         hd_status('hd_addr_st
 // An expired, zero-balance row is only cancelled after a final on-chain check
 // confirms no funds. A late payment that landed after the last verifier check -
 // or a payment the verifier could not record - must abort the cancellation.
+// Reset the per-run observation cache so these first tests exercise the
+// fetch-it-ourselves path (no verifier observation available).
+NMM_Hd::reset_observed_totals();
 $expiredZero = hd_mkorder('on-hold');
 hd_row('hd_addr_expired_zero', $expiredZero, 'assigned', '0.00000000');
 hd_backdate_assigned('hd_addr_expired_zero', 48 * 3600);
@@ -288,6 +291,25 @@ hok('an expired order is NOT cancelled when the re-check fails', hd_order_status
 // full front-to-back run would see autopay-cancel/scan misfire. Clear them here
 // so this suite leaves no backoff pollution behind.
 $wpdb->query("DELETE FROM `{$wpdb->prefix}options` WHERE `option_name` LIKE '%nmm_backoff%' OR `option_name` LIKE '%nmm_apifail%' OR `option_name` LIKE '%nmm_cooldown%'");
+
+// --- the expiry pass reuses the verifier's same-run observation ---
+// In a real cron cycle the verifier runs immediately before the expiry pass and
+// has already fetched every reconcilable address's balance. The expiry pass
+// must use THAT observation rather than fetch again: a second fetch doubles the
+// explorer load under a backlog and livelocks on per-host-cooldown explorers
+// (chainz/BTX - the verifier's own call starts the cooldown, so the re-fetch is
+// refused every cycle and an abandoned order is never cancelled). Prove it by
+// having the verifier observe ZERO and then answering any (wrong) re-fetch at
+// expiry time with a full balance: cancellation must happen anyway, because the
+// cached zero observation - not the fetch - is what the pass consults.
+NMM_Hd::reset_observed_totals();
+$sameRun = hd_mkorder('on-hold');
+hd_row('hd_addr_same_run', $sameRun, 'assigned', '0.00000000');
+hd_backdate_assigned('hd_addr_same_run', 48 * 3600);
+hd_sweep($zeroMock); // verifier observes 0 for this address in this "cron run"
+hd_cancel_expired($paidMock, 3600); // a re-fetch would see 1.0 and refuse to cancel
+hok('expiry uses the verifier\'s same-run observation',   hd_order_status($sameRun) === 'cancelled', 'status=' . hd_order_status($sameRun));
+NMM_Hd::reset_observed_totals();
 
 // --- the completion lease (crash recovery vs. a live concurrent worker) ---
 $repoLease = new NMM_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
