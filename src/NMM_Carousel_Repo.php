@@ -62,21 +62,28 @@ class NMM_Carousel_Repo {
 	/**
 	 * Atomically claim the next carousel seat and advance the counter.
 	 *
-	 * Read-then-write across separate queries let two concurrent checkouts read
-	 * the same index, hand both customers the same address, and lose one of the
-	 * increments - so orders collide on a single seat and Autopay then has two
-	 * unpaid rows on one address. A single UPDATE closes that window:
-	 * LAST_INSERT_ID(expr) stores expr for this connection AND evaluates to it,
-	 * so the row moves to the next seat while handing back the seat this caller
-	 * claimed. The IF() folds an out-of-range stored index (the merchant removed
-	 * addresses since it was written) back to 0 rather than returning a seat the
-	 * buffer no longer has.
+	 * Compare-and-swap, the same idiom NMM_Hd_Repo::claim_oldest_ready uses: read
+	 * the stored index, then conditionally advance it ONLY if it has not changed
+	 * since the read. The seat returned is the value that was read. Two concurrent
+	 * checkouts can no longer share a seat: whichever writes second finds the
+	 * index already moved, its conditional UPDATE matches nothing, and it retries
+	 * from a fresh read.
+	 *
+	 * This deliberately avoids reading LAST_INSERT_ID() back over a separate
+	 * statement. Under a read/write splitter (HyperDB and similar) a table-less
+	 * SELECT can be routed to a replica, returning that connection's stale session
+	 * id rather than the value the UPDATE set. Here every read names the table, so
+	 * a splitter routes it correctly; and even a stale read from a lagging replica
+	 * is harmless - the conditional UPDATE simply fails to match and we retry,
+	 * never handing out a wrong seat.
 	 *
 	 * @param string $cryptoId
 	 * @param int    $seatCount Number of usable seats, from the validated buffer.
 	 * @return int|null The claimed seat, or null if it could not be claimed.
 	 */
 	public function claim_next_index($cryptoId, $seatCount) {
+		global $wpdb;
+
 		$seatCount = (int) $seatCount;
 
 		if ($seatCount < 1) {
@@ -85,67 +92,68 @@ class NMM_Carousel_Repo {
 
 		if ($seatCount === 1) {
 			// Degenerate carousel: seat 0 every time. Special-cased because the
-			// UPDATE would be a no-op ((0 + 1) MOD 1 === 0), and MySQL reports 0
-			// changed rows for a no-op update - indistinguishable from a missing
-			// row.
+			// advance below would be a no-op ((0 + 1) MOD 1 === 0), and a no-op
+			// UPDATE reports 0 matched rows - indistinguishable from a lost CAS.
 			return 0;
 		}
 
-		$claim = $this->advance_counter($cryptoId, $seatCount);
+		$seeded = false;
 
-		if ($claim['state'] === 'missing') {
-			// No counter row for this coin: it was added to the registry after
-			// the table was seeded, or the row was removed by hand. Seed it, then
-			// claim through the same atomic path as everyone else - taking seat 0
-			// directly here would hand seat 0 to this caller AND to the next one,
-			// which is the collision this method exists to prevent.
-			NMM_Util::log(__FILE__, __LINE__, 'No carousel counter row for ' . $cryptoId . '; seeding it.', 'warning');
-			self::init();
-			$claim = $this->advance_counter($cryptoId, $seatCount);
+		// A few attempts absorb concurrent checkouts advancing the index between
+		// our read and our conditional write. Bounded so a persistently lagging
+		// replica (whose stale reads never match the primary) fails cleanly to the
+		// caller - which throws a checkout-safe error - rather than looping.
+		for ($attempt = 0; $attempt < 8; $attempt++) {
+			$stored = $wpdb->get_var($wpdb->prepare(
+				"SELECT `current_index` FROM `$this->tableName` WHERE `cryptocurrency` = %s",
+				$cryptoId
+			));
+
+			if ($stored === null) {
+				// No counter row for this coin: added to the registry after the
+				// table was seeded, or removed by hand. Seed once and retry.
+				if ($seeded) {
+					NMM_Util::log(__FILE__, __LINE__, 'Carousel counter row for ' . $cryptoId . ' still missing after seeding.', 'error');
+					return null;
+				}
+				NMM_Util::log(__FILE__, __LINE__, 'No carousel counter row for ' . $cryptoId . '; seeding it.', 'warning');
+				self::init();
+				$seeded = true;
+				continue;
+			}
+
+			$stored = (int) $stored;
+
+			// Fold an out-of-range stored index (the merchant removed addresses
+			// since it was written) back to seat 0 rather than a seat the buffer no
+			// longer has.
+			$seat = ($stored < 0 || $stored >= $seatCount) ? 0 : $stored;
+			$next = ($seat + 1) % $seatCount;
+
+			// Advance only if the row still holds exactly the value we read. The
+			// WHERE binds the raw stored value, so a competing claim that already
+			// moved the counter makes this match nothing.
+			$affected = $wpdb->query($wpdb->prepare(
+				"UPDATE `$this->tableName`
+				 SET `current_index` = %d
+				 WHERE `cryptocurrency` = %s AND `current_index` = %d",
+				$next, $cryptoId, $stored
+			));
+
+			if ($affected === false) {
+				NMM_Util::log(__FILE__, __LINE__, 'Failed to claim a carousel seat for ' . $cryptoId . ': ' . $wpdb->last_error, 'error');
+				return null;
+			}
+
+			if ($affected === 1) {
+				return $seat; // we won the seat
+			}
+			// affected === 0: another checkout advanced the counter first, or the
+			// stored value differed (stale replica read). Re-read and retry.
 		}
 
-		return $claim['state'] === 'ok' ? $claim['seat'] : null;
-	}
-
-	/**
-	 * One atomic advance of the counter.
-	 *
-	 * @return array{state: string, seat: ?int} state is 'ok', 'missing' (no row
-	 *         for this coin) or 'error' (the claim could not be made).
-	 */
-	private function advance_counter($cryptoId, $seatCount) {
-		global $wpdb;
-
-		$affected = $wpdb->query($wpdb->prepare(
-			"UPDATE `$this->tableName`
-			 SET `current_index` = (LAST_INSERT_ID(IF(`current_index` < 0 OR `current_index` >= %d, 0, `current_index`)) + 1) MOD %d
-			 WHERE `cryptocurrency` = %s",
-			$seatCount, $seatCount, $cryptoId
-		));
-
-		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Failed to claim a carousel seat for ' . $cryptoId . ': ' . $wpdb->last_error, 'error');
-			return array('state' => 'error', 'seat' => null);
-		}
-
-		if ($affected === 0) {
-			return array('state' => 'missing', 'seat' => null);
-		}
-
-		// Read back the seat the UPDATE just claimed. It MUST come from
-		// LAST_INSERT_ID() over the same connection: $wpdb->insert_id is not
-		// usable here, because wpdb only refreshes that property for INSERT and
-		// REPLACE - after an UPDATE it still holds an id from some unrelated
-		// earlier insert in this request (an order row, say), which would hand
-		// out a nonsense seat.
-		$seat = $wpdb->get_var('SELECT LAST_INSERT_ID()');
-
-		if ($seat === null) {
-			NMM_Util::log(__FILE__, __LINE__, 'Could not read back the claimed carousel seat for ' . $cryptoId . ': ' . $wpdb->last_error, 'error');
-			return array('state' => 'error', 'seat' => null);
-		}
-
-		return array('state' => 'ok', 'seat' => (int) $seat);
+		NMM_Util::log(__FILE__, __LINE__, 'Carousel seat claim exhausted retries for ' . $cryptoId, 'warning');
+		return null;
 	}
 
 	public function set_index($cryptoId, $index) {

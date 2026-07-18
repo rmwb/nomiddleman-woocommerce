@@ -39,68 +39,89 @@ class NMM_Hd {
 				continue;
 			}
 
-			$recordTotalReceived = $record['total_received'];
+			$address = $record['address'];
+			$orderId = $record['order_id'];
+			$orderAmount = $record['order_amount'];
+
+			$recordTotalReceived = (float) $record['total_received'];
 			$newPaymentAmount = $blockchainTotalReceived - $recordTotalReceived;
 
-			// if we received a new payment
 			// TODO: This should be 1 / 10*max digits
-			if ($newPaymentAmount > 0.0000001) {
+			$hasNewPayment = $newPaymentAmount > 0.0000001;
 
-				$address = $record['address'];
+			// A row left mid-completion by an earlier sweep that was interrupted
+			// (the process died, or payment_complete() failed). get_pending()
+			// returns it precisely so this run can finish the job; we already own
+			// it, so we resume without re-claiming.
+			$isResuming = $record['status'] === 'completing';
 
-				$orderAmount = $record['order_amount'];
+			$amountToVerify = ((float) $orderAmount) * $percentToVerify;
+			$paymentAmountVerified = $blockchainTotalReceived >= $amountToVerify;
+
+			// Nothing to act on: no new funds, no fully-funded order still awaiting
+			// completion, and no interrupted completion to resume.
+			if (!$hasNewPayment && !$paymentAmountVerified && !$isResuming) {
+				continue;
+			}
+
+			if ($hasNewPayment) {
 				NMM_Util::log(__FILE__, __LINE__, 'Address ' . $address . ' received a new payment of ' . NMM_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount) . ' ' . $cryptoId);
+			}
 
-				// The observed total is cached on each terminal path below rather
-				// than here. It is the ONLY record that this payment has been seen:
-				// caching it up front and then failing to act - a database error on
-				// the claim, or the process dying - would make the next sweep
-				// compute no new payment and never retry, stranding a fully paid
-				// order as unpaid for good.
-				$amountToVerify = ((float) $orderAmount) * $percentToVerify;
-				$paymentAmountVerified = $blockchainTotalReceived >= $amountToVerify;
-				
-				
-				// if new total is enough to process the order
-				if ($paymentAmountVerified) {
+			// The order's LIVE status governs everything below. The row was read at
+			// the top of this sweep and says nothing about the order now: it may
+			// since have been cancelled, failed, or paid out of band. wc_get_order()
+			// (not new WC_Order(), which throws for a deleted order outside the try
+			// above and would abort the whole sweep) returns false when it is gone.
+			$order = $orderId ? wc_get_order($orderId) : false;
 
-					$orderId = $record['order_id'];
+			// enough to process the order
+			if ($paymentAmountVerified) {
 
-					// Re-fetch the order and check its LIVE status before completing
-					// it. The row we are iterating was read at the top of this sweep
-					// and says nothing about the order: it may since have been
-					// cancelled by the customer or the merchant, failed at checkout,
-					// or already been paid out-of-band. Completing such an order
-					// from a late payment would resurrect it. This mirrors the
-					// checks the reconcile pass already makes in
-					// process_assigned_addresses().
-					$order = $orderId ? wc_get_order($orderId) : false;
+				// Cache the observed total up front, before the claim. It is the
+				// record that these funds have been seen, and every path below is
+				// safe with it cached: the reconcile pass (which runs later this
+				// same cron cycle) only cancels ZERO-balance expired rows, so a
+				// non-zero total protects a verified order from being cancelled;
+				// and retry no longer depends on a stale total (it is driven by the
+				// order still being payable). Caching here rather than after the
+				// claim also closes the crash window in which a row could reach
+				// 'completing' with a zero total and then be wrongly cancelled.
+				$hdRepo->set_total_received($address, $blockchainTotalReceived);
 
-					if (!$order) {
-						// Order deleted. Caching the total gives the row a non-zero
-						// total_received, so the reconcile pass retires the address
-						// rather than recycling it toward a different order.
-						$hdRepo->set_total_received($address, $blockchainTotalReceived);
+				if (!$order) {
+					// Order deleted. The cached non-zero total makes the reconcile
+					// pass RETIRE the address (dirty) rather than recycle it toward a
+					// different order. A resuming row is left 'completing', which
+					// get_reconcilable() also covers.
+					if ($hasNewPayment) {
 						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received ' . NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived) . ' ' . $cryptoId . ' but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
-						continue;
 					}
+					continue;
+				}
 
-					if ($order->is_paid()) {
-						// Already completed through some other path; just settle the
-						// row so it stops being swept.
-						$hdRepo->set_total_received($address, $blockchainTotalReceived);
-						$hdRepo->claim_for_complete($address);
-						continue;
+				if ($order->is_paid()) {
+					// Paid through some other path (or a previous sweep completed
+					// the order but was interrupted before it could mark the row).
+					// Settle the row to terminal 'complete' so it stops being swept.
+					$hdRepo->set_status($address, 'complete');
+					continue;
+				}
+
+				if (!$order->has_status(array('pending', 'on-hold'))) {
+					// Cancelled, failed, refunded - not awaiting payment. Leave the
+					// row payable; the reconcile pass retires it (non-zero total ->
+					// dirty). Do NOT complete the order: that is the
+					// late-payment-resurrects-a-dead-order bug. The note is gated on
+					// a genuinely new payment so a fully-funded row that keeps
+					// re-verifying every sweep does not re-note each time.
+					// A row we were completing when the order died goes back to
+					// 'assigned' (the reconcile pass covers 'completing' too, but
+					// 'assigned' is the address's natural resting state).
+					if ($isResuming) {
+						$hdRepo->release_claim($address);
 					}
-
-					if (!$order->has_status(array('pending', 'on-hold'))) {
-						// Cancelled, failed, refunded, or some other state that is
-						// not awaiting payment. Record the payment against the order
-						// for the merchant, but do NOT complete it. Caching the total
-						// first is what makes this note fire once per newly-observed
-						// payment rather than once per sweep, and gives the reconcile
-						// pass the non-zero total it needs to retire the address.
-						$hdRepo->set_total_received($address, $blockchainTotalReceived);
+					if ($hasNewPayment) {
 						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but the order is ' . $order->get_status() . ' - not completing it. Please reconcile manually.', 'warning');
 						$order->add_order_note(sprintf(
 							/* translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address, 4: order status */
@@ -109,94 +130,101 @@ class NMM_Hd {
 							$cryptoId,
 							$address,
 							$order->get_status()));
-						continue;
 					}
+					continue;
+				}
 
-					// Atomically claim the row before completing. Two overlapping
-					// verifier runs can both reach this point with the same
-					// confirmed payment; the conditional update lets exactly one
-					// through.
+				// The order is live and fully funded. Claim it for completion unless
+				// we are already resuming a claim we made on an earlier sweep.
+				if (!$isResuming) {
+					// Atomic CAS assigned/underpaid -> 'completing'. 'completing' is
+					// deliberately non-terminal and still swept, so if this process
+					// dies before the order is completed, the next sweep resumes it
+					// (unlike a terminal 'complete' row, which nothing would revisit).
 					$claim = $hdRepo->claim_for_complete($address);
 
 					if ($claim === NMM_Hd_Repo::CLAIM_DB_ERROR) {
-						// Row state unknown - it may well still be payable. Leave
-						// EVERYTHING untouched, the cached total most of all: the
-						// stale total is precisely what makes the next sweep see this
-						// payment as new and retry the claim.
+						// Row state unknown; the funds are cached, and the next sweep
+						// re-evaluates (still verified, still payable) and retries.
 						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: database error claiming ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . '; leaving it for retry.', 'error');
 						continue;
 					}
 
 					if ($claim === NMM_Hd_Repo::CLAIM_ALREADY) {
-						// Another worker claimed it, or the reconcile pass moved it
-						// out of a payable state. Not ours to complete - but the
-						// payment is real, so record it.
-						$hdRepo->set_total_received($address, $blockchainTotalReceived);
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' was already claimed; not completing the order again.', 'warning');
+						// Another concurrent sweep (only possible on a host without
+						// the cron advisory lock) holds the claim. If that worker
+						// fails to complete, it releases the row for a later retry.
+						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' was already claimed by a concurrent run; not completing it here.', 'warning');
 						continue;
 					}
-
-					$orderNote = sprintf(
-						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time */
-						__('Order payment of %1$s %2$s verified at %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
-						NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
-						$cryptoId,
-						date('Y-m-d H:i:s', time()));
-
-					$hdRepo->set_total_received($address, $blockchainTotalReceived);
-
-					// payment_complete() REPORTS failure rather than raising it:
-					// WooCommerce wraps the whole event in its own try/catch and
-					// returns false if any hook on it threw (a third-party
-					// integration is the usual culprit). The \Throwable catch is for
-					// what that catch misses - an \Error, which is not an Exception.
-					try {
-						$completed = $order->payment_complete();
-					}
-					catch ( \Throwable $t ) {
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: completing order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . ' raised: ' . $t->getMessage(), 'error');
-						$completed = false;
-					}
-
-					if (!$completed) {
-						// We hold the claim, so the row reads 'complete' while the
-						// order was never paid - and nothing sweeps a 'complete' row,
-						// so this payment would be stranded for good. Hand the row back
-						// to the state we took it from and un-cache the total, so the
-						// next sweep sees the payment afresh and retries. If completion
-						// half-succeeded, that retry finds is_paid() true and settles
-						// the row without paying anything twice.
-						$hdRepo->release_claim($address, $record['status']);
-						$hdRepo->set_total_received($address, $recordTotalReceived);
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not complete order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . '; released the claim for retry.', 'error');
-						continue;
-					}
-
-					$order->add_order_note($orderNote);
 				}
-				// we received payment but it was not enough to meet store admin's processing requirement
-				else {
-					$orderId = $record['order_id'];
 
-					// The underpayment is real and observed either way, so cache it
-					// before anything else here: nothing below can strand the order
-					// (there is no claim to lose), and re-noting the same partial
-					// payment on every sweep would spam the customer.
-					$hdRepo->set_total_received($address, $blockchainTotalReceived);
+				// We hold the claim (row is 'completing'). Complete the order, then
+				// mark the row terminal - in that order, so no failure point strands
+				// the payment:
+				//   * die before payment_complete -> row stays 'completing', resumed.
+				//   * die after payment_complete, before the mark -> next sweep sees
+				//     is_paid() and settles the row.
 
-					// wc_get_order() rather than new WC_Order(): the constructor
-					// throws for a deleted order, and that Exception is outside the
-					// try above, so it would abort the whole sweep and leave every
-					// later address unchecked.
-					$order = $orderId ? wc_get_order($orderId) : false;
+				// payment_complete() REPORTS failure rather than raising it:
+				// WooCommerce wraps the event in its own try/catch and returns false
+				// if a hook threw (a third-party integration is the usual culprit).
+				// The \Throwable catch is for what that misses - an \Error is not an
+				// Exception. payment_complete() is idempotent (it no-ops once the
+				// order is already paid), so a resumed retry cannot pay twice.
+				try {
+					$completed = $order->payment_complete();
+				}
+				catch ( \Throwable $t ) {
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: completing order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . ' raised: ' . $t->getMessage(), 'error');
+					$completed = false;
+				}
 
-					if (!$order) {
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received an underpayment but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
-						continue;
+				if (!$completed) {
+					// Hand the row back to 'assigned' - a payable, swept state - so a
+					// later sweep retries. A single write: the total is already
+					// cached (full), and is deliberately NOT rolled back, so the
+					// reconcile pass still sees funds and never cancels this order.
+					// If even this write fails, the row stays 'completing', which is
+					// also still swept - so the payment is never stranded either way.
+					$hdRepo->release_claim($address);
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not complete order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . '; released the claim for retry.', 'error');
+					continue;
+				}
+
+				$hdRepo->set_status($address, 'complete');
+				$order->add_order_note(sprintf(
+					/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time */
+					__('Order payment of %1$s %2$s verified at %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
+					NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
+					$cryptoId,
+					date('Y-m-d H:i:s', time())));
+			}
+			// we received payment but it was not enough to meet store admin's processing requirement
+			else {
+
+				// Only a genuinely new partial payment is worth noting; a resume
+				// with no new funds (e.g. a reorg dropped the balance below the
+				// threshold) just gets released back to a normal payable state.
+				if (!$hasNewPayment) {
+					if ($isResuming) {
+						$hdRepo->release_claim($address);
 					}
+					continue;
+				}
 
-					// handle multiple underpayments, just add a new note
-					if ($record['status'] === 'underpaid') {
+				// The underpayment is real and observed, so cache it before noting:
+				// re-noting the same partial payment on every sweep would spam the
+				// customer, and nothing here holds a claim to lose.
+				$hdRepo->set_total_received($address, $blockchainTotalReceived);
+
+				if (!$order) {
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received an underpayment but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
+					continue;
+				}
+
+				// handle multiple underpayments, just add a new note
+				if ($record['status'] === 'underpaid') {
 						$orderNote = sprintf(
 							/* translators: 1: amount received, 2: cryptocurrency ticker, 3: remaining amount, 4: wallet address */
 							__('New payment was received but is still under order total. Received payment of %1$s %2$s.<br>Remaining payment required: %3$s<br>Wallet Address: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
@@ -230,7 +258,6 @@ class NMM_Hd {
 				}
 			}
 		}
-	}
 
 	private static function get_total_received_for_address($cryptoId, $address, $requiredConfirmations) {
 		if ($cryptoId === 'BTC') {

@@ -178,27 +178,52 @@ hok('an assigned row on a cancelled order is quarantined', hd_status('hd_addr_as
 hok('an underpaid row on a LIVE order is left alone',     hd_status('hd_addr_live_onhold') === 'underpaid', 'row=' . hd_status('hd_addr_live_onhold'));
 hok('  and its live order is not cancelled',              hd_order_status($liveOnHold) === 'on-hold', 'status=' . hd_order_status($liveOnHold));
 
-// --- a failed completion must not strand the payment ---
-// WooCommerce catches a throwing hook inside payment_complete() and REPORTS
-// failure by returning false. We hold the claim at that point, so the row reads
-// 'complete' over an unpaid order - and nothing sweeps a 'complete' row. The
-// claim must be handed back and the cached total rolled back, or this customer's
-// money is stranded forever.
+// --- a failed completion must not strand the payment OR cancel the order ---
+// A hook on woocommerce_pre_payment_complete throws BEFORE WooCommerce sets the
+// order paid, so payment_complete() returns false with the order genuinely still
+// on-hold. This is the hard case: the row is mid-completion, the money is real,
+// and the expiry pass runs later in the SAME cron cycle. The claim must be
+// released to a swept state, the observed total must NOT be rolled back (that is
+// what stops the expiry pass cancelling a just-paid order), and a later sweep
+// must still complete it.
 $boomOrder = hd_mkorder('on-hold');
 hd_row('hd_addr_boom', $boomOrder);
+// Backdate the assignment so the expiry pass below considers it expired.
+$wpdb->query($wpdb->prepare("UPDATE `$ht` SET `assigned_at` = %d WHERE `address` = %s", time() - 48 * 3600, 'hd_addr_boom'));
 $boom = function ($orderId) { throw new \RuntimeException('a third-party hook exploded'); };
-add_action('woocommerce_payment_complete', $boom, 10, 1);
+add_action('woocommerce_pre_payment_complete', $boom, 10, 1);
 hd_sweep($paidMock);
-remove_action('woocommerce_payment_complete', $boom, 10);
-hok('a failed completion releases the claim',              hd_status('hd_addr_boom') === 'assigned', 'row=' . hd_status('hd_addr_boom'));
-hok('  and rolls back the cached total for a retry',       hd_total('hd_addr_boom') === 0.0, 'total=' . hd_total('hd_addr_boom'));
+remove_action('woocommerce_pre_payment_complete', $boom, 10);
+hok('a failed completion releases the claim to a swept state', hd_status('hd_addr_boom') === 'assigned', 'row=' . hd_status('hd_addr_boom'));
+hok('  the observed total is NOT rolled back',             hd_total('hd_addr_boom') === 1.0, 'total=' . hd_total('hd_addr_boom'));
+hok('  and the order is still awaiting payment',           hd_order_status($boomOrder) === 'on-hold', 'status=' . hd_order_status($boomOrder));
 
-// The retry must then settle it. WooCommerce's payment_complete() sets the
-// status before firing the hook that threw, so this order is in fact already
-// paid: the retry has to recognise that and settle the row WITHOUT paying twice.
+// The critical same-cron interaction (this was a real regression): the expiry
+// pass runs right after the verifier. With the total left cached it must NOT
+// cancel this order, even though its assignment is long expired.
+NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+hok('the expiry pass does NOT cancel the just-verified order', hd_order_status($boomOrder) === 'on-hold', 'status=' . hd_order_status($boomOrder));
+hok('  and does not retire its address',                   hd_status('hd_addr_boom') === 'assigned', 'row=' . hd_status('hd_addr_boom'));
+
+// With the hook gone, the next verifier sweep completes it - exactly once.
 hd_sweep($paidMock);
-hok('  the next sweep settles the row',                    hd_status('hd_addr_boom') === 'complete', 'row=' . hd_status('hd_addr_boom'));
-hok('  and the order ends up paid exactly once',           in_array(hd_order_status($boomOrder), array('processing', 'completed'), true), 'status=' . hd_order_status($boomOrder));
+hok('  the next sweep completes the recovered order',      in_array(hd_order_status($boomOrder), array('processing', 'completed'), true), 'status=' . hd_order_status($boomOrder));
+hok('  and settles the row',                               hd_status('hd_addr_boom') === 'complete', 'row=' . hd_status('hd_addr_boom'));
+
+// A crash mid-completion leaves a 'completing' row. get_pending() returns it, so
+// the next sweep resumes and finishes it rather than stranding the order.
+$stuckOrder = hd_mkorder('on-hold');
+hd_row('hd_addr_stuck', $stuckOrder, 'completing', '1.00000000');
+hd_sweep($paidMock);
+hok('an interrupted (completing) row is resumed and settled', hd_status('hd_addr_stuck') === 'complete', 'row=' . hd_status('hd_addr_stuck'));
+hok('  and its order is completed',                        in_array(hd_order_status($stuckOrder), array('processing', 'completed'), true), 'status=' . hd_order_status($stuckOrder));
+
+// A 'completing' row whose order died mid-completion must be retired by the
+// reconcile pass, not polled forever.
+$stuckDead = hd_mkorder('cancelled');
+hd_row('hd_addr_stuck_dead', $stuckDead, 'completing', '1.00000000');
+NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+hok('a completing row on a dead order is retired',         hd_status('hd_addr_stuck_dead') === 'dirty', 'row=' . hd_status('hd_addr_stuck_dead'));
 
 // --- the claim itself ---
 $repo = new NMM_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
@@ -208,7 +233,8 @@ $first  = $repo->claim_for_complete('hd_addr_claim');
 $second = $repo->claim_for_complete('hd_addr_claim');
 hok('the first worker claims the row',                     $first === NMM_Hd_Repo::CLAIM_CLAIMED, 'got=' . $first);
 hok('a second worker is refused - no double completion',   $second === NMM_Hd_Repo::CLAIM_ALREADY, 'got=' . $second);
-hok('  the claim marks the row complete',                  hd_status('hd_addr_claim') === 'complete');
+hok('  the claim moves the row to the intermediate state', hd_status('hd_addr_claim') === 'completing', 'row=' . hd_status('hd_addr_claim'));
+hok('  release_claim hands it back to assigned',           (function () use ($repo) { $repo->release_claim('hd_addr_claim'); return hd_status('hd_addr_claim'); })() === 'assigned');
 
 // An underpaid row is still payable once topped up; a retired one is not.
 hd_row('hd_addr_underpaid_claim', hd_mkorder('on-hold'), 'underpaid', '0.10000000');

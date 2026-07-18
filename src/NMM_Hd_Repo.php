@@ -152,14 +152,18 @@ class NMM_Hd_Repo {
 	}
 
 	/**
-	 * Atomically claim a payable row so exactly one worker can complete its
-	 * order. Only 'assigned'/'underpaid' rows - the two states get_pending()
-	 * returns - can be claimed, so a row already carried to 'complete' or
-	 * quarantined/retired by the reconcile pass yields CLAIM_ALREADY and the
-	 * caller must not call payment_complete().
+	 * Atomically claim a payable row for completion, moving it to the
+	 * intermediate 'completing' status so exactly one worker proceeds.
 	 *
-	 * Without this, two overlapping verifier runs that both saw the same
-	 * confirmed payment would each complete the order.
+	 * The target is deliberately NOT the terminal 'complete': the caller marks
+	 * that only AFTER WooCommerce has actually completed the order. A 'completing'
+	 * row is still returned by get_pending()/get_reconcilable(), so if the
+	 * process dies between the claim and the completion, a later sweep resumes it
+	 * - whereas a row moved straight to 'complete' would be swept by nothing and
+	 * the paid order would be stranded unpaid for good.
+	 *
+	 * Only 'assigned'/'underpaid' rows can be claimed. A row already 'completing'
+	 * (a concurrent run has it), 'complete', or reconciled yields CLAIM_ALREADY.
 	 *
 	 * @return string One of the CLAIM_* constants.
 	 */
@@ -168,7 +172,7 @@ class NMM_Hd_Repo {
 
 		$affected = $wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName`
-			 SET `status` = 'complete'
+			 SET `status` = 'completing'
 			 WHERE `address` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
@@ -186,29 +190,36 @@ class NMM_Hd_Repo {
 	}
 
 	/**
-	 * Hand a claimed row back to $toStatus after the completion attempt that
-	 * claimed it failed, so a later sweep retries it rather than leaving a
-	 * 'complete' row above an order that was never paid.
+	 * Hand a 'completing' row back to the payable 'assigned' state after a
+	 * completion attempt failed, so a later sweep retries it. A single write, and
+	 * it deliberately does NOT touch total_received (which the caller has already
+	 * cached with the observed amount): rolling that back to zero would let the
+	 * reconcile pass, which runs later in the same cron cycle and cancels only
+	 * zero-balance expired rows, cancel an order whose payment was just verified.
 	 *
-	 * Deliberately does not touch assigned_at, which set_status('assigned')
-	 * would refresh: the address was assigned when it was assigned, and
-	 * restarting that clock would push out the reconcile pass's expiry checks.
+	 * Also deliberately does not touch assigned_at, which set_status('assigned')
+	 * would refresh: restarting that clock would push out the reconcile pass's
+	 * expiry checks for an address that was assigned long ago.
 	 */
-	public function release_claim($address, $toStatus) {
+	public function release_claim($address) {
 		global $wpdb;
 
 		$wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName`
-			 SET `status` = %s
+			 SET `status` = 'assigned'
 			 WHERE `address` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
 			 AND `mpk` = %s
-			 AND `status` = 'complete'",
-			$toStatus, $address, $this->cryptoId, $this->hdMode, $this->mpk
+			 AND `status` = 'completing'",
+			$address, $this->cryptoId, $this->hdMode, $this->mpk
 		));
 	}
 
+	// Rows awaiting payment that the verifier must poll: 'assigned' and
+	// 'underpaid' as before, plus 'completing' so an interrupted completion
+	// (process died, or payment_complete() failed) is resumed rather than
+	// stranded - nothing else would ever revisit it.
 	public function get_pending() {
 		global $wpdb;
 
@@ -217,7 +228,7 @@ class NMM_Hd_Repo {
 			 WHERE `mpk` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
-			 AND (`status` = 'assigned' OR `status` = 'underpaid')",
+			 AND (`status` = 'assigned' OR `status` = 'underpaid' OR `status` = 'completing')",
 			$this->mpk, $this->cryptoId, $this->hdMode
 		), ARRAY_A);
 
@@ -232,7 +243,9 @@ class NMM_Hd_Repo {
 	 * a part payment for an order that is later cancelled is just as dead as one
 	 * that took nothing, and if the reconcile pass cannot see it, nothing else
 	 * ever will - the verifier keeps polling it on every sweep, forever, and it
-	 * is never retired as dirty.
+	 * is never retired as dirty. 'completing' belongs here for the same reason:
+	 * an order can die while its row is mid-completion, and that row must still
+	 * be retired rather than polled forever.
 	 */
 	public function get_reconcilable() {
 		global $wpdb;
@@ -242,7 +255,7 @@ class NMM_Hd_Repo {
 			 WHERE `mpk` = %s
 			 AND `cryptocurrency` = %s
 			 AND `hd_mode` = %d
-			 AND (`status` = 'assigned' OR `status` = 'underpaid')",
+			 AND (`status` = 'assigned' OR `status` = 'underpaid' OR `status` = 'completing')",
 			$this->mpk, $this->cryptoId, $this->hdMode
 		), ARRAY_A);
 
