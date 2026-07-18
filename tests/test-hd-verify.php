@@ -83,9 +83,9 @@ function hd_notes($orderId) {
 	return $text;
 }
 
-function hd_sweep($mock) {
+function hd_sweep($mock, $confs = 1) {
 	add_filter('pre_http_request', $mock, 10, 3);
-	NMM_Hd::check_all_pending_addresses_for_payment('BTC', $GLOBALS['hd_mpk'], 1, 0.99, $GLOBALS['hd_mode']);
+	NMM_Hd::check_all_pending_addresses_for_payment('BTC', $GLOBALS['hd_mpk'], $confs, 0.99, $GLOBALS['hd_mode']);
 	remove_filter('pre_http_request', $mock, 10);
 }
 
@@ -93,7 +93,7 @@ function hd_sweep($mock) {
 // expired row, so it makes an explorer call too - mock it.
 function hd_cancel_expired($mock, $cancelSec) {
 	add_filter('pre_http_request', $mock, 10, 3);
-	NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], $cancelSec, $GLOBALS['hd_mode'], 1);
+	NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], $cancelSec, $GLOBALS['hd_mode']);
 	remove_filter('pre_http_request', $mock, 10);
 }
 
@@ -339,10 +339,47 @@ NMM_Hd::reset_observed_totals();
 $sameRun = hd_mkorder('on-hold');
 hd_row('hd_addr_same_run', $sameRun, 'assigned', '0.00000000');
 hd_backdate_assigned('hd_addr_same_run', 48 * 3600);
-hd_sweep($zeroMock); // verifier observes 0 for this address in this "cron run"
+// Sweep at ZERO confirmations: only a zero observed at the loosest threshold
+// is conclusive for a cancellation (a zero at the merchant's stricter
+// threshold says nothing about unconfirmed funds and forces a re-fetch).
+hd_sweep($zeroMock, 0); // verifier observes 0-at-0-conf in this "cron run"
 hd_cancel_expired($paidMock, 3600); // a re-fetch would see 1.0 and refuse to cancel
 hok('expiry uses the verifier\'s same-run observation',   hd_order_status($sameRun) === 'cancelled', 'status=' . hd_order_status($sameRun));
 NMM_Hd::reset_observed_totals();
+
+// --- funds below the merchant's confirmation threshold must not be cancelled ---
+// The merchant requires 6 confirmations. A real payment with fewer reads as
+// ZERO at that threshold - both in the verifier's observation and in any fetch
+// made at it. Whether funds EXIST is a separate question from whether they are
+// confirmed enough to complete, so the expiry safety check must ask at
+// 0 confirmations; this order has money in flight and must survive.
+$confMock = function ($pre, $args, $url) {
+	if (strpos($url, 'confirmations=0') !== false) {
+		return array('response' => array('code' => 200, 'message' => 'OK'), 'body' => '100000000', 'headers' => array(), 'cookies' => array());
+	}
+	// At any stricter threshold the payment is invisible.
+	return array('response' => array('code' => 200, 'message' => 'OK'), 'body' => '0', 'headers' => array(), 'cookies' => array());
+};
+$pendingConf = hd_mkorder('on-hold');
+hd_row('hd_addr_pending_conf', $pendingConf, 'assigned', '0.00000000');
+hd_backdate_assigned('hd_addr_pending_conf', 48 * 3600);
+hd_sweep($confMock, 6); // verifier sees zero at the 6-conf threshold
+hd_cancel_expired($confMock, 3600);
+hok('a payment below the confirmation threshold is not cancelled', hd_order_status($pendingConf) === 'on-hold', 'status=' . hd_order_status($pendingConf));
+hok('  and the any-funds total is cached for the verifier', hd_total('hd_addr_pending_conf') === 1.0, 'total=' . hd_total('hd_addr_pending_conf'));
+NMM_Hd::reset_observed_totals();
+
+// --- a late PARTIAL payment must not solicit more funds from a dead order ---
+$lateCancelled = hd_mkorder('cancelled');
+hd_row('hd_addr_late_partial', $lateCancelled, 'assigned', '0.00000000');
+hd_sweep($underMock); // 0.1 BTC lands after the order was cancelled
+hok('a late partial does not mark a dead order underpaid',  hd_status('hd_addr_late_partial') === 'assigned', 'row=' . hd_status('hd_addr_late_partial'));
+hok('  the customer is NOT asked for the remaining amount', strpos(hd_notes($lateCancelled), 'Remaining payment required') === false);
+hok('  the merchant gets a reconciliation note instead',    strpos(hd_notes($lateCancelled), 'Late partial payment') !== false);
+hok('  the order stays cancelled',                          hd_order_status($lateCancelled) === 'cancelled', 'status=' . hd_order_status($lateCancelled));
+hok('  and the funds are cached',                           hd_total('hd_addr_late_partial') === 0.1, 'total=' . hd_total('hd_addr_late_partial'));
+NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+hok('  the reconcile pass then retires the address',        hd_status('hd_addr_late_partial') === 'dirty', 'row=' . hd_status('hd_addr_late_partial'));
 
 // --- the completion lease (crash recovery vs. a live concurrent worker) ---
 $repoLease = new NMM_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);

@@ -41,6 +41,16 @@ class NMM_Hd {
 		return $wpdb->prefix . '|' . $cryptoId . '|' . (int) $hdMode . '|' . md5((string) $mpk) . '|' . $address;
 	}
 
+	// Whether this coin's balance fetcher can actually distinguish confirmation
+	// thresholds. Only the BTC and LTC adapters pass the requirement through to
+	// their explorer (blockchain.info / BlockCypher, both of which accept 0 =
+	// unconfirmed included); every other adapter reports one fixed view
+	// regardless, so re-fetching it at a different threshold cannot yield
+	// different data.
+	private static function fetch_distinguishes_confirmations($cryptoId) {
+		return $cryptoId === 'BTC' || $cryptoId === 'LTC';
+	}
+
 	/**
 	 * Is this order still legitimately awaiting its crypto payment?
 	 *
@@ -97,9 +107,13 @@ class NMM_Hd {
 			}
 
 			// Record every successful observation (zero included) for the expiry
-			// pass, which runs right after this in the same cron process.
+			// pass, which runs right after this in the same cron process. The
+			// threshold it was fetched at matters to the consumer: a ZERO seen
+			// at the merchant's N-confirmation requirement says nothing about
+			// funds sitting below N confirmations.
 			self::$observedTotals[self::observation_key($cryptoId, $mpk, $hdMode, $record['address'])] = array(
 				'total' => $blockchainTotalReceived,
+				'confs' => (int) $requiredConfirmations,
 				'at'    => time(),
 			);
 
@@ -310,6 +324,27 @@ class NMM_Hd {
 					continue;
 				}
 
+				if (!self::order_awaits_payment($order)) {
+					// A late PARTIAL payment to an order that is cancelled, failed
+					// or refunded. Record it for the merchant, but do NOT email the
+					// customer asking for the remaining amount - the order is dead
+					// and its address must not receive more funds - and do NOT move
+					// the row to 'underpaid': leaving its status alone lets the
+					// reconcile pass retire the address (non-zero total -> dirty).
+					if ($isResuming) {
+						$hdRepo->release_claim($address);
+					}
+					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received a partial ' . $cryptoId . ' payment but order ' . $orderId . ' is ' . $order->get_status() . ' - not soliciting further payment. Please reconcile manually.', 'warning');
+					$order->add_order_note(sprintf(
+						/* translators: 1: amount received, 2: cryptocurrency ticker, 3: wallet address, 4: order status */
+						__('Late partial payment of %1$s %2$s received at Privacy Mode address %3$s after this order became %4$s. The customer has NOT been asked for further payment and the order has NOT been changed - please reconcile this payment manually.', 'nomiddleman-crypto-payments-for-woocommerce'),
+						NMM_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount),
+						$cryptoId,
+						$address,
+						$order->get_status()));
+					continue;
+				}
+
 				// handle multiple underpayments, just add a new note
 				if ($record['status'] === 'underpaid') {
 						$orderNote = sprintf(
@@ -475,7 +510,7 @@ class NMM_Hd {
 		throw new \Exception("Unable to get XMY HD address information from external sources.");
 	}
 
-	public static function cancel_expired_addresses($cryptoId, $mpk, $orderCancellationTimeSec, $hdMode, $requiredConfirmations = 1) {
+	public static function cancel_expired_addresses($cryptoId, $mpk, $orderCancellationTimeSec, $hdMode) {
 		global $woocommerce;
 		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 
@@ -537,31 +572,41 @@ class NMM_Hd {
 				// verifier may have failed to record one. Cancelling a funded order
 				// is the one thing this pass must never do.
 				//
-				// The verifier ran moments ago in this same process and already
-				// fetched this address's balance - reuse that observation while it
-				// is still fresh (OBSERVATION_MAX_AGE_SEC). It costs no extra
-				// explorer call (a large abandonment backlog would double every
-				// call otherwise) and sidesteps per-host cooldowns (chainz: the
-				// verifier's own call starts the cooldown, so a second call here
-				// would be refused every cycle and the order never cancelled). An
-				// observation older than the age bound - a huge backlog between
-				// the verifier touching this address and this pass reaching it -
-				// is NOT trusted for a cancellation: a payment could have landed
-				// in that window, so we fetch fresh instead (safe from the
-				// cooldown too: any short per-host cooldown lapsed long ago).
+				// Whether funds EXIST is a different question from whether they
+				// are confirmed enough to complete the order. A payment sitting
+				// below the merchant's confirmation requirement reads as ZERO at
+				// that threshold, and cancelling over it would abandon real money
+				// in flight - so the safety check here wants the LOOSEST view the
+				// adapter can give (confirmations = 0, unconfirmed included).
+				//
+				// The verifier ran moments ago in this same process; reuse its
+				// observation while fresh (OBSERVATION_MAX_AGE_SEC) when it is
+				// conclusive: a NON-ZERO total at any threshold proves funds (do
+				// not cancel), and a zero is conclusive only if it was taken at
+				// threshold 0 or the coin's adapter cannot distinguish thresholds
+				// anyway (re-fetching would return the same view - which also
+				// keeps per-host-cooldown coins like chainz/BTX from livelocking
+				// on a doomed second call). A zero at a stricter threshold proves
+				// nothing about pending funds, so fetch fresh at 0. A failed
+				// fetch defers - never cancel on an unverified assumption.
 				$observedKey = self::observation_key($cryptoId, $mpk, $hdMode, $address);
 				$observation = isset(self::$observedTotals[$observedKey]) ? self::$observedTotals[$observedKey] : null;
+				$freshTotal = null;
 
 				if ($observation !== null && (time() - $observation['at']) <= self::OBSERVATION_MAX_AGE_SEC) {
-					$freshTotal = $observation['total'];
+					if ($observation['total'] > 0) {
+						$freshTotal = $observation['total'];
+					}
+					elseif ((int) $observation['confs'] === 0 || !self::fetch_distinguishes_confirmations($cryptoId)) {
+						$freshTotal = 0;
+					}
 				}
-				else {
+
+				if ($freshTotal === null) {
 					try {
-						$freshTotal = self::get_total_received_for_address($cryptoId, $address, $requiredConfirmations);
+						$freshTotal = self::get_total_received_for_address($cryptoId, $address, 0);
 					}
 					catch ( \Exception $e ) {
-						// Could not confirm a zero balance (explorer down). Do NOT
-						// cancel on an unverified assumption; try again next cycle.
 						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not re-check ' . $cryptoId . ' address ' . $address . ' before expiry; leaving the order for the next cycle.', 'warning');
 						continue;
 					}

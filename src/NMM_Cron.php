@@ -67,7 +67,7 @@ function NMM_do_cron_job() {
 				NMM_Hd::check_all_pending_addresses_for_payment($cryptoId, $mpk, $hdRequiredConfirmations, $hdPercentToVerify, $hdMode);
 
 				NMM_Hd::buffer_ready_addresses($cryptoId, $mpk, $hdBufferAddressCount, $hdMode);
-				NMM_Hd::cancel_expired_addresses($cryptoId, $mpk, $hdOrderCancellationTimeSec, $hdMode, $hdRequiredConfirmations);
+				NMM_Hd::cancel_expired_addresses($cryptoId, $mpk, $hdOrderCancellationTimeSec, $hdMode);
 
 				// Re-verify quarantined (abandoned, unpaid) addresses with fresh
 				// explorer checks spaced at least this far apart, and past the
