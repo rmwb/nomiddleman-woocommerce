@@ -101,7 +101,9 @@ $run = function($coin) use ($only) { return count($only) === 0 || in_array($coin
 if ($run('BTC')) check('BTC mempool.space', NMM_Blockchain::get_btc_address_transactions('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'));
 if ($run('ETH')) check('ETH blockscout', NMM_Blockchain::get_eth_address_transactions('0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae'));
 if ($run('DOGE')) check('DOGE blockcypher', NMM_Blockchain::get_doge_address_transactions('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'));
-if ($run('XRP')) check('XRP xrpscan', NMM_Blockchain::get_xrp_address_transactions('rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh'));
+// High-traffic exchange wallet: keeps incoming XRP Payments on page 1 (the
+// endpoint returns only the newest 25 txns), so the probe stays meaningful.
+if ($run('XRP')) check('XRP xrpscan', NMM_Blockchain::get_xrp_address_transactions('rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh'));
 if ($run('BCH')) check('BCH haskoin', NMM_Blockchain::get_bch_address_transactions('qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy'));
 if ($run('DASH')) check('DASH insight', NMM_Blockchain::get_dash_address_transactions('XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw'));
 if ($run('EOS')) check('EOS hyperion', NMM_Blockchain::get_eos_address_transactions('binancecleos'));
