@@ -732,14 +732,25 @@ class NMM_Payment {
 
 				// CLAIM_CLAIMED: we won the row - complete the order.
 
+				// Consume the hash NOW, before payment_complete(). The claim has
+				// already taken this order out of the unpaid set, so a verifier
+				// running concurrently (possible when GET_LOCK is unavailable and
+				// the cron degrades to running unlocked, see NMM_Cron) would see
+				// only the remaining sibling on this shared address. If the hash
+				// were still unconsumed it could be pooled into that sibling's
+				// aggregate and credited twice - one 1 BTC transaction settling
+				// both a 1 BTC and a 2 BTC order. payment_complete() fires order
+				// hooks, emails and third-party integrations, so leaving the
+				// window open across it is a real exposure, not a theoretical one.
+				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
+
 				$paymentRepo->set_hash($orderId, $orderAmount, $txHash);
 
 				$order = wc_get_order($orderId);
 				if (!$order) {
 					// Row is claimed 'paid' (so it stops matching), but the order is
-					// gone - nothing to complete. Record the tx as consumed and move on.
+					// gone - nothing to complete. The tx is already consumed above.
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hash: ' . $txHash, 'warning');
-					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 					continue;
 				}
 				$orderNote = sprintf(
@@ -753,8 +764,6 @@ class NMM_Payment {
 				$order->update_meta_data('transaction_hash', $txHash);
 				$order->payment_complete();
 				$order->add_order_note($orderNote);
-
-				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 			}
 		}
 
@@ -1112,16 +1121,21 @@ class NMM_Payment {
 		// CLAIM_CLAIMED: we won the row - complete the order exactly as the
 		// single-tx path does.
 
+		// Consume every contributor NOW, before payment_complete(), for the same
+		// reason the single-tx path does: the claim has already removed this
+		// order from the unpaid set, so any hash still unconsumed could be
+		// pooled into a sibling order by a verifier running concurrently.
+		foreach ($contributingHashes as $consumedHash) {
+			$nmmSettings->add_consumed_tx($cryptoId, $address, $consumedHash);
+		}
+
 		$paymentRepo->set_hash($orderId, $orderAmount, $storedHashList);
 
 		$order = wc_get_order($orderId);
 		if (!$order) {
 			// Row is claimed 'paid' (so it stops matching), but the order is
-			// gone - nothing to complete. Record the txs as consumed and move on.
+			// gone - nothing to complete. The txs are already consumed above.
 			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hashes: ' . $hashList, 'warning');
-			foreach ($contributingHashes as $consumedHash) {
-				$nmmSettings->add_consumed_tx($cryptoId, $address, $consumedHash);
-			}
 			return;
 		}
 
@@ -1141,10 +1155,6 @@ class NMM_Payment {
 		$order->update_meta_data('transaction_hash', $storedHashList);
 		$order->payment_complete();
 		$order->add_order_note($orderNote);
-
-		foreach ($contributingHashes as $consumedHash) {
-			$nmmSettings->add_consumed_tx($cryptoId, $address, $consumedHash);
-		}
 	}
 
 	private static function get_address_transactions($cryptoId, $address, $transactionLifetime = null) {

@@ -50,7 +50,7 @@ $ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use
 // deterministic.
 $pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
 	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_ambsub', 'pm_ambunc',
-	'pm_mo', 'pm_mosub');
+	'pm_race', 'pm_mo', 'pm_mosub');
 foreach ($pmAddrs as $a) {
 	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
 	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
@@ -251,6 +251,46 @@ NMM_Payment::process_address_transactions($btc, 'pm_ambsub', array_merge($subTxs
 pmok('fresh txs still complete the survivor',      pm_rec($wpdb, $pt, $oSubB) === 'paid');
 pmok('  fresh hashes consumed',                    $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_C') && $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_D'));
 pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_B'));
+
+// --- concurrent verifier must never credit one hash to two orders ------------
+// A 1-unit and a 2-unit order share an address; transactions T=1 and U=1 exist.
+// T matches the 1-unit order exactly, so the single-tx pass claims it. If the
+// hash were only consumed AFTER payment_complete(), a verifier running in that
+// window (possible when GET_LOCK is unavailable and the cron degrades to
+// running unlocked) would see only the 2-unit order as unpaid, pool the still
+// unconsumed T with U, and complete it too - 2 units on chain settling 3 units
+// of orders. Re-entering the matcher from inside payment_complete() reproduces
+// exactly that interleaving.
+$oRaceX = pm_mkorder(); $ins($oRaceX, 'pm_race');                       // 1 unit
+$oRaceY = pm_mkorder(); $ins($oRaceY, 'pm_race', null, '0.00200000');   // 2 units
+$raceTxs = array(
+	new NMM_Transaction($units, 999, time(), 'PMTX_RACE_T'),
+	new NMM_Transaction($units, 999, time(), 'PMTX_RACE_U'),
+);
+$GLOBALS['pm_race_reentered'] = false;
+$GLOBALS['pm_race_consumed_midflight'] = null;
+$raceHook = function ($orderId) use ($btc, $raceTxs, $life, $oRaceX, $stg) {
+	// Only re-enter once, and only for the order the single-tx pass just won.
+	if ($orderId != $oRaceX || $GLOBALS['pm_race_reentered']) {
+		return;
+	}
+	$GLOBALS['pm_race_reentered'] = true;
+	// Is T reserved at the moment payment_complete() is running?
+	$GLOBALS['pm_race_consumed_midflight'] = $stg->tx_already_consumed('BTC', 'pm_race', 'PMTX_RACE_T');
+	// The concurrent verifier, mid-window.
+	NMM_Payment::process_address_transactions($btc, 'pm_race', $raceTxs, $life);
+};
+add_action('woocommerce_payment_complete', $raceHook, 10, 1);
+NMM_Payment::process_address_transactions($btc, 'pm_race', $raceTxs, $life);
+remove_action('woocommerce_payment_complete', $raceHook, 10);
+
+pmok('race: the concurrent verifier actually ran', $GLOBALS['pm_race_reentered'] === true);
+pmok('  hash consumed BEFORE payment_complete',    $GLOBALS['pm_race_consumed_midflight'] === true);
+pmok('  1-unit order paid',                        pm_rec($wpdb, $pt, $oRaceX) === 'paid');
+pmok('  2-unit sibling NOT credited',              pm_rec($wpdb, $pt, $oRaceY) === 'unpaid');
+pmok('  sibling order not completed',              !pm_paidlike($oRaceY));
+pmok('  U left unconsumed for a legitimate later match',
+	!$stg->tx_already_consumed('BTC', 'pm_race', 'PMTX_RACE_U'));
 
 // --- shared address + UNDER-CONFIRMED partials + sibling expiry --------------
 // The verifier runs immediately before the expiry pass in the same cron cycle,
