@@ -29,6 +29,18 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, array($this, 'process_admin_options'));
         add_action('woocommerce_thankyou_' . $this->id, array($this, 'thank_you_page'));
+
+        // Hooked here, not from thank_you_page(): emails resent from admin or
+        // dispatched by cron never pass through the thank-you page, so hooking
+        // there meant only the very first email carried the payment details.
+        // WooCommerce instantiates each registered gateway once per request
+        // (WC_Payment_Gateways::init()), but guard with a static flag anyway so
+        // a second instantiation can never render the details twice per email.
+        static $emailDetailsHooked = false;
+        if (!$emailDetailsHooked) {
+            add_action('woocommerce_email_order_details', array($this, 'additional_email_details'), 10, 4);
+            $emailDetailsHooked = true;
+        }
     }
 
     public function admin_options() {
@@ -386,16 +398,18 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // For customer reference and to handle refresh of thank you page
             $order->update_meta_data('wallet_address', $orderWalletAddress);
 
-
-            // Emails are fired once we update status to on-hold, so hook additional email details here
-            add_action('woocommerce_email_order_details', array( $this, 'additional_email_details' ), 10, 4);
-            
+            // Emails fire once we update status to on-hold; additional_email_details
+            // is already hooked from the constructor and reads the meta saved here.
             $order->update_status('wc-on-hold', $orderNote);
 
             // Output additional thank you page html
             $this->output_thank_you_html($crypto, $orderWalletAddress, $formattedCryptoTotal, $order_id);
             }
-            catch ( \Exception $e ) {
+            catch ( \Throwable $e ) {
+                // \Throwable, not \Exception: a TypeError/Error on PHP 8 (bad
+                // registry data, null dereference) must fail the order the same
+                // way an Exception does - escaping here would skip the failure
+                // handling and 500 the customer mid-initialization.
                 // Initialization failed. Mark the order failed HERE, while we still
                 // hold the lock, so a concurrent first-load request that is waiting
                 // cannot acquire the lock, allocate a fresh address, reach on-hold,
@@ -423,11 +437,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 }
             }
         }
-        catch ( \Exception $e ) {
+        catch ( \Throwable $e ) {
             // Errors from the fast path (re-displaying an already-initialized
             // order). Do not fail the order for a display hiccup - it may already
             // be paid; just surface the message. Initialization failures are
-            // handled and failed under the lock above.
+            // handled and failed under the lock above. \Throwable, not
+            // \Exception: on PHP 8 an undefined-index/null dereference in the
+            // display path raises an \Error, which must render this notice
+            // instead of a 500 on the customer's order page.
             NMM_Util::log(__FILE__, __LINE__, 'Error rendering the payment page: ' . $e->getMessage());
             $this->render_checkout_error($e->getMessage());
         }
@@ -469,17 +486,42 @@ class NMM_Gateway extends WC_Payment_Gateway {
             $order_id);
     }
 
+    // WC()->session is null when an email is dispatched from cron, WP-CLI or an
+    // admin resend - there is no customer browsing session. Calling ->get() on
+    // null raises an \Error on PHP 8, so never dereference it unchecked.
+    private function session_usable() {
+        return function_exists('WC') && WC() && WC()->session && is_callable(array(WC()->session, 'get'));
+    }
+
     public function additional_email_details($order, $sent_to_admin, $plain_text, $email) {
+        // Hooked unconditionally (see constructor), so this now fires for every
+        // order email: bail quietly for orders not paid through this gateway.
+        if (!($order instanceof WC_Order) || $order->get_payment_method() !== $this->id) {
+            return;
+        }
         $chosenCrypto = $order->get_meta('nmm_chosen_crypto_id');
         if (empty($chosenCrypto)) {
+            $chosenCrypto = $order->get_meta('crypto_type_id');
+        }
+        if (empty($chosenCrypto) && $this->session_usable()) {
             $chosenCrypto = WC()->session->get('chosen_crypto_id');
         }
         if (empty($chosenCrypto) || !array_key_exists($chosenCrypto, $this->cryptos)) {
             return; // nothing reliable to attach; the order note still has details
         }
         $crypto =  $this->cryptos[$chosenCrypto];
-        $orderCryptoTotal = WC()->session->get($crypto->get_id() . '_amount');
+        // Order meta is authoritative: it survives admin resends and cron
+        // dispatch, where the session thank_you_page populated no longer
+        // exists. The session copy is only a fallback for legacy orders placed
+        // before the meta was written.
+        $orderCryptoTotal = $order->get_meta('crypto_amount');
+        if (empty($orderCryptoTotal) && $this->session_usable()) {
+            $orderCryptoTotal = WC()->session->get($crypto->get_id() . '_amount');
+        }
         $orderWalletAddress = $order->get_meta('wallet_address');
+        if (empty($orderCryptoTotal) || empty($orderWalletAddress)) {
+            return; // order never finished payment setup; no details to show
+        }
         $orderId = $order->get_id();
 
         $formattedTotal = NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $orderCryptoTotal);
@@ -634,6 +676,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
     }
 
     private function handle_thank_you_refresh($chosenCrypto, $orderWalletAddress, $cryptoTotal, $orderId) {
+        // The coin id comes from order meta: it can be missing on a legacy
+        // order, or name a coin removed from the registry in an update.
+        // Indexing $this->cryptos with it unguarded would raise an \Error on
+        // PHP 8 and 500 the customer's order page on refresh.
+        if (!is_string($chosenCrypto) || !array_key_exists($chosenCrypto, $this->cryptos)) {
+            NMM_Util::log(__FILE__, __LINE__, 'Unknown crypto_type_id for order ' . $orderId . '; cannot re-display payment details.', 'warning');
+            echo '<p class="nmm-status-pending">' . esc_html__('We could not display your payment details for this order. Please contact the store for assistance.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
+            return;
+        }
         $this->output_thank_you_html($this->cryptos[$chosenCrypto], $orderWalletAddress, $cryptoTotal, $orderId);
     }
 

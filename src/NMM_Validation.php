@@ -37,6 +37,35 @@ class NMM_Validation {
 		// Keys not present in the submitted form must survive the save
 		$newValues = array_merge((array) $oldValues, $newValues);
 
+		// The RPC password field is write-only: the admin page always renders it
+		// blank so the secret never appears in page source. An empty submission
+		// therefore means "keep the stored password", and clearing is an explicit
+		// checkbox action instead.
+		$clearRpcPassword = !empty($newValues['XMR_wallet_rpc_password_clear']);
+		// The checkbox is an action, not a state - it must never persist in the
+		// saved options or every future save would silently re-clear the password.
+		unset($newValues['XMR_wallet_rpc_password_clear']);
+
+		if (defined('NMM_XMR_RPC_PASSWORD')) {
+			// Constant wins at read time (NMM_Settings::get_xmr_rpc_password); the
+			// admin field is disabled, so leave the stored option untouched and
+			// removing the constant restores the previous behaviour.
+			if (array_key_exists('XMR_wallet_rpc_password', (array) $oldValues)) {
+				$newValues['XMR_wallet_rpc_password'] = $oldValues['XMR_wallet_rpc_password'];
+			}
+			else {
+				unset($newValues['XMR_wallet_rpc_password']);
+			}
+		}
+		else if ($clearRpcPassword) {
+			$newValues['XMR_wallet_rpc_password'] = '';
+		}
+		else if (!isset($newValues['XMR_wallet_rpc_password']) || $newValues['XMR_wallet_rpc_password'] === '') {
+			$newValues['XMR_wallet_rpc_password'] = isset($oldValues['XMR_wallet_rpc_password'])
+				? (string) $oldValues['XMR_wallet_rpc_password']
+				: '';
+		}
+
 		// The gateway title is printed by WooCommerce without escaping, so it
 		// must be plain text. Strip all markup here (site admins on multisite
 		// lack unfiltered_html and must not be able to inject <script>).

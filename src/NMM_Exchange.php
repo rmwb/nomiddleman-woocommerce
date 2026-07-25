@@ -84,7 +84,9 @@ class NMM_Exchange {
         }
 
         // Primary: Frankfurter (ECB reference rates, no API key required)
-        $response = wp_remote_get('https://api.frankfurter.dev/v1/latest?base=' . rawurlencode($fromCurr) . '&symbols=USD');
+        // Rate lookups run inside page renders, so a short explicit timeout keeps
+        // one slow API from stalling checkout (WP's default is 5s per call).
+        $response = wp_remote_get('https://api.frankfurter.dev/v1/latest?base=' . rawurlencode($fromCurr) . '&symbols=USD', array('timeout' => 3));
 
         if (!is_wp_error($response) && $response['response']['code'] === 200) {
             $body = json_decode($response['body']);
@@ -98,7 +100,7 @@ class NMM_Exchange {
         }
 
         // Fallback: open.er-api.com (no API key, wider currency coverage)
-        $response = wp_remote_get('https://open.er-api.com/v6/latest/' . rawurlencode($fromCurr));
+        $response = wp_remote_get('https://open.er-api.com/v6/latest/' . rawurlencode($fromCurr), array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             throw new \Exception(esc_html__('Could not reach the currency conversion service. Please try again.', 'nomiddleman-crypto-payments-for-woocommerce'));
@@ -176,10 +178,10 @@ class NMM_Exchange {
 
         $geckoId = array_key_exists($cryptoId, self::$coingeckoIds) ? self::$coingeckoIds[$cryptoId] : strtolower($cryptoId);
 
-        $response = wp_remote_get('https://api.coingecko.com/api/v3/simple/price?ids=' . rawurlencode($geckoId) . '&vs_currencies=usd');
+        $response = wp_remote_get('https://api.coingecko.com/api/v3/simple/price?ids=' . rawurlencode($geckoId) . '&vs_currencies=usd', array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
-            NMM_Util::log(__FILE__, __LINE__, print_r($response, true));
+            NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( coingecko simple/price ): ' . NMM_Util::summarize_response($response));
             return 0;
         }
 
@@ -213,7 +215,7 @@ class NMM_Exchange {
             return $hitbtcPrice;
         }
 
-        $response = wp_remote_get('https://api.hitbtc.com/api/2/public/ticker/' . $cryptoId . 'USD');
+        $response = wp_remote_get('https://api.hitbtc.com/api/2/public/ticker/' . $cryptoId . 'USD', array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             return 0;
@@ -241,7 +243,7 @@ class NMM_Exchange {
             return $gateioPrice;
         }
 
-        $response = wp_remote_get('https://data.gate.io/api2/1/ticker/' . strtolower($cryptoId) . '_usdt');
+        $response = wp_remote_get('https://data.gate.io/api2/1/ticker/' . strtolower($cryptoId) . '_usdt', array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             return 0;
@@ -270,7 +272,7 @@ class NMM_Exchange {
             return $binancePrice;
         }
 
-        $response = wp_remote_get('https://api.binance.com/api/v3/ticker/24hr?symbol=' . $cryptoId . 'USDT');
+        $response = wp_remote_get('https://api.binance.com/api/v3/ticker/24hr?symbol=' . $cryptoId . 'USDT', array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             return 0;
@@ -298,7 +300,7 @@ class NMM_Exchange {
             return $poloniexPrice;
         }
 
-        $response = wp_remote_get('https://api.poloniex.com/markets/' . rawurlencode($cryptoId) . '_USDT/price');
+        $response = wp_remote_get('https://api.poloniex.com/markets/' . rawurlencode($cryptoId) . '_USDT/price', array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
             return 0;

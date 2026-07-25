@@ -38,16 +38,37 @@ class NMM_Hd_Repo {
 		$this->tableName = $wpdb->prefix . NMM_HD_TABLE;
 	}
 
+	/**
+	 * Record a derived HD address. Returns true only once the row is committed.
+	 *
+	 * The caller MUST NOT treat the address as stocked when this returns false:
+	 * this table is the ready pool, so a row that never landed means
+	 * count_ready() stays short and the checkout has nothing to claim. The
+	 * insert can fail for reasons derivation cannot foresee - a damaged schema,
+	 * a dropped connection, or the UNIQUE(cryptocurrency, address) constraint
+	 * rejecting a re-derivation of an address already on file. Previously the
+	 * result was discarded, so those failures were completely silent: the
+	 * customer just saw a generic "no address" error with nothing in the logs.
+	 *
+	 * @return bool
+	 */
 	public function insert($address, $mpk_index, $status) {
 		NMM_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status);
 		global $wpdb;
 
-		$wpdb->query($wpdb->prepare(
+		$affected = $wpdb->query($wpdb->prepare(
 			"INSERT INTO `$this->tableName`
 				(`address`, `cryptocurrency`, `mpk`, `mpk_index`, `status`, `hd_mode`) VALUES
 				(%s, %s, %s, %d, %s, %d)",
 			$address, $this->cryptoId, $this->mpk, $mpk_index, $status, $this->hdMode
 		));
+
+		if ($affected === false) {
+			NMM_Util::log(__FILE__, __LINE__, 'Failed to insert HD address row for ' . $this->cryptoId . ' ' . $address . ' (index ' . $mpk_index . ', status ' . $status . '): ' . $wpdb->last_error, 'error');
+			return false;
+		}
+
+		return $affected > 0;
 	}
 
 	public function count_ready() {

@@ -149,6 +149,14 @@ function NMM_init_gateways(){
     add_action('wp_ajax_nmm_order_status', 'NMM_order_status_ajax');
     add_action('wp_ajax_nopriv_nmm_order_status', 'NMM_order_status_ajax');
 
+    // Order emails resent from admin or dispatched by cron/WP-CLI can render
+    // before anything has initialized the payment gateways, so NMM_Gateway's
+    // constructor - which hooks additional_email_details at priority 10 on
+    // this same hook - would never run and the email would lose its payment
+    // details. Prime the gateways singleton at priority 5; WordPress still
+    // executes callbacks added to a later priority of the hook being run.
+    add_action('woocommerce_email_order_details', 'NMM_load_gateways_for_email', 5);
+
     NMM_Register_Extensions();
     NMM_update_hd_table();
     NMM_maybe_create_sol_retry_table();
@@ -156,6 +164,16 @@ function NMM_init_gateways(){
 
     add_action('init', 'NMM_schedule_payment_checks');
     add_action('admin_init', 'NMM_cleanup_legacy_qr_files');
+}
+
+// See the woocommerce_email_order_details registration in NMM_init_gateways:
+// instantiating the gateways singleton runs NMM_Gateway::__construct(), which
+// registers the email payment-details callback. Idempotent - WooCommerce only
+// ever builds the singleton (and each gateway) once per request.
+function NMM_load_gateways_for_email() {
+    if (function_exists('WC') && WC() && is_callable(array(WC(), 'payment_gateways'))) {
+        WC()->payment_gateways();
+    }
 }
 
 // QR codes used to be written to the plugin dir as tmp{orderId}_qrcode.png -

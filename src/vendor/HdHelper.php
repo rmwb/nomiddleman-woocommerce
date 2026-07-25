@@ -1065,6 +1065,14 @@ class HdHelper
     }
 
     public static function hash_160_to_bc_address($h160, $cryptoId, $type) {
+        // Fail CLOSED on any coin/type this chain has no version byte for. Left
+        // uninitialized, a fall-through used to concatenate nothing with $h160,
+        // yielding a versionless-but-plausible base58 address that no wallet
+        // controls - a customer paying it would lose the funds. Null here plus
+        // the throw below guarantees no address is ever produced without an
+        // explicitly assigned version byte.
+        $addrtype = null;
+
         if ($cryptoId === 'BTC' && $type === 'p2pkh') {
             $addrtype = chr(0);
         }        
@@ -1110,6 +1118,10 @@ class HdHelper
                 throw new \Exception("QTUM p2sh address extension not enabled.");
             }
         }        
+
+        if ($addrtype === null) {
+            throw new \Exception('No address version byte known for ' . $cryptoId . ' address type ' . $type . '; refusing to generate an address.');
+        }
 
         $vh160 = $addrtype . $h160;
         $h = self::hash_hash($vh160);
