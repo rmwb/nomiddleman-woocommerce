@@ -157,6 +157,121 @@ $seeded = $repo->claim_next_index('BTC', 3);
 cok('a missing counter row yields seat 0',             $seeded === 0, 'got=' . var_export($seeded, true));
 cok('and the row is seeded back',                      car_rows('BTC') === 1);
 
+// ---------------------------------------------------------------------
+// FUND SAFETY: under Autopay the carousel must refuse an address Autopay
+// cannot verify, at the moment of use.
+//
+// The settings save already filters such addresses out of the buffer, but
+// the buffer is a DURABLE CACHE and an upgrade writes no settings (nor does
+// a mode flipped by WP-CLI, an import, or a migration). The previous release
+// accepted 95-char Zcash Sprout z-addresses, so a merchant who has been
+// running ZEC Autopay already has one sitting in their stored buffer. Handing
+// it out means the merchant RECEIVES the money while Autopay - which asks a
+// public explorer which outputs paid a literal address - can never see a
+// shielded payment, so the order is auto-cancelled after the customer paid.
+// The check therefore has to live in get_next_address(), where nothing can
+// bypass it.
+//
+// Vectors: both are the exact strings pinned in tests/test-address-validation.php.
+//   $zecSprout there is the legacy Sprout z-address from the Zcash docs
+//   example (that file's "legacy Sprout z-address (docs example)" case) -
+//   a VALID ZEC format, but NOT Autopay-verifiable.
+//   The transparent t1 there is built as t_b58check_encode("\x1c\xb8", $zeros20)
+//   - version 0x1CB8 over 20 zero bytes - which encodes to the literal below.
+//   The two self-checks that follow assert exactly those properties, so a
+//   mistyped vector fails loudly instead of passing vacuously.
+// ---------------------------------------------------------------------
+$zecT1     = 't1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs';
+$zecSprout = 'zcU1Cd6zYyZCd2VJF8yKgmzjxdiiU1rgTTjEwoN1CGUWCziPkUTXUjXmX7TMqdMNsTfuiGN1jQoVN4kGxUR4sAPN4XZ7pxb';
+
+cok('vector check: t1 is valid AND Autopay-verifiable',
+	NMM_Cryptocurrencies::is_valid_wallet_address('ZEC', $zecT1) && NMM_Address::is_autopay_verifiable_form('ZEC', $zecT1));
+cok('vector check: Sprout is valid but NOT Autopay-verifiable',
+	NMM_Cryptocurrencies::is_valid_wallet_address('ZEC', $zecSprout) && !NMM_Address::is_autopay_verifiable_form('ZEC', $zecSprout));
+
+// The harness DB persists between runs, so capture the merchant's real ZEC
+// state and put it back at the end - including the case where 'ZEC_mode' was
+// never set at all, which must be restored as ABSENT, not as ''.
+$zecSettings    = get_option(NMM_REDUX_ID);
+$zecModeWasSet  = is_array($zecSettings) && array_key_exists('ZEC_mode', $zecSettings);
+$zecModeOrig    = $zecModeWasSet ? $zecSettings['ZEC_mode'] : null;
+$zecBufferOrig  = $repo->get_buffer('ZEC');
+$zecIndexOrig   = car_index('ZEC');
+
+function car_set_zec_mode($mode) {
+	$s = get_option(NMM_REDUX_ID);
+	if (!is_array($s)) { $s = array(); }
+	if ($mode === null) { unset($s['ZEC_mode']); } else { $s['ZEC_mode'] = $mode; }
+	update_option(NMM_REDUX_ID, $s);
+}
+
+function car_zec_next() {
+	$carousel = new NMM_Carousel('ZEC');
+	return $carousel->get_next_address();
+}
+
+// --- Autopay: the shielded seat must never be handed out ---
+// Seats are claimed round-robin, so the shielded seat IS selected on some of
+// these laps; asking more times than there are seats is what proves the skip
+// happens rather than the transparent address merely coming up first.
+car_set_zec_mode('1'); // Autopay
+$repo->set_buffer('ZEC', array($zecSprout, $zecT1));
+car_set_index('ZEC', 0);
+$zecGot = array();
+$zecThrew = false;
+try {
+	for ($i = 0; $i < 6; $i++) { $zecGot[] = car_zec_next(); }
+} catch (\Exception $e) { $zecThrew = true; }
+cok('ZEC Autopay: never throws while a verifiable seat exists', !$zecThrew);
+cok('ZEC Autopay: every claim is the TRANSPARENT address',
+	!$zecThrew && count($zecGot) === 6 && array_unique($zecGot) === array($zecT1),
+	implode(',', array_map(function ($a) { return substr($a, 0, 8); }, $zecGot)));
+cok('ZEC Autopay: the shielded address is never handed out',
+	!in_array($zecSprout, $zecGot, true));
+
+// A shielded seat first in the buffer with the t-address AFTER it: the very
+// first claim lands on the shielded seat and must skip forward, not fail.
+car_set_index('ZEC', 0);
+$zecFirstClaim = null;
+try { $zecFirstClaim = car_zec_next(); } catch (\Exception $e) { $zecFirstClaim = 'THREW'; }
+cok('ZEC Autopay: a claim landing on the shielded seat skips forward',
+	$zecFirstClaim === $zecT1, 'got=' . substr((string) $zecFirstClaim, 0, 12));
+
+// --- Autopay with NOTHING verifiable: no seat is usable, so throw ---
+// Better a failed order (the customer is told and pays nothing) than an
+// address that takes the funds and cancels the order.
+$repo->set_buffer('ZEC', array($zecSprout, $zecSprout));
+car_set_index('ZEC', 0);
+$zecAllShieldedThrew = false;
+$zecAllShieldedGot = null;
+$zecStartedAt = microtime(true);
+try { $zecAllShieldedGot = car_zec_next(); } catch (\Exception $e) { $zecAllShieldedThrew = true; }
+$zecElapsed = microtime(true) - $zecStartedAt;
+cok('ZEC Autopay: an all-unverifiable buffer throws',  $zecAllShieldedThrew, 'got=' . var_export($zecAllShieldedGot, true));
+cok('and it gives up promptly rather than looping',    $zecElapsed < 5.0, sprintf('%.3fs', $zecElapsed));
+
+// --- Classic mode: the shielded address IS legitimate ---
+// Classic does no on-chain verification; the merchant checks their own wallet,
+// where a shielded payment is perfectly visible. Refusing it here would break
+// working stores, so the skip must be conditional on Autopay - not global.
+car_set_zec_mode('0'); // Classic / basic
+$repo->set_buffer('ZEC', array($zecSprout));
+car_set_index('ZEC', 0);
+$zecClassic = null;
+try { $zecClassic = car_zec_next(); } catch (\Exception $e) { $zecClassic = 'THREW: ' . $e->getMessage(); }
+cok('ZEC Classic: the shielded address IS returned',   $zecClassic === $zecSprout, 'got=' . substr((string) $zecClassic, 0, 24));
+
+// Restore the merchant's ZEC state exactly as found.
+car_set_zec_mode($zecModeWasSet ? $zecModeOrig : null);
+$repo->set_buffer('ZEC', is_array($zecBufferOrig) ? $zecBufferOrig : array());
+car_set_index('ZEC', $zecIndexOrig);
+$zecSettingsBack = get_option(NMM_REDUX_ID);
+cok('ZEC mode option restored',
+	array_key_exists('ZEC_mode', (array) $zecSettingsBack) === $zecModeWasSet
+		&& (!$zecModeWasSet || $zecSettingsBack['ZEC_mode'] === $zecModeOrig));
+cok('ZEC buffer restored',
+	$repo->get_buffer('ZEC') === (is_array($zecBufferOrig) ? $zecBufferOrig : array()));
+
 // Leave the table as we found it for a clean re-run.
 NMM_Carousel_Repo::init();
 $repo->set_buffer('BTC', array());

@@ -191,15 +191,20 @@ NMM_Payment::process_address_transactions($xmr, 'xmr_conf', array(
 pmok('completes once confirmations arrive',        pm_rec($wpdb, $pt, $oConf) === 'paid');
 pmok('  both hashes then consumed',                $stg->tx_already_consumed('XMR', 'xmr_conf', 'XMRTX_CONF_A') && $stg->tx_already_consumed('XMR', 'xmr_conf', 'XMRTX_CONF_B'));
 
-// --- multi-order collision: no aggregation, warning --------------------------
-// A per-order address should never carry two unpaid orders. If one somehow
-// does, attribution is ambiguous, so the aggregate must stand down with a
-// warning and leave the txs unconsumed for a later clean tick.
+// --- an address serving two orders never aggregates, whatever the coin -------
+// Two rows on one address means the address is reused, so pooling transactions
+// towards either total is unattributable. Two guards catch this and either is
+// a correct outcome: the row-count check (an address that has EVER carried
+// more than one order is reused by definition) fires first, and the defensive
+// multi-unpaid-order branch backs it up. Assert the behaviour that matters -
+// neither order is paid, nothing is consumed, and the operator is warned -
+// rather than which guard got there first.
 $oMultiA = pm_mkorder(); $ins($oMultiA, 'xmr_multi', null, null, 'XMR');
 $oMultiB = pm_mkorder(); $ins($oMultiB, 'xmr_multi', null, null, 'XMR');
 $GLOBALS['pm_warned'] = false;
 $pmLogSpy = function ($message, $level, $context, $handler) {
-	if ($level === 'warning' && strpos($message, 'split-payment') !== false && strpos($message, 'unexpectedly has') !== false) { $GLOBALS['pm_warned'] = true; }
+	if ($level === 'warning' && strpos($message, 'split-payment') !== false
+		&& (strpos($message, 'unexpectedly has') !== false || strpos($message, 'more than one order') !== false)) { $GLOBALS['pm_warned'] = true; }
 	return $message;
 };
 add_filter('woocommerce_logger_log_message', $pmLogSpy, 10, 4);

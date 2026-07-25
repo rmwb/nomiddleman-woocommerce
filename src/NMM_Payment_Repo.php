@@ -236,6 +236,20 @@ class NMM_Payment_Repo {
 		));
 	}
 
+	/**
+	 * How many payment rows this address has EVER carried, in any status.
+	 * More than one means the address has served more than one order, i.e. it
+	 * is reused - which is what makes split-payment aggregation unsafe on it.
+	 */
+	public function count_rows_for_address($cryptoId, $address) {
+		global $wpdb;
+
+		return (int) $wpdb->get_var($wpdb->prepare(
+			"SELECT COUNT(*) FROM `$this->tableName` WHERE `cryptocurrency` = %s AND `address` = %s",
+			$cryptoId, $address
+		));
+	}
+
 	public function get_unpaid_for_address($cryptoId, $address) {
 		global $wpdb;
 

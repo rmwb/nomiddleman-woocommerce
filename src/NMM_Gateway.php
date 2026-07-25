@@ -206,6 +206,9 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // order as pending), so if it does, something is wrong enough that
             // returning success - and sending the customer to an order page
             // with no payment details - would be worse than failing here.
+            // Always say something: WooCommerce only redirects on success, so
+            // without a notice the customer gets a silently reloaded page.
+            wc_add_notice(__('This order is no longer awaiting payment, so no payment address can be issued. Please place a new order or contact the store.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
             return array('result' => 'failure');
         }
 
@@ -278,6 +281,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
             }
             if ($result['outcome'] === 'failed') {
                 $this->render_checkout_error($result['message']);
+                return;
+            }
+            if ($result['outcome'] === 'not_payable') {
+                // Render something rather than a blank page - this is reachable
+                // from the order-pay link of a cancelled or refunded order.
+                echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
             }
             return;
         }
@@ -318,6 +327,30 @@ class NMM_Gateway extends WC_Payment_Gateway {
      * address another request is allocating - first commit wins, and an
      * 'already' outcome deliberately leaves the winner's coin in place.
      */
+    /**
+     * May this order have a payment address allocated?
+     *
+     * Normally that means it is awaiting payment. The exception is a FAILED
+     * order that never got an address: that is precisely the state this
+     * gateway's own error handling creates when initialization throws (an
+     * exchange-rate blip, the Monero RPC down, the carousel exhausted), and
+     * WooCommerce supports paying for a failed order - its default payable
+     * statuses are pending AND failed, and the order-pay flow re-checks stock
+     * for exactly this case. Refusing it would leave the customer holding a
+     * dead order they cannot retry.
+     *
+     * A failed order that DOES carry an address stays refused: that address
+     * may since have been recycled to someone else, so re-displaying it could
+     * credit a stranger's order.
+     */
+    private function order_can_initialize($order) {
+        if (NMM_Hd::order_awaits_payment($order)) {
+            return true;
+        }
+
+        return $order->has_status('failed') && empty($order->get_meta('wallet_address'));
+    }
+
     public function initialize_order_payment($order_id, $requestedCryptoId = null) {
         $order = wc_get_order($order_id);
         if (!$order) {
@@ -329,7 +362,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // fresh address and push it back to on-hold - reviving a dead order,
         // asking the customer to pay again, and putting a monitored address on
         // an order nobody is watching.
-        if (!NMM_Hd::order_awaits_payment($order)) {
+        if (!$this->order_can_initialize($order)) {
             NMM_Util::log(__FILE__, __LINE__, 'Not initializing payment for order ' . $order_id . ': status is ' . $order->get_status() . ', which is not awaiting payment.');
             return array('outcome' => 'not_payable', 'message' => '');
         }
@@ -370,7 +403,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // could have been cancelled, failed, refunded or paid - by an
                 // admin, a webhook, or the verifier. Allocating now would revive
                 // a dead order and push it back to on-hold.
-                if (!NMM_Hd::order_awaits_payment($order)) {
+                if (!$this->order_can_initialize($order)) {
                     NMM_Util::log(__FILE__, __LINE__, 'Order ' . $order_id . ' became ' . $order->get_status() . ' while waiting for the init lock; not initializing payment.');
                     return array('outcome' => 'not_payable', 'message' => '');
                 }

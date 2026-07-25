@@ -865,20 +865,8 @@ class NMM_Payment {
 	 * 'entries' counts eligible NMM_Transaction OBJECTS (not distinct hashes)
 	 * for the caller's split gate.
 	 *
-	 * TWO tiers come back, and they are deliberately not the same set:
-	 *  - 'sum'/'hashes'/'entries'/'hash_ts' are what may PAY an order, so they
-	 *    are confirmation-gated and exclude already-flagged hashes.
-	 *  - 'candidate_ts' is what may be FLAGGED as ambiguous while several
-	 *    unpaid orders share the address: every positive, in-window,
-	 *    unconsumed transaction, confirmed or not. An unconfirmed transaction
-	 *    is already on-chain and already unattributable, and expiry runs in the
-	 *    same cron cycle as this matcher - so if candidacy waited for
-	 *    confirmations, a sibling could be cancelled first and the survivor
-	 *    would later absorb funds that may have been the cancelled order's.
-	 *
 	 * @return array ['sum' => float (smallest units), 'hashes' => string[],
-	 *                'entries' => int, 'hash_ts' => array hash => unix ts,
-	 *                'candidate_ts' => array hash => unix ts]
+	 *                'entries' => int]
 	 */
 	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now) {
 		$sum = 0;
@@ -886,7 +874,6 @@ class NMM_Payment {
 		$hashTs = array();
 		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 
-		$candidateTs = array();
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
@@ -907,19 +894,6 @@ class NMM_Payment {
 				continue;
 			}
 
-			// Ambiguity candidacy is decided WITHOUT the confirmation gate. A
-			// transaction that is merely waiting for confirmations is already
-			// on-chain and already unattributable while several unpaid orders
-			// share this address - and the verifier runs immediately before the
-			// expiry pass, so a sibling can be cancelled in the very same cron
-			// cycle. Gating candidacy on confirmations would let that pool go
-			// unflagged, and once it confirmed the survivor would be the sole
-			// unpaid row and would swallow funds that may have paid the
-			// cancelled order.
-			if (!isset($candidateTs[$txHash])) {
-				$candidateTs[$txHash] = $txTimeStamp;
-			}
-
 			if ($transaction->get_confirmations() < $requiredConfirmations) {
 				// Not spendable-certain yet: it may contribute on a later tick,
 				// but it must never help clear an order now.
@@ -933,8 +907,7 @@ class NMM_Payment {
 			}
 		}
 
-		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries,
-			'hash_ts' => $hashTs, 'candidate_ts' => $candidateTs);
+		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries);
 	}
 
 	/**
@@ -1007,6 +980,18 @@ class NMM_Payment {
 		// unattributable the moment an address can serve more than one order,
 		// and no timestamp comparison can rescue it.
 		if (!self::address_is_per_order($cryptoId)) {
+			return;
+		}
+
+		// Belt and braces for the rule above. address_is_per_order() infers the
+		// property from the coin, but the fact that makes it true lives in
+		// NMM_Gateway, in another class: if anyone ever adds a fallback there
+		// ("wallet RPC down, use the static address"), aggregation would
+		// silently become unsafe with no test failing. This asks the data
+		// instead - an address that has EVER carried more than one order,
+		// whatever their statuses, is by definition reused.
+		if ($paymentRepo->count_rows_for_address($cryptoId, $address) > 1) {
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' has served more than one order, so it is not per-order after all; not aggregating.', 'warning');
 			return;
 		}
 
