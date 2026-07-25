@@ -57,10 +57,16 @@ class NMM_Validation {
 				unset($newValues['XMR_wallet_rpc_password']);
 			}
 		}
+		else if (isset($newValues['XMR_wallet_rpc_password']) && $newValues['XMR_wallet_rpc_password'] !== '') {
+			// A typed-in password beats the clear checkbox when both are
+			// submitted: honouring clear here would silently discard the new
+			// credential and break authenticated RPC access to a wallet that
+			// may have funded orders pending verification.
+		}
 		else if ($clearRpcPassword) {
 			$newValues['XMR_wallet_rpc_password'] = '';
 		}
-		else if (!isset($newValues['XMR_wallet_rpc_password']) || $newValues['XMR_wallet_rpc_password'] === '') {
+		else {
 			$newValues['XMR_wallet_rpc_password'] = isset($oldValues['XMR_wallet_rpc_password'])
 				? (string) $oldValues['XMR_wallet_rpc_password']
 				: '';
