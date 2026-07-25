@@ -773,26 +773,33 @@ class NMM_Payment {
 	/**
 	 * The transactions among $transactions that may contribute to paying
 	 * $record: sufficiently confirmed, inside the matching window, not already
-	 * consumed, positive-amount, and - critically - no older than the order
-	 * itself (the same TX_ORDER_SKEW_GRACE_SEC lower bound the single-tx pass
-	 * applies, so on a reused static/carousel address an old stray transaction
-	 * can never help pay a NEWER order). Consumed state is re-read here because
-	 * the single-tx pass may have consumed hashes earlier in this same tick.
+	 * consumed, not flagged as part of an ambiguous multi-order pool,
+	 * positive-amount, and - critically - no older than the order itself (the
+	 * same TX_ORDER_SKEW_GRACE_SEC lower bound the single-tx pass applies, so
+	 * on a reused static/carousel address an old stray transaction can never
+	 * help pay a NEWER order). Consumed state is re-read here because the
+	 * single-tx pass may have consumed hashes earlier in this same tick.
 	 *
-	 * @return array ['sum' => float (smallest units), 'hashes' => string[]]
+	 * Several UTXO adapters emit one NMM_Transaction per matching OUTPUT, so a
+	 * single on-chain transaction paying the address across two outputs shows
+	 * up as two entries sharing one hash. Their amounts are SUMMED - all
+	 * outputs pay the order - while the hash appears once in 'hashes' so it is
+	 * consumed exactly once. Eligibility is judged per entry; outputs of one
+	 * transaction share its confirmations and timestamp, so they always agree.
+	 * 'entries' counts eligible NMM_Transaction OBJECTS (not distinct hashes)
+	 * for the caller's split gate.
+	 *
+	 * @return array ['sum' => float (smallest units), 'hashes' => string[],
+	 *                'entries' => int, 'hash_ts' => array hash => unix ts]
 	 */
-	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now) {
+	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs) {
 		$sum = 0;
-		$hashes = array();
+		$entries = 0;
+		$hashTs = array();
 		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
-			if (isset($hashes[$txHash])) {
-				// Some adapters can surface a hash twice; count it once, or a
-				// duplicated entry would double-credit a single payment.
-				continue;
-			}
 			if ($transaction->get_confirmations() < $requiredConfirmations) {
 				continue;
 			}
@@ -812,12 +819,90 @@ class NMM_Payment {
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
 				continue;
 			}
+			if (isset($ambiguousTxs[$txHash])) {
+				// Part of a pool flagged while multiple unpaid orders shared
+				// this address: withheld from aggregation until a human
+				// reconciles it or it ages out of the matching window.
+				NMM_Util::log(__FILE__, __LINE__, '---split-payment: withholding ambiguity-flagged tx ' . $txHash . ' on ' . $cryptoId . ' ' . $address);
+				continue;
+			}
 
 			$sum += $transactionAmount;
-			$hashes[$txHash] = true;
+			$entries++;
+			if (!isset($hashTs[$txHash])) {
+				$hashTs[$txHash] = $txTimeStamp;
+			}
 		}
 
-		return array('sum' => $sum, 'hashes' => array_keys($hashes));
+		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries, 'hash_ts' => $hashTs);
+	}
+
+	// Option key for the hashes flagged as an ambiguous multi-order pool on
+	// one (crypto, address) - the split-payment sibling of the consumed-tx
+	// option (nmmpro_{crypto}_transactions_consumed_for_{address}).
+	// NOTE: the 2.11.0 consumed-tx table migration should absorb this option
+	// alongside the consumed-tx one.
+	private static function split_ambiguous_option_key($cryptoId, $address) {
+		return 'nmmpro_' . $cryptoId . '_split_ambiguous_for_' . $address;
+	}
+
+	/**
+	 * The persisted ambiguous pool for an address, as hash => tx timestamp,
+	 * pruned as it is read: an entry whose transaction has aged past the
+	 * matching window can no longer contribute to any sum, so it no longer
+	 * needs withholding - dropping it keeps the option self-cleaning (the
+	 * matcher ignores such transactions everywhere else for the same reason).
+	 */
+	private static function ambiguous_split_txs($cryptoId, $address, $transactionLifetime, $now) {
+		$optionKey = self::split_ambiguous_option_key($cryptoId, $address);
+		$pool = get_option($optionKey, array());
+		if (!is_array($pool)) {
+			$pool = array();
+		}
+
+		$pruned = array();
+		foreach ($pool as $hash => $txTimeStamp) {
+			if (($now - (int) $txTimeStamp) <= $transactionLifetime) {
+				$pruned[$hash] = (int) $txTimeStamp;
+			}
+		}
+
+		if (count($pruned) !== count($pool)) {
+			if (count($pruned) === 0) {
+				delete_option($optionKey);
+			}
+			else {
+				update_option($optionKey, $pruned, false);
+			}
+		}
+
+		return $pruned;
+	}
+
+	/**
+	 * Persist hashes implicated in an ambiguous multi-order pool, mirroring
+	 * the consumed-tx option pattern (per crypto+address key, autoload=false,
+	 * 200-entry cap). Stored as hash => tx timestamp so ambiguous_split_txs()
+	 * can prune entries once they age out of the matching window.
+	 */
+	private static function flag_ambiguous_split_txs($cryptoId, $address, $hashTs, $existingPool) {
+		if (count($hashTs) == 0) {
+			return;
+		}
+
+		$pool = $existingPool;
+		foreach ($hashTs as $hash => $txTimeStamp) {
+			$pool[$hash] = (int) $txTimeStamp;
+		}
+
+		// Same growth cap as the consumed-tx list; beyond it keep the NEWEST
+		// entries - the oldest are closest to ageing out of the window anyway.
+		if (count($pool) > 200) {
+			arsort($pool);
+			$pool = array_slice($pool, 0, 200, true);
+		}
+
+		update_option(self::split_ambiguous_option_key($cryptoId, $address), $pool, false);
 	}
 
 	/**
@@ -864,40 +949,61 @@ class NMM_Payment {
 		$requiredConfirmations = $nmmSettings->get_autopay_required_confirmations($cryptoId);
 		$now = time();
 
+		// Hashes flagged during an earlier multi-order tick, pruned of entries
+		// that have aged out of the matching window (see below for why the
+		// flags exist at all).
+		$ambiguousTxs = self::ambiguous_split_txs($cryptoId, $address, $transactionLifetime, $now);
+
 		// Aggregation is only safe when EXACTLY ONE unpaid order sits on the
 		// address. With several (static address or carousel reuse) a pool of
 		// partial transactions cannot be attributed: a sum that clears one
 		// order's total may really be another order's full payment plus part
 		// of a third. Mirror the single-tx collision stance - surface it for a
 		// human, never guess. Unlike that path the transactions are NOT
-		// consumed: none of them individually matched anything, and leaving
-		// them lets a later tick aggregate cleanly once the other orders
-		// resolve (paid singly or expired and cancelled).
+		// consumed: none of them individually matched anything, and consuming
+		// them would permanently strand a real payment.
 		if (count($paymentRecords) > 1) {
 			$ambiguousOrderIds = array();
+			$implicatedHashTs = array();
 			foreach ($paymentRecords as $record) {
-				$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now);
-				if (count($contrib['hashes']) >= 2 && self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
+				$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs);
+				if ($contrib['entries'] >= 2 && self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
 					$ambiguousOrderIds[] = $record['order_id'];
+				}
+				foreach ($contrib['hash_ts'] as $implicatedHash => $implicatedTs) {
+					$implicatedHashTs[$implicatedHash] = $implicatedTs;
 				}
 			}
 			if (count($ambiguousOrderIds) > 0) {
+				// Persist every implicated hash: once a pool is ambiguous it
+				// STAYS ambiguous. Cancellation is not disambiguation - if one
+				// of these orders later expires, the next tick would see
+				// exactly one unpaid row and happily aggregate the same pool
+				// into the survivor, even though the funds may have been the
+				// cancelled order's payment. A flagged pool is only ever
+				// resolved by a human; the flags age out of the option once
+				// their transactions leave the matching window (at which point
+				// they could not contribute to any sum anyway).
+				self::flag_ambiguous_split_txs($cryptoId, $address, $implicatedHashTs, $ambiguousTxs);
 				NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment collision: ' . $cryptoId . ' address ' . $address . ' has multiple unpaid orders while its combined transactions would cover order(s) ' . implode(', ', $ambiguousOrderIds) . '; not aggregating - please reconcile manually.', 'warning');
 			}
 			return;
 		}
 
 		$record = $paymentRecords[0];
-		$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now);
+		$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs);
 		$contributingHashes = $contrib['hashes'];
 
-		// A single eligible transaction is the single-tx pass's case: it either
-		// already matched above (so the row is no longer unpaid) or it fails
-		// the identical threshold here. Only a genuine split - two or more
-		// contributors - can add anything, and requiring it also keeps a claim
-		// the single pass left for retry (CLAIM_DB_ERROR) from being
-		// re-attempted a second time within the same tick.
-		if (count($contributingHashes) < 2) {
+		// The split gate counts transaction ENTRIES, not distinct hashes:
+		// several UTXO adapters emit one NMM_Transaction per matching output,
+		// and a single transaction paying the order across two outputs is
+		// exactly the split-funds case this pass exists for - the single-tx
+		// loop compares each output individually and can never match it. A
+		// lone single-output entry stays gated out: it is the single-tx
+		// pass's case (it either matched above, or fails the identical
+		// threshold here), and gating it keeps a claim that pass left for
+		// retry (CLAIM_DB_ERROR) from being re-attempted within the same tick.
+		if ($contrib['entries'] < 2) {
 			return;
 		}
 

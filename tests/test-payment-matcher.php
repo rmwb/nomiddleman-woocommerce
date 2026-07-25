@@ -44,12 +44,16 @@ $ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use
 		$address, $orderedAt === null ? time() : $orderedAt, $orderId, $orderAmount === null ? $amt : $orderAmount));
 };
 
-// Consumed-tx state lives in per-address options that OUTLIVE the table wipe
-// (the harness DB persists between runs); every address this suite touches is
-// cleared up front and again at the end so reruns stay deterministic.
+// Consumed-tx and ambiguous-pool state lives in per-address options that
+// OUTLIVE the table wipe (the harness DB persists between runs); every address
+// this suite touches is cleared up front and again at the end so reruns stay
+// deterministic.
 $pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
-	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr');
-foreach ($pmAddrs as $a) { delete_option('nmmpro_BTC_transactions_consumed_for_' . $a); }
+	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_mo', 'pm_mosub');
+foreach ($pmAddrs as $a) {
+	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
+	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
+}
 
 // The matching tolerance is a store setting; pin it to the shipped default
 // (0.1% shortfall) through the same filter the matcher applies, so a harness
@@ -162,6 +166,76 @@ pmok('multi-order collision: order B not paid',    pm_rec($wpdb, $pt, $oMultiB) 
 pmok('  collision logged at warning',              $GLOBALS['pm_warned'] === true);
 pmok('  txs left unconsumed',                      !$stg->tx_already_consumed('BTC', 'pm_multi', 'PMTX_MULTI_A') && !$stg->tx_already_consumed('BTC', 'pm_multi', 'PMTX_MULTI_B'));
 
+// --- ambiguity survives an expiry: cancellation is not disambiguation --------
+// Two orders share the address and the pooled txs would cover either total:
+// the pool is flagged. When one order then expires and is cancelled, the
+// survivor is the ONLY unpaid row - but the flagged pool must NOT aggregate
+// into it, because those funds may have been the cancelled order's payment.
+$oAmbA = pm_mkorder(); $ins($oAmbA, 'pm_ambig');
+$oAmbB = pm_mkorder(); $ins($oAmbB, 'pm_ambig');
+$ambTxs = array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_AMB_A'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_AMB_B'),
+);
+$GLOBALS['pm_warned'] = false;
+add_filter('woocommerce_logger_log_message', $pmLogSpy, 10, 4);
+NMM_Payment::process_address_transactions($btc, 'pm_ambig', $ambTxs, $life);
+remove_filter('woocommerce_logger_log_message', $pmLogSpy, 10);
+$ambPool = get_option('nmmpro_BTC_split_ambiguous_for_pm_ambig', array());
+pmok('ambiguous pool: collision warning fired',    $GLOBALS['pm_warned'] === true);
+pmok('  implicated hashes flagged (persisted)',    is_array($ambPool) && isset($ambPool['PMTX_AMB_A']) && isset($ambPool['PMTX_AMB_B']));
+
+// Expire order A exactly as the expiry cron would (same conditional claim).
+$rp->claim_for_cancellation($oAmbA, $amt);
+NMM_Payment::process_address_transactions($btc, 'pm_ambig', $ambTxs, $life);
+pmok('after expiry: survivor NOT auto-completed',  pm_rec($wpdb, $pt, $oAmbB) === 'unpaid');
+pmok('  flagged txs left unconsumed',              !$stg->tx_already_consumed('BTC', 'pm_ambig', 'PMTX_AMB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambig', 'PMTX_AMB_B'));
+
+// A FRESH split pair (new hashes) on the same address must still aggregate
+// into the survivor - only the flagged pool is withheld. The injected list
+// carries old and new txs together, as a real chain fetch would. A stale flag
+// planted past the window must be pruned by the same pass (self-cleaning).
+$ambPool = get_option('nmmpro_BTC_split_ambiguous_for_pm_ambig', array());
+$ambPool['PMTX_AMB_STALE'] = time() - 2 * $life;
+update_option('nmmpro_BTC_split_ambiguous_for_pm_ambig', $ambPool, false);
+NMM_Payment::process_address_transactions($btc, 'pm_ambig', array_merge($ambTxs, array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_AMB_C'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_AMB_D'),
+)), $life);
+pmok('fresh split pair completes the survivor',    pm_rec($wpdb, $pt, $oAmbB) === 'paid');
+pmok('  fresh hashes consumed',                    $stg->tx_already_consumed('BTC', 'pm_ambig', 'PMTX_AMB_C') && $stg->tx_already_consumed('BTC', 'pm_ambig', 'PMTX_AMB_D'));
+pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('BTC', 'pm_ambig', 'PMTX_AMB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambig', 'PMTX_AMB_B'));
+$ambPool = get_option('nmmpro_BTC_split_ambiguous_for_pm_ambig', array());
+pmok('  stale flag entry pruned',                  is_array($ambPool) && !isset($ambPool['PMTX_AMB_STALE']));
+pmok('  live flag entries retained',               is_array($ambPool) && isset($ambPool['PMTX_AMB_A']) && isset($ambPool['PMTX_AMB_B']));
+
+// --- multi-output transaction: outputs sum per hash --------------------------
+// UTXO adapters emit one NMM_Transaction per matching OUTPUT: one on-chain tx
+// paying 0.6 + 0.4 across two outputs shares a single hash. The outputs must
+// sum (the single-tx loop compares each output alone and can never match it),
+// the >=2 gate counts ENTRIES so this one-hash split completes, and the hash
+// is consumed exactly once.
+$oMo = pm_mkorder(); $ins($oMo, 'pm_mo');
+NMM_Payment::process_address_transactions($btc, 'pm_mo', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_MO'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_MO'),
+), $life);
+pmok('multi-output tx: order completed',           pm_rec($wpdb, $pt, $oMo) === 'paid');
+$moConsumed = get_option('nmmpro_BTC_transactions_consumed_for_pm_mo', array());
+pmok('  hash consumed exactly once',               is_array($moConsumed) && count(array_keys($moConsumed, 'PMTX_MO', true)) === 1);
+pmok('  single hash stored on the row',            pm_hash($wpdb, $pt, $oMo) === 'PMTX_MO');
+
+// Two outputs of one tx summing BELOW the threshold: nothing completes and
+// nothing is consumed - the partial multi-output tx stays eligible for a
+// later aggregate once a top-up arrives.
+$oMoSub = pm_mkorder(); $ins($oMoSub, 'pm_mosub');
+NMM_Payment::process_address_transactions($btc, 'pm_mosub', array(
+	new NMM_Transaction($units * 0.3, 999, time(), 'PMTX_MOSUB'),
+	new NMM_Transaction($units * 0.3, 999, time(), 'PMTX_MOSUB'),
+), $life);
+pmok('under-total multi-output tx: NOT completed', pm_rec($wpdb, $pt, $oMoSub) === 'unpaid');
+pmok('  its hash left unconsumed',                 $stg->tx_already_consumed('BTC', 'pm_mosub', 'PMTX_MOSUB') === false);
+
 // --- split payment: DB error on the claim ------------------------------------
 // The hook renames the table away right before the claim (the established
 // CLAIM_DB_ERROR technique from test-autopay-cancel.php). The row state is then
@@ -192,7 +266,10 @@ pmok('  next tick completes the split payment',    pm_rec($wpdb, $pt, $oDbErr) =
 // --- cleanup (the harness DB persists between runs) --------------------------
 remove_all_filters('nmm_autopay_percent');
 if ($pmReduxBak === false) { delete_option(NMM_REDUX_ID); } else { update_option(NMM_REDUX_ID, $pmReduxBak, false); }
-foreach ($pmAddrs as $a) { delete_option('nmmpro_BTC_transactions_consumed_for_' . $a); }
+foreach ($pmAddrs as $a) {
+	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
+	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
+}
 $wpdb->query("DELETE FROM `$pt`");
 
 echo $GLOBALS['pm_ok'] ? "\nPAYMENT-MATCHER CHECKS PASSED\n" : "\nPAYMENT-MATCHER CHECKS FAILED\n";
