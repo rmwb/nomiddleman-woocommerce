@@ -123,19 +123,65 @@ class NMM_Validation {
 			else if ($cryptoSelected && ($newSettings->basic_enabled($cryptoId) || $newSettings->autopay_enabled($cryptoId))) {
 				$carouselAddresses = [];
 				$hasValidWalletAddress = false;
+
+				// Autopay confirms an order by looking the payment address up
+				// on a public block explorer, so in Autopay mode a merely
+				// well-formed address is not enough - it also has to be a form
+				// the explorer can report on. Zcash shielded/Unified/TEX
+				// addresses are not (see
+				// NMM_Address::is_autopay_verifiable_form): the merchant would
+				// RECEIVE the money while the order sat unpaid and was then
+				// auto-cancelled. This is the layer that must enforce it,
+				// because it is the only place that knows the coin's mode AND
+				// the only writer of the carousel buffer - filtering here means
+				// an unverifiable address is never stocked, so NMM_Carousel
+				// physically cannot hand one out at checkout.
+				//
+				// These addresses stay in the saved settings (they are valid,
+				// just not Autopay-usable), so switching the coin back to
+				// Classic mode restores them untouched.
+				$requireAutopayVerifiable = $newSettings->autopay_enabled($cryptoId);
+				$unverifiableAddresses = [];
 				$addresses = $newSettings->get_addresses($cryptoId);
 
 				foreach ($addresses as $ind => $address) {
 					if (NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
-                        $carouselAddresses[] = trim($address);
+						$address = trim($address);
+
+						if ($requireAutopayVerifiable && !NMM_Address::is_autopay_verifiable_form($cryptoId, $address)) {
+							$unverifiableAddresses[] = $address;
+							continue;
+						}
+
+                        $carouselAddresses[] = $address;
                         $hasValidWalletAddress = true;
                     }
 				}
+
+				if (count($unverifiableAddresses) > 0) {
+					/* translators: 1: cryptocurrency name, 2: comma-separated list of the affected addresses */
+					$errorMessages[] = sprintf(__('%1$s Autopay confirms payments by looking the address up on a public block explorer, and these saved addresses cannot be looked up that way, so they will not be given to customers: %2$s. Use a transparent t-address (t1... or t3...) for Zcash Autopay - shielded (zs1... or z...), Unified (u1...) and TEX (tex1...) addresses cannot be automatically verified - or switch this cryptocurrency to Classic mode.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName, esc_html(implode(', ', $unverifiableAddresses)));
+				}
+
 				if (! $hasValidWalletAddress) {
 					$invalidCryptoSettings = true;
 					$atLeastOneInvalidCrypto = true;
-					/* translators: %1$s: cryptocurrency name */
-					$errorMessages[] = sprintf(__('%1$s has no valid wallet addresses. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
+
+					if (count($unverifiableAddresses) > 0) {
+						/* translators: %1$s: cryptocurrency name */
+						$errorMessages[] = sprintf(__('%1$s has no Autopay-verifiable wallet address. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
+
+						// The coin is disabled just below, but a buffer stocked
+						// by an EARLIER save could still be holding the now
+						// unusable addresses. Clear it so no code path can
+						// reach one.
+						$carouselRepo = new NMM_Carousel_Repo();
+						$carouselRepo->set_buffer($cryptoId, array());
+					}
+					else {
+						/* translators: %1$s: cryptocurrency name */
+						$errorMessages[] = sprintf(__('%1$s has no valid wallet addresses. Disabling %1$s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
+					}
 				}
 				else {
 					$carouselRepo = new NMM_Carousel_Repo();

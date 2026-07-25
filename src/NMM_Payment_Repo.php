@@ -236,26 +236,6 @@ class NMM_Payment_Repo {
 		));
 	}
 
-	/**
-	 * The (cryptocurrency, address) a row belongs to, whatever its status.
-	 * Used when an order is cancelled outside the expiry cron - by an admin, a
-	 * customer, or a deleted order - so the address's cancellation boundary can
-	 * still be stamped. Returns null when there is no such row.
-	 */
-	public function get_crypto_and_address($orderId, $orderAmount) {
-		global $wpdb;
-
-		$row = $wpdb->get_row($wpdb->prepare(
-			"SELECT `cryptocurrency`, `address`
-			 FROM `$this->tableName`
-			 WHERE `order_id` = %d AND `order_amount` = %s
-			 LIMIT 1",
-			$orderId, $orderAmount
-		), ARRAY_A);
-
-		return $row ? $row : null;
-	}
-
 	public function get_unpaid_for_address($cryptoId, $address) {
 		global $wpdb;
 

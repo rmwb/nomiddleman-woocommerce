@@ -329,7 +329,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // fresh address and push it back to on-hold - reviving a dead order,
         // asking the customer to pay again, and putting a monitored address on
         // an order nobody is watching.
-        if (!$order->has_status(array('pending', 'on-hold'))) {
+        if (!NMM_Hd::order_awaits_payment($order)) {
             NMM_Util::log(__FILE__, __LINE__, 'Not initializing payment for order ' . $order_id . ': status is ' . $order->get_status() . ', which is not awaiting payment.');
             return array('outcome' => 'not_payable', 'message' => '');
         }
@@ -370,7 +370,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // could have been cancelled, failed, refunded or paid - by an
                 // admin, a webhook, or the verifier. Allocating now would revive
                 // a dead order and push it back to on-hold.
-                if (!$order->has_status(array('pending', 'on-hold'))) {
+                if (!NMM_Hd::order_awaits_payment($order)) {
                     NMM_Util::log(__FILE__, __LINE__, 'Order ' . $order_id . ' became ' . $order->get_status() . ' while waiting for the init lock; not initializing payment.');
                     return array('outcome' => 'not_payable', 'message' => '');
                 }
@@ -610,8 +610,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
         // Do not re-display payment instructions for an order that is no longer
         // awaiting payment. Its address may have been recycled to a different
-        // order, so a late payment would credit someone else.
-        if ($order->has_status(array('cancelled', 'failed'))) {
+        // order, so a late payment would credit someone else. Ask the shared
+        // helper rather than naming statuses here: a denylist of cancelled and
+        // failed missed 'refunded' (WooCommerce does not count it as paid, so
+        // is_paid() above returns false for it) and every custom non-payable
+        // status a site might declare.
+        if (!NMM_Hd::order_awaits_payment($order)) {
             echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
             return;
         }

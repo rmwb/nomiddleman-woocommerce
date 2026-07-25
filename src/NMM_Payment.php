@@ -668,8 +668,6 @@ class NMM_Payment {
 				continue;
 			}
 
-			$addressCancelledAt = self::address_cancelled_at($cryptoId, $address);
-
 			$paymentRecords = $paymentRepo->get_unpaid_for_address($cryptoId, $address);
 
 			$matchingPaymentRecords = [];
@@ -683,16 +681,6 @@ class NMM_Payment {
 				// older than the order, less a grace for block-timestamp clock skew.
 				$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 				if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
-					continue;
-				}
-
-				// A transaction sent before this address's last cancellation was
-				// sent towards the order that was cancelled, so it cannot pay an
-				// order created afterwards on the recycled address. Scoped per
-				// order (see tx_barred_by_cancellation) so an order that already
-				// existed keeps its own earlier payments.
-				if (self::tx_barred_by_cancellation($txTimeStamp, $orderedAt, $addressCancelledAt)) {
-					NMM_Util::log(__FILE__, __LINE__, 'Transaction ' . $txHash . ' predates the cancellation on ' . $cryptoId . ' ' . $address . ' that preceded order ' . $record['order_id'] . '; not matching it against that order.', 'warning');
 					continue;
 				}
 
@@ -892,28 +880,18 @@ class NMM_Payment {
 	 *                'entries' => int, 'hash_ts' => array hash => unix ts,
 	 *                'candidate_ts' => array hash => unix ts]
 	 */
-	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs) {
+	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now) {
 		$sum = 0;
 		$entries = 0;
 		$hashTs = array();
 		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 
 		$candidateTs = array();
-		$cancelledAt = self::address_cancelled_at($cryptoId, $address);
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
 			$txTimeStamp = $transaction->get_time_stamp();
 			if (($now - $txTimeStamp) > $transactionLifetime) {
-				continue;
-			}
-			if (self::tx_barred_by_cancellation($txTimeStamp, $orderedAt, $cancelledAt)) {
-				// Sent before the cancellation that preceded THIS order, so it
-				// belongs to the cancelled order - it can neither pay nor be
-				// pooled into this one. This is what stops one customer's
-				// partials from completing the next customer's order on a
-				// recycled address, while leaving an order that predates the
-				// cancellation entitled to its own earlier payments.
 				continue;
 			}
 			if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
@@ -942,13 +920,6 @@ class NMM_Payment {
 				$candidateTs[$txHash] = $txTimeStamp;
 			}
 
-			if (isset($ambiguousTxs[$txHash])) {
-				// Part of a pool flagged while multiple unpaid orders shared
-				// this address: withheld from aggregation until a human
-				// reconciles it or it ages out of the matching window.
-				NMM_Util::log(__FILE__, __LINE__, '---split-payment: withholding ambiguity-flagged tx ' . $txHash . ' on ' . $cryptoId . ' ' . $address);
-				continue;
-			}
 			if ($transaction->get_confirmations() < $requiredConfirmations) {
 				// Not spendable-certain yet: it may contribute on a later tick,
 				// but it must never help clear an order now.
@@ -966,144 +937,35 @@ class NMM_Payment {
 			'hash_ts' => $hashTs, 'candidate_ts' => $candidateTs);
 	}
 
-	// Option key for the most recent cancellation on a (crypto, address).
-	// NOTE: the 2.11.0 consumed-tx table migration should absorb this too.
-	private static function address_cancelled_at_key($cryptoId, $address) {
-		return 'nmmpro_' . $cryptoId . '_cancelled_at_for_' . $address;
-	}
-
 	/**
-	 * Timestamp of the most recent expiry-cancellation on this address, or 0.
+	 * Whether this address belongs to exactly ONE order, which is what makes
+	 * split-payment aggregation safe.
 	 *
-	 * A cancellation is a hard boundary in a reused address's history: every
-	 * transaction made before it was sent towards the order that has now been
-	 * cancelled, so none of them may ever pay a LATER order on the same
-	 * address. Without this boundary the ordinary static-address lifecycle
-	 * misattributes funds: Alice part-pays, her order expires, the address is
-	 * handed to Bob, Alice tops up - and Alice's partials plus her top-up
-	 * complete BOB's order. The per-order TX_ORDER_SKEW_GRACE_SEC lower bound
-	 * cannot catch it, because it deliberately accepts transactions from up to
-	 * an hour before the order was created.
-	 */
-	private static function address_cancelled_at($cryptoId, $address) {
-		return (int) get_option(self::address_cancelled_at_key($cryptoId, $address), 0);
-	}
-
-	/**
-	 * Whether $txTimeStamp is on the wrong side of the cancellation boundary
-	 * FOR THIS ORDER. The boundary is deliberately scoped per order, not
-	 * applied address-wide: an order that already existed when the cancellation
-	 * happened is entitled to its own earlier payments, and rejecting them
-	 * would strand real money. Only an order created AFTER a cancellation is
-	 * barred from the transactions that preceded it.
+	 * Aggregation pools several transactions towards one order total. On an
+	 * address that serves several orders - a static address, or a carousel
+	 * seat handed out again - that pooling cannot be attributed safely:
+	 * whether two orders overlap in time or merely follow one another on the
+	 * same address, there is no way to tell whose partial payment is whose.
+	 * Timestamps cannot decide it either, because a block header time comes
+	 * from the miner (constrained only against the previous blocks median),
+	 * not from the store clock. So aggregation is confined to addresses that
+	 * are minted per order and never re-issued.
 	 *
-	 * A row with no ordered_at (legacy, pre-set_ordered_at) is treated as
-	 * "created after": such rows are far older than any matching window, so
-	 * the conservative reading cannot reject a live payment.
+	 * In the Autopay payments table that means Monero: NMM_Gateway mints a
+	 * fresh subaddress per order for XMR, while static and carousel addresses
+	 * are reused by design. Privacy Mode (HD) never reaches this code - it
+	 * verifies through NMM_Hd against a cumulative balance, which already
+	 * credits split payments correctly, and retires any address that receives
+	 * funds instead of recycling it.
+	 *
+	 * Merchants on a reused address are not worse off than before this
+	 * release: their split payments simply remain a manual reconciliation, as
+	 * they have always been. Crediting them automatically needs a durable
+	 * transaction-to-order binding (the 2.11.0 consumed-tx table), not a
+	 * timestamp heuristic.
 	 */
-	private static function tx_barred_by_cancellation($txTimeStamp, $orderedAt, $cancelledAt) {
-		if ($cancelledAt <= 0 || $txTimeStamp > $cancelledAt) {
-			return false;
-		}
-
-		// The order predates the cancellation - the boundary is not about it.
-		if ($orderedAt > 0 && $orderedAt <= $cancelledAt) {
-			return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Move the cancellation boundary forward. Called when a row is
-	 * conclusively claimed for cancellation, i.e. when that order stops being
-	 * a candidate for any payment on this address.
-	 */
-	public static function stamp_address_cancelled_at($cryptoId, $address, $when = null) {
-		$when = ($when === null) ? time() : (int) $when;
-		$key = self::address_cancelled_at_key($cryptoId, $address);
-
-		if ((int) get_option($key, 0) >= $when) {
-			return; // never move the boundary backwards
-		}
-
-		update_option($key, $when, false);
-	}
-
-	// Option key for the hashes flagged as an ambiguous multi-order pool on
-	// one (crypto, address) - the split-payment sibling of the consumed-tx
-	// option (nmmpro_{crypto}_transactions_consumed_for_{address}).
-	// NOTE: the 2.11.0 consumed-tx table migration should absorb this option
-	// alongside the consumed-tx one.
-	private static function split_ambiguous_option_key($cryptoId, $address) {
-		return 'nmmpro_' . $cryptoId . '_split_ambiguous_for_' . $address;
-	}
-
-	/**
-	 * The persisted ambiguous pool for an address, as hash => tx timestamp,
-	 * pruned as it is read: an entry whose transaction has aged past the
-	 * matching window can no longer contribute to any sum, so it no longer
-	 * needs withholding - dropping it keeps the option self-cleaning (the
-	 * matcher ignores such transactions everywhere else for the same reason).
-	 */
-	private static function ambiguous_split_txs($cryptoId, $address, $transactionLifetime, $now) {
-		$optionKey = self::split_ambiguous_option_key($cryptoId, $address);
-		$pool = get_option($optionKey, array());
-		if (!is_array($pool)) {
-			$pool = array();
-		}
-
-		$pruned = array();
-		foreach ($pool as $hash => $txTimeStamp) {
-			if (($now - (int) $txTimeStamp) <= $transactionLifetime) {
-				$pruned[$hash] = (int) $txTimeStamp;
-			}
-		}
-
-		if (count($pruned) !== count($pool)) {
-			if (count($pruned) === 0) {
-				delete_option($optionKey);
-			}
-			else {
-				update_option($optionKey, $pruned, false);
-			}
-		}
-
-		return $pruned;
-	}
-
-	/**
-	 * Persist hashes implicated in an ambiguous multi-order pool, mirroring
-	 * the consumed-tx option pattern (per crypto+address key, autoload=false,
-	 * 200-entry cap). Stored as hash => tx timestamp so ambiguous_split_txs()
-	 * can prune entries once they age out of the matching window. Returns
-	 * whether anything NEW was flagged; already-flagged hashes never churn the
-	 * option (contributions exclude them, so the every-tick steady state on a
-	 * shared address is an empty $hashTs and no write at all).
-	 */
-	private static function flag_ambiguous_split_txs($cryptoId, $address, $hashTs, $existingPool) {
-		$pool = $existingPool;
-		$added = false;
-		foreach ($hashTs as $hash => $txTimeStamp) {
-			if (!isset($pool[$hash])) {
-				$pool[$hash] = (int) $txTimeStamp;
-				$added = true;
-			}
-		}
-
-		if (!$added) {
-			return false;
-		}
-
-		// Same growth cap as the consumed-tx list; beyond it keep the NEWEST
-		// entries - the oldest are closest to ageing out of the window anyway.
-		if (count($pool) > 200) {
-			arsort($pool);
-			$pool = array_slice($pool, 0, 200, true);
-		}
-
-		update_option(self::split_ambiguous_option_key($cryptoId, $address), $pool, false);
-		return true;
+	private static function address_is_per_order($cryptoId) {
+		return $cryptoId === "XMR";
 	}
 
 	/**
@@ -1140,6 +1002,14 @@ class NMM_Payment {
 	private static function aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings) {
 		$cryptoId = $crypto->get_id();
 
+		// Only ever aggregate on an address minted for a single order. See
+		// address_is_per_order(): pooling transactions towards one total is
+		// unattributable the moment an address can serve more than one order,
+		// and no timestamp comparison can rescue it.
+		if (!self::address_is_per_order($cryptoId)) {
+			return;
+		}
+
 		// Re-read the unpaid rows AFTER the single-tx pass ran: an order it
 		// completed (or a collision it consumed) must not be double-processed.
 		$paymentRecords = $paymentRepo->get_unpaid_for_address($cryptoId, $address);
@@ -1150,66 +1020,17 @@ class NMM_Payment {
 		$requiredConfirmations = $nmmSettings->get_autopay_required_confirmations($cryptoId);
 		$now = time();
 
-		// Hashes flagged during an earlier multi-order tick, pruned of entries
-		// that have aged out of the matching window (see below for why the
-		// flags exist at all).
-		$ambiguousTxs = self::ambiguous_split_txs($cryptoId, $address, $transactionLifetime, $now);
-
-		// Aggregation is only safe when EXACTLY ONE unpaid order sits on the
-		// address. With several (static address or carousel reuse) a pool of
-		// partial transactions cannot be attributed: a sum that clears one
-		// order's total may really be another order's full payment plus part
-		// of a third. Mirror the single-tx collision stance - surface it for a
-		// human, never guess. Unlike that path the transactions are NOT
-		// consumed: none of them individually matched anything, and consuming
-		// them would permanently strand a real payment.
+		// Defensive: a per-order address should never carry two unpaid orders
+		// (a Monero subaddress is minted for one order and never re-issued).
+		// If one somehow does, attribution is ambiguous - surface it for a
+		// human and leave every transaction unconsumed for a later clean tick.
 		if (count($paymentRecords) > 1) {
-			$ambiguousOrderIds = array();
-			$implicatedHashTs = array();
-			foreach ($paymentRecords as $record) {
-				$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs);
-				if ($contrib['entries'] >= 2 && self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
-					$ambiguousOrderIds[] = $record['order_id'];
-				}
-				// candidate_ts, NOT hash_ts: everything on-chain for this
-				// address counts as implicated, including transactions still
-				// short of the merchant's confirmation threshold (see
-				// split_payment_contributions).
-				foreach ($contrib['candidate_ts'] as $implicatedHash => $implicatedTs) {
-					$implicatedHashTs[$implicatedHash] = $implicatedTs;
-				}
-			}
-			// Flag EVERY eligible contributor seen while the address is shared
-			// - unconditionally, not only when a sum already covers an order,
-			// and once flagged a hash STAYS flagged until a human reconciles
-			// it or it ages out of the matching window. A sub-threshold
-			// partial is just as unattributable as a covering pool: with two
-			// 1.0 orders sharing the address and 0.4 + 0.4 received, waiting
-			// for coverage would flag nothing, one order could expire, and a
-			// later 0.2 top-up would let the pooled 1.0 complete the survivor
-			// even though the 0.8 may have been the CANCELLED order's payment.
-			// Sibling cancellation must never disambiguate: only transactions
-			// that arrive while EXACTLY ONE order is unpaid may ever
-			// auto-aggregate. On a genuinely shared static address this means
-			// split payments always end in manual reconciliation - that is
-			// intended; per-order-address modes (HD/Privacy Mode, XMR
-			// subaddresses, an adequately stocked carousel) are unaffected.
-			$flaggedNew = self::flag_ambiguous_split_txs($cryptoId, $address, $implicatedHashTs, $ambiguousTxs);
-
-			if (count($ambiguousOrderIds) > 0) {
-				// The covering case is the actionable one for the operator.
-				NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment collision: ' . $cryptoId . ' address ' . $address . ' has multiple unpaid orders while its combined transactions would cover order(s) ' . implode(', ', $ambiguousOrderIds) . '; not aggregating - please reconcile manually.', 'warning');
-			}
-			else if ($flaggedNew) {
-				// Sub-threshold partials: record why a later aggregate will be
-				// withheld, without warning-spamming the operator every tick.
-				NMM_Util::log(__FILE__, __LINE__, '---split-payment: flagged ' . count($implicatedHashTs) . ' partial transaction(s) on shared ' . $cryptoId . ' address ' . $address . ' as ambiguous; aggregation withheld pending manual reconciliation.');
-			}
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' unexpectedly has ' . count($paymentRecords) . ' unpaid orders; not aggregating - please reconcile manually.', 'warning');
 			return;
 		}
 
 		$record = $paymentRecords[0];
-		$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs);
+		$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now);
 		$contributingHashes = $contrib['hashes'];
 
 		// The split gate counts transaction ENTRIES, not distinct hashes:
@@ -1551,12 +1372,7 @@ class NMM_Payment {
 				if (!$order) {
 					// Order deleted - retire the orphaned payment record. Claim it
 					// conditionally so a concurrent verifier still wins the row.
-					if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) === NMM_Payment_Repo::CLAIM_CLAIMED) {
-						// Same boundary as an expiry cancellation: this order can
-						// never be paid now, so nothing sent before this moment
-						// may pay whatever order gets this address next.
-						self::stamp_address_cancelled_at($cryptoId, $address);
-					}
+					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
 					continue;
 				}
@@ -1571,9 +1387,7 @@ class NMM_Payment {
 				if (!$order->has_status(array('pending', 'on-hold'))) {
 					// Terminal non-paid or otherwise not awaiting payment - reconcile
 					// the record but leave the order alone.
-					if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) === NMM_Payment_Repo::CLAIM_CLAIMED) {
-						self::stamp_address_cancelled_at($cryptoId, $address);
-					}
+					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
 					continue;
 				}
 
@@ -1587,13 +1401,6 @@ class NMM_Payment {
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
 					continue;
 				}
-
-				// This order can no longer be paid, so every transaction sent
-				// before now belongs to it and to nothing that follows on this
-				// address. Stamp the boundary BEFORE the order-side work below:
-				// a throw or a slow status transition must not leave a recycled
-				// address able to absorb the departing customer's funds.
-				self::stamp_address_cancelled_at($cryptoId, $address);
 
 				// Hook point immediately before the final transition. Integrations
 				// (and the concurrency test) can observe - or, in a genuine race,

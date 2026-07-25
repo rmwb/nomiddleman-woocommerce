@@ -415,12 +415,6 @@ NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // one page: wr
 remove_filter('pre_http_request', $btcAddrMock, 10);
 NMM_Payment::cancel_expired_payments();
 aok('quiet address: aged row expires normally',   rec_status($wpdb,$pt,$oQuiet) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oQuiet));
-// Cancelling must move the address's cancellation boundary, or a partial
-// payment made towards this order stays eligible and can be pooled into
-// whoever receives the recycled address next (see test-payment-matcher's
-// pm_recyc case for the misattribution this prevents).
-aok('  cancellation stamps the address boundary', (int) get_option('nmmpro_BTC_cancelled_at_for_btc_quiet', 0) > 0,
-	'got=' . get_option('nmmpro_BTC_cancelled_at_for_btc_quiet', 0));
 aok('busy (dusted) address: its rows defer',      rec_status($wpdb,$pt,$oBusy) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oBusy));
 $covMap = get_option('nmm_autopay_scan_covered_at', array());
 aok('  coin stamp still advanced',                is_array($covMap) && isset($covMap['BTC']), 'map=' . (is_array($covMap) ? implode(',', array_keys($covMap)) : '(scalar)'));

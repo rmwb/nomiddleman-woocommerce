@@ -139,10 +139,11 @@ class NMM_Address {
 				return self::is_base58check($address, array("\x00", "\x05"));
 
 			case 'ZEC':
-				// Four mainnet receiving formats, every one of which a merchant
+				// Five mainnet receiving formats, every one of which a merchant
 				// may legitimately paste today:
 				//  - transparent: two-byte version prefixes (t1 = 0x1CB8 P2PKH,
 				//    t3 = 0x1CBD P2SH) - plain base58check, unchanged.
+				//  - TEX 'tex1...': ZIP-320 bech32m (see is_tex).
 				//  - Sapling 'zs1...': bech32 (see is_sapling). Standard for
 				//    years; rejecting it was a P1.
 				//  - Unified 'u1...': bech32m (see is_unified). Modern Zcash
@@ -150,9 +151,15 @@ class NMM_Address {
 				//    a merchant on current zcashd has nothing else to paste.
 				//  - Sprout 'z...': no double-SHA256 checksum we can verify;
 				//    anchored pattern only, kept exactly as before.
-				// Testnet forms ('ztestsapling1...', 'utest1...') carry a valid
-				// checksum but a different HRP, so they fail on the HRP.
+				// Testnet forms ('ztestsapling1...', 'utest1...', 'textest1...')
+				// carry a valid checksum but a different HRP, so they fail on
+				// the HRP.
+				//
+				// FORMAT VALIDITY IS NOT THE SAME AS AUTOPAY VERIFIABILITY here:
+				// only the transparent forms can be looked up on the public
+				// explorer Autopay queries. See is_autopay_verifiable_form().
 				return self::is_base58check($address, array("\x1c\xb8", "\x1c\xbd"))
+					|| self::is_tex($address)
 					|| self::is_sapling($address)
 					|| self::is_unified($address)
 					|| preg_match('/^z[a-zA-Z0-9]{90,96}$/', $address) === 1;
@@ -246,7 +253,16 @@ class NMM_Address {
 				// tz1 (Ed25519), tz2 (secp256k1), tz3 (P-256) and tz4 (BLS)
 				// implicit accounts - all hold funds and are valid payment
 				// destinations - + 33 base58 chars (36 total).
-				return preg_match('/^tz[1234][1-9A-HJ-NP-Za-km-z]{33}$/', $address) === 1;
+				//
+				// KT1 originated (smart-contract) accounts hold tez and accept
+				// transfers exactly like an implicit account, and a merchant
+				// receiving into a multisig/vesting contract has nothing else
+				// to paste, so they were wrongly rejected. Tezos base58check is
+				// the ordinary double-SHA256 family with a 3-byte prefix, so
+				// unlike the tz forms above this one gets a REAL checksum
+				// check: KT1 = 0x02 0x5A 0x79 + a 20-byte hash.
+				return preg_match('/^tz[1234][1-9A-HJ-NP-Za-km-z]{33}$/', $address) === 1
+					|| self::is_base58check($address, array("\x02\x5a\x79"));
 
 			case 'EOS':
 				// Account names: 1-12 chars from a-z, 1-5 and '.'.
@@ -319,6 +335,51 @@ class NMM_Address {
 	// as the old '{40,42}' pattern implied.
 	public static function is_evm($address) {
 		return preg_match('/^0x[a-fA-F0-9]{40}$/', $address) === 1;
+	}
+
+	/**
+	 * Can Autopay actually CONFIRM a payment sent to this address?
+	 *
+	 * validate() is and stays a pure FORMAT check - it answers "is this a
+	 * well-formed mainnet address for this coin", nothing more, and every
+	 * existing caller depends on that. This is the separate, deliberately
+	 * narrower question, and only the save-time settings validation asks it.
+	 *
+	 * Why it exists: Autopay verifies an order by asking a public block
+	 * explorer which transactions paid a literal address string
+	 * (NMM_Blockchain::get_zec_address_transactions queries Blockchair's
+	 * outputs endpoint with q=recipient(<address>)). That works for any
+	 * transparent output. It does NOT work for Zcash shielded funds: shielded
+	 * recipients and amounts are simply not public data, so a payment into a
+	 * Sapling or Sprout address is invisible to the explorer. A Unified
+	 * Address is not an on-chain receiver at all - it is a bundle of
+	 * receivers, and the output lands on whichever one the sender picked, so
+	 * the literal 'u1...' string never appears as a recipient either.
+	 *
+	 * The failure mode that makes this a fund-safety issue rather than a
+	 * cosmetic one: the merchant receives the money, the explorer reports
+	 * nothing, the order stays unpaid and is then auto-cancelled. The customer
+	 * has paid and has no order.
+	 *
+	 * TEX ('tex1...') is a transparent P2PKH hash and is verifiable IN
+	 * PRINCIPLE, but only once the explorer query converts it to the
+	 * equivalent t-address, which it does not do yet - see is_tex(). Until
+	 * then it has the same practical failure mode, so it is excluded too.
+	 *
+	 * Everything else (every other coin, and ZEC's transparent t1/t3 forms)
+	 * is verifiable, so this returns true whenever validate() does.
+	 */
+	public static function is_autopay_verifiable_form($cryptoId, $address) {
+		if (!self::validate($cryptoId, $address)) {
+			return false;
+		}
+
+		if ($cryptoId !== 'ZEC') {
+			return true;
+		}
+
+		// transparent t1/t3 only - shielded, Unified and TEX are excluded
+		return self::is_base58check($address, array("\x1c\xb8", "\x1c\xbd"));
 	}
 
 	// ------------------------------------------------------------------
@@ -501,6 +562,25 @@ class NMM_Address {
 		$payload = self::bech32_payload($address, 'zs', 1, 90);
 
 		return $payload !== null && count($payload) === 43;
+	}
+
+	/**
+	 * Zcash TEX address ('tex1...', ZIP-320, status Active): bech32m with hrp
+	 * 'tex' over exactly 20 bytes - a transparent-source-only P2PKH key hash.
+	 * Testnet uses hrp 'textest' and so fails the hrp check.
+	 *
+	 * NOTE FOR A FUTURE RELEASE: the 20 bytes here are the SAME key hash a
+	 * t1 address encodes, so a TEX address can be converted to its equivalent
+	 * transparent address by re-encoding these bytes as base58check with ZEC's
+	 * 0x1CB8 prefix. Doing that in NMM_Blockchain::get_zec_address_transactions
+	 * before the Blockchair lookup would make TEX fully Autopay-capable. Until
+	 * that conversion exists the explorer is queried by the literal string,
+	 * which finds nothing, so is_autopay_verifiable_form() excludes TEX.
+	 */
+	private static function is_tex($address) {
+		$payload = self::bech32_payload($address, 'tex', self::BECH32M_CONST, 90);
+
+		return $payload !== null && count($payload) === 20;
 	}
 
 	/**

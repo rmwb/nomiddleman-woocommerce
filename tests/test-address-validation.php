@@ -274,6 +274,27 @@ aok('test encoder: bech32(zs, 43 zero bytes) matches published all-zero Sapling 
 aok('Sapling encoded length is 78 chars (43-byte payload)',
 	strlen($saplingZeroVector) === 78, strlen($saplingZeroVector));
 
+// Zcash TEX self-check (ZIP-320, status Active): bech32m, hrp 'tex', over
+// exactly 20 bytes. $texVector is the spec's example address; the 20 bytes
+// below were recovered from it once and are re-encoded here, so the encoder
+// and the documented string check each other.
+$texVector = 'tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte';
+$texHash = hex2bin('8286bf790866805397e3a947640b77a43f0b43a5');
+aok('test encoder: bech32m(tex, 20-byte hash) reproduces the ZIP-320 example',
+	t_bech32_raw_encode('tex', $texHash, true) === $texVector);
+aok('TEX encoded length is 42 chars (20-byte payload)',
+	strlen($texVector) === 42, strlen($texVector));
+
+// Tezos KT1 originated (contract) account. Tezos base58check is the ordinary
+// double-SHA256 family, so the test-side b58check encoder must reproduce the
+// documented address from its 3-byte prefix + 20-byte hash - which both pins
+// the KT1 prefix bytes and independently proves the vector's checksum.
+$kt1Vector = 'KT1S5hgipNSTFehZo7v81gq6fcLChbRwptqy';
+aok('test encoder: b58check(0x025A79, KT1 hash) reproduces the documented KT1 address',
+	t_b58check_encode("\x02\x5a\x79", hex2bin('bff2f659815ce26104d38304064e4de2a36e9da6')) === $kt1Vector);
+aok('KT1 vector is 36 chars and starts KT1',
+	strlen($kt1Vector) === 36 && strpos($kt1Vector, 'KT1') === 0, $kt1Vector);
+
 // ---------------------------------------------------------------------
 // registry coverage: every non-token coin must have a validation rule
 // (a coin falling through to "return false" could never be configured)
@@ -391,6 +412,12 @@ $valid = array(
 	// checksum in scope), so the zero payload is irrelevant
 	array('XTZ', t_b58check_encode("\x06\xa1\x9f", $zeros20), 'pattern', 'generated tz1 (Ed25519)'),
 	array('XTZ', t_b58check_encode("\x06\xa1\xa6", $zeros20), 'pattern', 'generated tz4 (BLS)'),
+	// KT1 originated (smart-contract) accounts hold tez and receive transfers
+	// like any implicit account - rejected before, so a merchant receiving into
+	// a multisig or vesting contract could not save their address. Unlike the
+	// tz forms this one IS checksum-verified, so it gets the b58 mutation and
+	// truncation treatment below.
+	array('XTZ', $kt1Vector, 'b58', 'KT1 originated contract account'),
 
 	// ZEC: all four mainnet receiving formats. Sapling 'zs1...' and Unified
 	// 'u1...' were REJECTED before - a merchant on a modern Zcash node, where
@@ -406,6 +433,7 @@ $valid = array(
 	//       (orchard + sapling + P2PKH, 213 chars - the long end of the range)
 	array('ZEC', t_b58check_encode("\x1c\xb8", $zeros20), 'b58', 'generated transparent t1 (0x1CB8)'),
 	array('ZEC', t_b58check_encode("\x1c\xbd", $zeros20), 'b58', 'generated transparent t3 (0x1CBD)'),
+	array('ZEC', $texVector, 'bech32', 'TEX address (ZIP-320 example)'),
 	array('ZEC', $saplingZeroVector, 'bech32', 'Sapling all-zero payment address (librustzcash vector)'),
 	array('ZEC', t_bech32_raw_encode('zs', hex2bin('0102030405060708090a0b') . $xonly, false), 'bech32', 'generated Sapling (11-byte diversifier + 32-byte pk_d)'),
 	array('ZEC', 'u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl', 'bech32', 'Unified Address, single receiver (106 chars)'),
@@ -536,6 +564,78 @@ check('ZEC', 'zs1z7rejlpsa98s2rrrfkwmaxu53e4ue0ulcrw0h4x5g8jl04tak0d3mm47vdtahat
 
 // Sprout acceptance is unchanged by the Sapling/Unified work
 check('ZEC', 'zcU1Cd6zYyZCd2VJF8yKgmzjxdiiU1rgTTjEwoN1CGUWCziPkUTXUjXmX7TMqdMNsTfuiGN1jQoVN4kGxUR4sAPN4XZ7pxb', true, 'legacy Sprout z-address (docs example)');
+
+// TEX (ZIP-320): bech32m over exactly 20 bytes, hrp 'tex' (testnet 'textest')
+check('ZEC', t_mutate($texVector, $B32), false, 'TEX with corrupted checksum');
+check('ZEC', t_bech32_raw_encode('textest', $texHash, true), false, 'testnet TEX hrp textest (checksum ok)');
+check('ZEC', t_bech32_raw_encode('tex', $texHash, false), false, 'TEX encoded with bech32 constant (must be bech32m)');
+check('ZEC', t_bech32_raw_encode('tex', substr($texHash, 0, 19), true), false, 'TEX with 19-byte payload');
+check('ZEC', t_bech32_raw_encode('tex', $texHash . "\x00", true), false, 'TEX with 21-byte payload');
+
+// ---------------------------------------------------------------------
+// XTZ KT1 originated accounts (real base58check, unlike the tz forms)
+// ---------------------------------------------------------------------
+
+check('XTZ', t_b58check_encode("\x02\x5a\x79", $zeros20), true, 'generated KT1 (0x025A79)');
+check('XTZ', t_mutate($kt1Vector, $B58), false, 'KT1 with corrupted checksum');
+check('XTZ', substr($kt1Vector, 0, -1), false, 'truncated KT1');
+check('XTZ', 'KT2' . substr($kt1Vector, 3), false, 'unknown KT2 prefix');
+check('XTZ', t_b58check_encode("\x02\x5a\x7a", $zeros20), false, 'adjacent prefix 0x025A7A (checksum ok)');
+
+// ---------------------------------------------------------------------
+// AUTOPAY VERIFIABILITY (fund safety, distinct from format validity)
+//
+// Autopay confirms a ZEC order by asking Blockchair which outputs paid a
+// literal address (NMM_Blockchain::get_zec_address_transactions). Shielded
+// recipients are not public, a Unified Address is not itself an on-chain
+// receiver, and TEX is not converted to its equivalent t-address before the
+// query. Handing any of those out under Autopay means the merchant RECEIVES
+// the money while the order stays unpaid and is auto-cancelled - so they are
+// valid formats (Classic mode) but must never be Autopay-usable.
+//
+// NMM_Validation consults this helper and filters the carousel buffer with
+// it, which is what keeps such an address from ever reaching checkout.
+// ---------------------------------------------------------------------
+
+function autopay_check($cryptoId, $address, $expected, $note) {
+	$got = (bool) NMM_Address::is_autopay_verifiable_form($cryptoId, $address);
+	aok('autopay-verifiable ' . $cryptoId . ' ' . $note . ': ' . substr($address, 0, 30), $got === $expected,
+		'want ' . ($expected ? 'verifiable' : 'NOT verifiable') . ', got ' . ($got ? 'verifiable' : 'NOT verifiable'));
+}
+
+$zecT1 = t_b58check_encode("\x1c\xb8", $zeros20);
+$zecT3 = t_b58check_encode("\x1c\xbd", $zeros20);
+$zecSprout = 'zcU1Cd6zYyZCd2VJF8yKgmzjxdiiU1rgTTjEwoN1CGUWCziPkUTXUjXmX7TMqdMNsTfuiGN1jQoVN4kGxUR4sAPN4XZ7pxb';
+$zecUnified = 'u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl';
+
+// transparent forms: valid AND Autopay-verifiable
+autopay_check('ZEC', $zecT1, true, 'transparent t1');
+autopay_check('ZEC', $zecT3, true, 'transparent t3');
+
+// every non-transparent form: still a VALID format (Classic mode)...
+check('ZEC', $saplingZeroVector, true, 'Sapling is a valid format (Classic mode)');
+check('ZEC', $zecUnified, true, 'Unified is a valid format (Classic mode)');
+check('ZEC', $texVector, true, 'TEX is a valid format (Classic mode)');
+check('ZEC', $zecSprout, true, 'Sprout is a valid format (Classic mode)');
+
+// ...but NOT Autopay-verifiable
+autopay_check('ZEC', $saplingZeroVector, false, 'Sapling (shielded, not public)');
+autopay_check('ZEC', $zecUnified, false, 'Unified (not itself the on-chain receiver)');
+autopay_check('ZEC', $texVector, false, 'TEX (explorer is not queried by t-address yet)');
+autopay_check('ZEC', $zecSprout, false, 'Sprout (shielded, not public)');
+
+// a malformed address is never Autopay-verifiable either
+autopay_check('ZEC', t_mutate($zecT1, $B58), false, 'bad-checksum transparent');
+autopay_check('ZEC', '', false, 'empty');
+autopay_check('ZEC', 'hello ' . $zecT1, false, 'word-prefixed transparent');
+
+// no other coin is restricted: verifiability tracks format validity exactly
+autopay_check('BTC', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', true, 'genesis P2PKH');
+autopay_check('BTC', 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', true, 'P2WPKH');
+autopay_check('BTC', '1A1zP1eP5QGefi2DMPTfTL5SLmv7Div', false, 'truncated');
+autopay_check('DOGE', 'D596YFweJQuHY1BbjazZYmAbt8jJPbKehC', true, 'zero-hash P2PKH');
+autopay_check('XTZ', $kt1Vector, true, 'KT1 contract account');
+autopay_check('ETH', '0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe', true, 'EVM address');
 
 // ---------------------------------------------------------------------
 // LSK / MIOTA post-migration forms

@@ -65,7 +65,7 @@ class NMM_Hd {
 	 * for that filter includes 'failed', and a failed/cancelled/refunded order
 	 * receiving a late payment must never be resurrected by it.
 	 */
-	private static function order_awaits_payment($order) {
+	public static function order_awaits_payment($order) {
 		if ($order->has_status(array('cancelled', 'refunded', 'failed', 'trash'))) {
 			return false;
 		}

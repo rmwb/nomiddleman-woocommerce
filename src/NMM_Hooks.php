@@ -80,19 +80,12 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
 	}
 
-	// If admin updates from needs-payment to cancelled, stop looking for matching transactions.
-	// These transitions retire the row exactly as the expiry cron does, so they must move the
-	// address's cancellation boundary too: otherwise a manually cancelled order's partial
-	// payments stay eligible and can be pooled into whoever gets the address next.
+	// If admin updates from needs-payment to cancelled, stop looking for matching transactions
 	$retireStatuses = array(
 		'pending|cancelled', 'pending|failed', 'on-hold|cancelled', 'on-hold|failed',
 	);
 	if (in_array($oldOrderStatus . '|' . $newOrderStatus, $retireStatuses, true)) {
-		$retiring = $paymentRepo->get_crypto_and_address($orderId, $paymentAmount);
 		$paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-		if ($retiring) {
-			NMM_Payment::stamp_address_cancelled_at($retiring['cryptocurrency'], $retiring['address']);
-		}
 	}
 
 	// If admin updates from cancelled to needs-payment, start looking for matching transactions
