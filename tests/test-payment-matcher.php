@@ -49,7 +49,7 @@ $ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use
 // this suite touches is cleared up front and again at the end so reruns stay
 // deterministic.
 $pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
-	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_mo', 'pm_mosub');
+	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_ambsub', 'pm_mo', 'pm_mosub');
 foreach ($pmAddrs as $a) {
 	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
 	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
@@ -208,6 +208,48 @@ pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('B
 $ambPool = get_option('nmmpro_BTC_split_ambiguous_for_pm_ambig', array());
 pmok('  stale flag entry pruned',                  is_array($ambPool) && !isset($ambPool['PMTX_AMB_STALE']));
 pmok('  live flag entries retained',               is_array($ambPool) && isset($ambPool['PMTX_AMB_A']) && isset($ambPool['PMTX_AMB_B']));
+
+// --- sub-threshold partials on a shared address are flagged too --------------
+// Partials that cover NEITHER order are just as unattributable as a covering
+// pool: they must be flagged the tick they are seen (no warning - nothing is
+// actionable yet), so that after one order expires a later top-up cannot pool
+// with them into the survivor. Only txs arriving while exactly one order is
+// unpaid may ever auto-aggregate.
+$oSubA = pm_mkorder(); $ins($oSubA, 'pm_ambsub');
+$oSubB = pm_mkorder(); $ins($oSubB, 'pm_ambsub');
+$subTxs = array(
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_SUB_A'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_SUB_B'),
+);
+$GLOBALS['pm_warned'] = false;
+add_filter('woocommerce_logger_log_message', $pmLogSpy, 10, 4);
+NMM_Payment::process_address_transactions($btc, 'pm_ambsub', $subTxs, $life);
+remove_filter('woocommerce_logger_log_message', $pmLogSpy, 10);
+$subPool = get_option('nmmpro_BTC_split_ambiguous_for_pm_ambsub', array());
+pmok('sub-threshold pool: hashes flagged',         is_array($subPool) && isset($subPool['PMTX_SUB_A']) && isset($subPool['PMTX_SUB_B']));
+pmok('  no collision warning (nothing covered)',   $GLOBALS['pm_warned'] === false);
+
+// Expire order A, then a fresh 0.2 top-up arrives: 0.4+0.4+0.2 would sum to
+// the survivor's total, but the flagged 0.8 may have been the cancelled
+// order's payment - NO aggregation, nothing consumed.
+$rp->claim_for_cancellation($oSubA, $amt);
+NMM_Payment::process_address_transactions($btc, 'pm_ambsub', array_merge($subTxs, array(
+	new NMM_Transaction($units * 0.2, 999, time(), 'PMTX_SUB_TOP'),
+)), $life);
+pmok('flagged partials + top-up: NOT aggregated',  pm_rec($wpdb, $pt, $oSubB) === 'unpaid');
+pmok('  nothing consumed',                         !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_B') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_TOP'));
+
+// Two fresh in-window txs (new hashes) summing over the survivor's total still
+// aggregate normally - only the flagged pool is withheld. The top-up arrived
+// while exactly one order was unpaid, so it may legitimately contribute too.
+NMM_Payment::process_address_transactions($btc, 'pm_ambsub', array_merge($subTxs, array(
+	new NMM_Transaction($units * 0.2, 999, time(), 'PMTX_SUB_TOP'),
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_SUB_C'),
+	new NMM_Transaction($units * 0.5, 999, time(), 'PMTX_SUB_D'),
+)), $life);
+pmok('fresh txs still complete the survivor',      pm_rec($wpdb, $pt, $oSubB) === 'paid');
+pmok('  fresh hashes consumed',                    $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_C') && $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_D'));
+pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_B'));
 
 // --- multi-output transaction: outputs sum per hash --------------------------
 // UTXO adapters emit one NMM_Transaction per matching OUTPUT: one on-chain tx

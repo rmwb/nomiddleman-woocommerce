@@ -328,6 +328,7 @@ function NMM_verify_site_tables() {
         $wpdb->prefix . NMM_HD_TABLE,
         $wpdb->prefix . NMM_PAYMENT_TABLE,
         $wpdb->prefix . NMM_CAROUSEL_TABLE,
+        $wpdb->prefix . NMM_SOL_RETRY_TABLE,
     );
 
     $missing = array();
@@ -339,6 +340,17 @@ function NMM_verify_site_tables() {
 
     if (!empty($missing)) {
         NMM_Util::log(__FILE__, __LINE__, 'Plugin tables missing for this site (' . implode(', ', $missing) . '); recreating them. This site likely never ran activation (e.g. created after a network activation).', 'warning');
+
+        // The retry table's creation is gated by its schema-version option, so
+        // a missing table with a still-current option would never be rebuilt.
+        // Clear the option (and its pre-versioned flag) so the shipped
+        // create-then-verify path in NMM_maybe_create_sol_retry_table re-runs
+        // and re-records the version only once columns and indexes check out.
+        if (in_array($wpdb->prefix . NMM_SOL_RETRY_TABLE, $missing, true)) {
+            delete_option('nmm_sol_retry_schema');
+            delete_option('nmm_sol_retry_table_created');
+        }
+
         NMM_activate_site();
 
         foreach ($missing as $missingTable) {

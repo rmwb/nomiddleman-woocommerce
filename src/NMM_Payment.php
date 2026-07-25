@@ -883,16 +883,23 @@ class NMM_Payment {
 	 * Persist hashes implicated in an ambiguous multi-order pool, mirroring
 	 * the consumed-tx option pattern (per crypto+address key, autoload=false,
 	 * 200-entry cap). Stored as hash => tx timestamp so ambiguous_split_txs()
-	 * can prune entries once they age out of the matching window.
+	 * can prune entries once they age out of the matching window. Returns
+	 * whether anything NEW was flagged; already-flagged hashes never churn the
+	 * option (contributions exclude them, so the every-tick steady state on a
+	 * shared address is an empty $hashTs and no write at all).
 	 */
 	private static function flag_ambiguous_split_txs($cryptoId, $address, $hashTs, $existingPool) {
-		if (count($hashTs) == 0) {
-			return;
+		$pool = $existingPool;
+		$added = false;
+		foreach ($hashTs as $hash => $txTimeStamp) {
+			if (!isset($pool[$hash])) {
+				$pool[$hash] = (int) $txTimeStamp;
+				$added = true;
+			}
 		}
 
-		$pool = $existingPool;
-		foreach ($hashTs as $hash => $txTimeStamp) {
-			$pool[$hash] = (int) $txTimeStamp;
+		if (!$added) {
+			return false;
 		}
 
 		// Same growth cap as the consumed-tx list; beyond it keep the NEWEST
@@ -903,6 +910,7 @@ class NMM_Payment {
 		}
 
 		update_option(self::split_ambiguous_option_key($cryptoId, $address), $pool, false);
+		return true;
 	}
 
 	/**
@@ -974,18 +982,31 @@ class NMM_Payment {
 					$implicatedHashTs[$implicatedHash] = $implicatedTs;
 				}
 			}
+			// Flag EVERY eligible contributor seen while the address is shared
+			// - unconditionally, not only when a sum already covers an order,
+			// and once flagged a hash STAYS flagged until a human reconciles
+			// it or it ages out of the matching window. A sub-threshold
+			// partial is just as unattributable as a covering pool: with two
+			// 1.0 orders sharing the address and 0.4 + 0.4 received, waiting
+			// for coverage would flag nothing, one order could expire, and a
+			// later 0.2 top-up would let the pooled 1.0 complete the survivor
+			// even though the 0.8 may have been the CANCELLED order's payment.
+			// Sibling cancellation must never disambiguate: only transactions
+			// that arrive while EXACTLY ONE order is unpaid may ever
+			// auto-aggregate. On a genuinely shared static address this means
+			// split payments always end in manual reconciliation - that is
+			// intended; per-order-address modes (HD/Privacy Mode, XMR
+			// subaddresses, an adequately stocked carousel) are unaffected.
+			$flaggedNew = self::flag_ambiguous_split_txs($cryptoId, $address, $implicatedHashTs, $ambiguousTxs);
+
 			if (count($ambiguousOrderIds) > 0) {
-				// Persist every implicated hash: once a pool is ambiguous it
-				// STAYS ambiguous. Cancellation is not disambiguation - if one
-				// of these orders later expires, the next tick would see
-				// exactly one unpaid row and happily aggregate the same pool
-				// into the survivor, even though the funds may have been the
-				// cancelled order's payment. A flagged pool is only ever
-				// resolved by a human; the flags age out of the option once
-				// their transactions leave the matching window (at which point
-				// they could not contribute to any sum anyway).
-				self::flag_ambiguous_split_txs($cryptoId, $address, $implicatedHashTs, $ambiguousTxs);
+				// The covering case is the actionable one for the operator.
 				NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment collision: ' . $cryptoId . ' address ' . $address . ' has multiple unpaid orders while its combined transactions would cover order(s) ' . implode(', ', $ambiguousOrderIds) . '; not aggregating - please reconcile manually.', 'warning');
+			}
+			else if ($flaggedNew) {
+				// Sub-threshold partials: record why a later aggregate will be
+				// withheld, without warning-spamming the operator every tick.
+				NMM_Util::log(__FILE__, __LINE__, '---split-payment: flagged ' . count($implicatedHashTs) . ' partial transaction(s) on shared ' . $cryptoId . ' address ' . $address . ' as ambiguous; aggregation withheld pending manual reconciliation.');
 			}
 			return;
 		}

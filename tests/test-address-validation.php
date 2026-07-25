@@ -259,6 +259,21 @@ $valid = array(
 	array('TRX', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', 'b58', 'base58check (0x41)'),
 	array('USDTTRX', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', 'b58', 'base58check (0x41)'),
 
+	// BLK: base58check (0x19 'B...') plus native segwit - BlackCoin
+	// activated segwit on mainnet (March 2026); blackcoin-more v26.2.0
+	// chain params define bech32 hrp 'blk'
+	array('BLK', t_b58check_encode("\x19", $zeros20), 'b58', 'generated P2PKH (0x19)'),
+	array('BLK', t_bech32_encode('blk', 0, $bip173Program, false), 'bech32', 'generated P2WPKH (hrp blk)'),
+
+	// XTZ implicit accounts: tz1..tz3 plus tz4 (BLS), all valid payment
+	// destinations. Vectors constructed with the test-side base58check
+	// encoder over the documented 3-byte prefixes (tz1 = 06a19f,
+	// tz4 = 06a1a6) + 20 zero bytes - structurally exact 36-char
+	// addresses; XTZ validation is anchored-pattern-only (no SHA256d
+	// checksum in scope), so the zero payload is irrelevant
+	array('XTZ', t_b58check_encode("\x06\xa1\x9f", $zeros20), 'pattern', 'generated tz1 (Ed25519)'),
+	array('XTZ', t_b58check_encode("\x06\xa1\xa6", $zeros20), 'pattern', 'generated tz4 (BLS)'),
+
 	// ADA: Shelley bech32 (CIP-19 test vector; the old pattern wrongly
 	// rejected every Shelley address)
 	array('ADA', 'addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x', 'bech32', 'CIP-19 Shelley base address'),
@@ -300,6 +315,14 @@ check('XMR', substr('44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7S
 check('SOL', substr('So11111111111111111111111111111111111111112', 0, -1), true, 'truncated stays in 32-44 range (pattern limit)');
 check('ETH', t_mutate('0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe', $HEX), true, 'mutation undetectable without EIP-55 (documented limit)');
 
+// XTZ is fixed-length (36) so truncation fails; a same-charset mutation is
+// undetectable without the (out-of-scope) checksum - documented limit
+$tz4 = t_b58check_encode("\x06\xa1\xa6", $zeros20);
+aok('XTZ generated vector really is a tz4 (prefix bytes pinned)', strpos($tz4, 'tz4') === 0 && strlen($tz4) === 36, $tz4);
+check('XTZ', substr($tz4, 0, -1), false, 'truncated tz4 (fixed length)');
+check('XTZ', t_mutate($tz4, $B58), true, 'tz4 mutation undetectable without checksum (documented limit)');
+check('XTZ', 'tz5' . substr($tz4, 3), false, 'unknown tz5 prefix');
+
 // ---------------------------------------------------------------------
 // wrong-network vectors: checksum-VALID testnet addresses must fail on
 // the version byte / hrp / prefix, not merely on the checksum
@@ -323,6 +346,9 @@ check('DOGE', 'XagqqFetxiDb9wbartKDrXgnqLah6SqX2S', false, 'DASH address rejecte
 check('DASH', 'D596YFweJQuHY1BbjazZYmAbt8jJPbKehC', false, 'DOGE address rejected for DASH');
 check('BTC', 'LKDxGDJq5fF4FohAB8zJH24mDDNHDNtqsE', false, 'LTC address rejected for BTC');
 check('BTC', t_bech32_encode('ltc', 0, $bip173Program, false), false, 'ltc1 rejected for BTC');
+check('BLK', t_bech32_encode('bc', 0, $bip173Program, false), false, 'bc1 rejected for BLK (checksum ok, wrong hrp)');
+check('BTC', t_bech32_encode('blk', 0, $bip173Program, false), false, 'blk1 rejected for BTC (checksum ok, wrong hrp)');
+check('BLK', t_bech32_encode('tblk', 0, $bip173Program, false), false, 'testnet hrp tblk (checksum ok)');
 
 // ---------------------------------------------------------------------
 // bech32 vs bech32m discipline (BIP-350) and case rules

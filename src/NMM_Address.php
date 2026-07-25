@@ -138,7 +138,11 @@ class NMM_Address {
 					|| preg_match('/^z[a-zA-Z0-9]{90,96}$/', $address) === 1;
 
 			case 'BLK':
-				return self::is_base58check($address, array("\x19", "\x55"));
+				// BlackCoin activated native segwit on mainnet (March 2026);
+				// blackcoin-more v26.2.0 chain params define bech32 hrp 'blk'.
+				// Same witness rules as bc/ltc/dgb apply.
+				return self::is_base58check($address, array("\x19", "\x55"))
+					|| self::is_segwit($address, 'blk');
 
 			case 'VRC':
 				return self::is_base58check($address, array("\x46"));
@@ -209,8 +213,10 @@ class NMM_Address {
 				return preg_match('/^G[A-Z2-7]{55}$/', $address) === 1;
 
 			case 'XTZ':
-				// tz1/tz2/tz3 + 33 base58 chars (36 total).
-				return preg_match('/^tz[123][1-9A-HJ-NP-Za-km-z]{33}$/', $address) === 1;
+				// tz1 (Ed25519), tz2 (secp256k1), tz3 (P-256) and tz4 (BLS)
+				// implicit accounts - all hold funds and are valid payment
+				// destinations - + 33 base58 chars (36 total).
+				return preg_match('/^tz[1234][1-9A-HJ-NP-Za-km-z]{33}$/', $address) === 1;
 
 			case 'EOS':
 				// Account names: 1-12 chars from a-z, 1-5 and '.'.
