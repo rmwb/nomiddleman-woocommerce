@@ -97,12 +97,16 @@ class NMM_Address {
 					|| self::is_segwit($address, 'dgb');
 
 			case 'QTUM':
-				return self::is_base58check($address, array("\x3a", "\x32"));
+				// qtum chainparams: p2pkh 58 'Q', p2sh 50 'M', bech32 hrp 'qc'.
+				return self::is_base58check($address, array("\x3a", "\x32"))
+					|| self::is_segwit($address, 'qc');
 
 			case 'XMY':
 				// p2pkh 50 'M...' (pinned by tests/test-hd-addrtype.php);
-				// p2sh 9 yields the '4'/'5' prefixes the old regex allowed.
-				return self::is_base58check($address, array("\x32", "\x09"));
+				// p2sh 9 yields the '4'/'5' prefixes the old regex allowed;
+				// myriadcoin chainparams also define bech32 hrp 'my'.
+				return self::is_base58check($address, array("\x32", "\x09"))
+					|| self::is_segwit($address, 'my');
 
 			case 'BTX':
 				return self::is_base58check($address, array("\x03", "\x7d"))
@@ -149,7 +153,9 @@ class NMM_Address {
 					|| self::is_segwit($address, 'blk');
 
 			case 'VRC':
-				return self::is_base58check($address, array("\x46"));
+				// vericoin chainparams: p2pkh 70 'V', p2sh 132 'v' (lower case
+				// - a different version byte, not a case variant).
+				return self::is_base58check($address, array("\x46", "\x84"));
 
 			case 'TRX':
 			case 'USDTTRX':
@@ -162,12 +168,20 @@ class NMM_Address {
 			// betting funds on a version byte we could not confirm. ---
 
 			case 'ONION':
-				return self::is_base58check($address, array())
-					&& preg_match('/^D[0-9a-zA-Z]{25,35}$/', $address) === 1;
+				// deeponion chainparams: p2pkh 31 'D', p2sh 78 'Y', bech32 hrp
+				// 'dpn'. Pinning these replaces an any-version + 'D' prefix
+				// rule that both rejected every P2SH address and accepted
+				// versions 30 and 32 - i.e. a Dogecoin address pasted into the
+				// DeepOnion field validated cleanly.
+				return self::is_base58check($address, array("\x1f", "\x4e"))
+					|| self::is_segwit($address, 'dpn');
 
 			case 'POT':
-				return self::is_base58check($address, array())
-					&& preg_match('/^P[0-9a-zA-Z]{25,35}$/', $address) === 1;
+				// potcoin src/base58.h: PUBKEY_ADDRESS 55 'P', SCRIPT_ADDRESS 5
+				// (Bitcoin's, so it renders as '3'). Same fix as ONION: the old
+				// any-version + 'P' prefix rule rejected every P2SH address
+				// while accepting versions 56 and 57.
+				return self::is_base58check($address, array("\x37", "\x05"));
 
 			case 'ONT':
 				return self::is_base58check($address, array())

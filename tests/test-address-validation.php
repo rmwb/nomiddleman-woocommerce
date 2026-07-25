@@ -305,6 +305,21 @@ $valid = array(
 	array('XMY', 'M7uAERuQW2AotfyLDyewFGcLUDtAYu9v5V', 'b58', 'zero-hash P2PKH (0x32)'),
 	array('BTX', '2D1oxKts8YPdTJRG5FzxTNpMtWmqBnjrht', 'b58', 'zero-hash P2PKH (0x03)'),
 
+	// Every remaining address family the chain parameters define. Each of
+	// these was rejected before - a merchant pasting one would have had it
+	// stripped on save with "no valid wallet addresses".
+	array('QTUM', t_b58check_encode("\x32", $zeros20), 'b58', 'generated P2SH (0x32)'),
+	array('QTUM', t_bech32_encode('qc', 0, $bip173Program, false), 'bech32', 'generated P2WPKH (qc1)'),
+	array('XMY', t_b58check_encode("\x09", $zeros20), 'b58', 'generated P2SH (0x09)'),
+	array('XMY', t_bech32_encode('my', 0, $bip173Program, false), 'bech32', 'generated P2WPKH (my1)'),
+	array('ONION', t_b58check_encode("\x1f", $zeros20), 'b58', 'generated P2PKH (0x1f)'),
+	array('ONION', t_b58check_encode("\x4e", $zeros20), 'b58', 'generated P2SH (0x4e)'),
+	array('ONION', t_bech32_encode('dpn', 0, $bip173Program, false), 'bech32', 'generated P2WPKH (dpn1)'),
+	array('VRC', t_b58check_encode("\x46", $zeros20), 'b58', 'generated P2PKH (0x46)'),
+	array('VRC', t_b58check_encode("\x84", $zeros20), 'b58', 'generated P2SH (0x84)'),
+	array('POT', t_b58check_encode("\x37", $zeros20), 'b58', 'generated P2PKH (0x37)'),
+	array('POT', t_b58check_encode("\x05", $zeros20), 'b58', 'generated P2SH (0x05)'),
+
 	// TRX (base58check version 0x41) - well-known USDT contract address form
 	array('TRX', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', 'b58', 'base58check (0x41)'),
 	array('USDTTRX', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', 'b58', 'base58check (0x41)'),
@@ -414,6 +429,19 @@ check('BCH', 'bitcoincash:Qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a', false, 'm
 // forked before it and never adopted these types, so the same string must be
 // accepted for one coin and refused for the other. Type 4+ is undefined for
 // both - accepting it would let a typo'd version byte through.
+// ONION pins its two documented version bytes instead of accepting any
+// version behind a 'D' prefix. Versions 30 and 32 also render as 'D', so the
+// old rule validated a DOGE address pasted into the DeepOnion field - funds to
+// an address on a chain that never sees them.
+check('ONION', t_b58check_encode("\x1e", $zeros20), false, 'DOGE address (version 30, renders as D)');
+check('ONION', t_b58check_encode("\x20", $zeros20), false, 'version 32 (also renders as D)');
+check('ONION', t_bech32_encode('bc', 0, $bip173Program, false), false, 'BTC bech32 rejected for ONION');
+check('QTUM', t_bech32_encode('bc', 0, $bip173Program, false), false, 'BTC bech32 rejected for QTUM');
+check('XMY', t_bech32_encode('qc', 0, $bip173Program, false), false, 'QTUM bech32 rejected for XMY');
+check('VRC', t_b58check_encode("\x85", $zeros20), false, 'version 133 (adjacent to p2sh 132)');
+check('POT', t_b58check_encode("\x38", $zeros20), false, 'version 56 (also renders as P)');
+check('POT', t_b58check_encode("\x39", $zeros20), false, 'version 57 (also renders as P)');
+
 check('BSV', 'bitcoincash:zr7fzmep8g7h7ymfxy74lgc0v950j3r295z4y4gq0v', false, 'token-aware P2PKH rejected for BSV (spec vector)');
 check('BSV', t_cashaddr_encode('bitcoincash', 2, $cashAddrSpecHash), false, 'token-aware P2PKH rejected for BSV');
 check('BSV', t_cashaddr_encode('bitcoincash', 3, $cashAddrSpecHash), false, 'token-aware P2SH rejected for BSV');
