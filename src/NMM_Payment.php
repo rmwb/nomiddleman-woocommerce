@@ -595,6 +595,40 @@ class NMM_Payment {
 
 		$cryptoId = $crypto->get_id();
 
+		// Serialize matching per address. Claiming an order and durably
+		// recording the transactions that paid it are two separate writes, so
+		// between them the order has left the unpaid set while its
+		// transactions still look available. A second verifier working the
+		// same address in that window can credit one transaction to a sibling
+		// order - two units on chain settling three units of orders. The cron
+		// normally guarantees one verifier per site, but it degrades to
+		// running unlocked when GET_LOCK is unavailable (see NMM_Cron), which
+		// is exactly when this matters. Serializing per address also removes
+		// the lost-update risk in the read-modify-write consumed-tx option,
+		// since every writer for an address is now single-file.
+		$matchLock = NMM_Util::acquire_address_match_lock($cryptoId, $address);
+
+		if ($matchLock === '0') {
+			// Another worker is mid-flight on this exact address. Nothing to
+			// wait for; the sweep revisits it next tick.
+			NMM_Util::log(__FILE__, __LINE__, 'Address match lock busy for ' . $cryptoId . ' ' . $address . '; another verifier is processing it. Skipping this tick.');
+			return;
+		}
+
+		// null: advisory locks unavailable on this host. Single-transaction
+		// matching still runs - that path predates this release and its
+		// (much narrower) exposure needs two same-amount orders on one
+		// address - but split-payment AGGREGATION is withheld, because it can
+		// combine arbitrary subsets of transactions and so turns that narrow
+		// race into a broad one. Payments still settle here; only split
+		// payments wait for a host that can serialize.
+		$aggregationSafe = ($matchLock === '1');
+		if (!$aggregationSafe) {
+			NMM_Util::log(__FILE__, __LINE__, 'Advisory locks unavailable on this host; split-payment aggregation is disabled for ' . $cryptoId . ' ' . $address . ' (single-transaction matching continues).', 'warning');
+		}
+
+		try {
+
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
 			$transactionAmount = $transaction->get_amount();
@@ -767,6 +801,10 @@ class NMM_Payment {
 			}
 		}
 
+		if (!$aggregationSafe) {
+			return;
+		}
+
 		// Second pass: a customer who pays in SEVERAL transactions (exchange
 		// withdrawal limits, wallet UTXO splitting, topping up after a fee
 		// miscalculation) sends no single tx that clears the order amount, so
@@ -777,6 +815,17 @@ class NMM_Payment {
 		// purpose: an order completed above is no longer unpaid, and a hash
 		// consumed above no longer contributes to any sum.
 		self::aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings);
+
+		}
+		finally {
+			// Release only a lock we actually acquired ('1'); on '0' we returned
+			// above without holding it, and on null we never had one. The lock is
+			// also released automatically if this process dies, so a crash mid-
+			// match cannot wedge the address.
+			if ($matchLock === '1') {
+				NMM_Util::release_address_match_lock($cryptoId, $address);
+			}
+		}
 	}
 
 	/**

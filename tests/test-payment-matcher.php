@@ -50,7 +50,7 @@ $ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use
 // deterministic.
 $pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
 	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_ambsub', 'pm_ambunc',
-	'pm_race', 'pm_mo', 'pm_mosub');
+	'pm_race', 'pm_lock', 'pm_mo', 'pm_mosub');
 foreach ($pmAddrs as $a) {
 	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
 	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
@@ -251,6 +251,38 @@ NMM_Payment::process_address_transactions($btc, 'pm_ambsub', array_merge($subTxs
 pmok('fresh txs still complete the survivor',      pm_rec($wpdb, $pt, $oSubB) === 'paid');
 pmok('  fresh hashes consumed',                    $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_C') && $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_D'));
 pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_B'));
+
+// --- per-address serialization across connections ----------------------------
+// Claiming an order and durably consuming its transactions are two writes, so
+// two verifiers on one address can credit a transaction twice. Matching is
+// therefore serialized per (currency, address) with a MySQL advisory lock.
+// GET_LOCK is owned per CONNECTION, so a second wpdb connection stands in for a
+// concurrent worker exactly as it does in test-order-init-lock.
+$pmMain = $GLOBALS['wpdb'];
+$pmDb2 = new wpdb(DB_USER, DB_PASSWORD, DB_NAME, DB_HOST);
+$pmDb2->suppress_errors(true);
+$pmDb2->prefix = $pmMain->prefix; // lock names are site-scoped by prefix
+
+$oLock = pm_mkorder(); $ins($oLock, 'pm_lock');
+$lockTx = array(new NMM_Transaction($units, 999, time(), 'PMTX_LOCK'));
+
+$GLOBALS['wpdb'] = $pmDb2;
+$pmHeld = NMM_Util::acquire_address_match_lock('BTC', 'pm_lock');
+$GLOBALS['wpdb'] = $pmMain;
+pmok('address lock: held by the stand-in worker',  $pmHeld === '1', 'got=' . var_export($pmHeld, true));
+
+NMM_Payment::process_address_transactions($btc, 'pm_lock', $lockTx, $life);
+pmok('  contended address is skipped this tick',   pm_rec($wpdb, $pt, $oLock) === 'unpaid');
+pmok('  and nothing is consumed',                  !$stg->tx_already_consumed('BTC', 'pm_lock', 'PMTX_LOCK'));
+
+$GLOBALS['wpdb'] = $pmDb2;
+if ($pmHeld === '1') { NMM_Util::release_address_match_lock('BTC', 'pm_lock'); }
+$GLOBALS['wpdb'] = $pmMain;
+
+NMM_Payment::process_address_transactions($btc, 'pm_lock', $lockTx, $life);
+pmok('  completes once the address is free',       pm_rec($wpdb, $pt, $oLock) === 'paid');
+pmok('  and the hash is consumed',                 $stg->tx_already_consumed('BTC', 'pm_lock', 'PMTX_LOCK'));
+$pmDb2->close();
 
 // --- concurrent verifier must never credit one hash to two orders ------------
 // A 1-unit and a 2-unit order share an address; transactions T=1 and U=1 exist.
