@@ -293,6 +293,13 @@ class NMM_Settings {
 	}
 
 	public function get_xmr_rpc_password() {
+		// A wp-config.php constant takes precedence so the secret can live
+		// outside the database entirely; this getter is the single read path
+		// (NMM_Monero and the validator both come through here).
+		if (defined('NMM_XMR_RPC_PASSWORD')) {
+			return (string) NMM_XMR_RPC_PASSWORD;
+		}
+
 		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_password', $this->settings)) {
 			return (string) $this->settings['XMR_wallet_rpc_password'];
 		}

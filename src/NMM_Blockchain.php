@@ -33,6 +33,13 @@ class NMM_Blockchain {
 			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
 		}
 
+		// Explorer polling runs mostly in cron, so 8s tolerates slow explorers
+		// (chainz, Koios, Iquidus) without recording a failure that would trip
+		// the per-host backoff.
+		if (!isset($args['timeout'])) {
+			$args['timeout'] = 8;
+		}
+
 		$response = wp_remote_get($request, $args);
 
 		self::record_api_result($host, $response);
@@ -46,6 +53,10 @@ class NMM_Blockchain {
 
 		if (self::host_unavailable($host)) {
 			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
+		}
+
+		if (!isset($args['timeout'])) {
+			$args['timeout'] = 8; // same rationale as api_get
 		}
 
 		$response = wp_remote_post($request, $args);
@@ -122,7 +133,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -151,7 +162,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -192,7 +203,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -233,7 +244,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -264,7 +275,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array (
 				'result' => 'error',
@@ -306,7 +317,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array (
 				'result' => 'error',
@@ -337,7 +348,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array (
 				'result' => 'error',
@@ -368,7 +379,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -407,7 +418,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -439,7 +450,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body']))) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -469,7 +480,7 @@ class NMM_Blockchain {
 		));
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -541,7 +552,7 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( koios tx_utxos ): ' . print_r($response2, true));
+				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( koios tx_utxos ): ' . NMM_Util::summarize_response($response2));
 
 				return array(
 					'result' => 'error',
@@ -629,7 +640,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -711,7 +722,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -727,7 +738,7 @@ class NMM_Blockchain {
 		// non-object throws a TypeError on PHP 8, which would escape the
 		// verifier's fetch boundary - treat it as the fetch failure it is.
 		if (!is_object($body) || property_exists($body, 'error')) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
 			$result = array(
 				'result' => 'error',
 				'total_received' => '',
@@ -849,7 +860,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -905,7 +916,7 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( whatsonchain bulk txs ): ' . print_r($response2, true));
+				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( whatsonchain bulk txs ): ' . NMM_Util::summarize_response($response2));
 
 				return array(
 					'result' => 'error',
@@ -983,7 +994,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
             $request2 = 'https://api.blockcypher.com/v1/btc/main/addrs/' . $address . self::blockcypher_token_query(false);
             $response2 = self::api_get($request2, $args);
             if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
@@ -1102,7 +1113,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1205,7 +1216,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1268,7 +1279,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1331,7 +1342,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1388,7 +1399,7 @@ class NMM_Blockchain {
         $response = self::api_get($request);
 
         if (is_wp_error($response) || $response['response']['code'] !== 200) {
-            NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+            NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
             $result = array(
                 'result' => 'error',
@@ -1511,7 +1522,7 @@ class NMM_Blockchain {
 			}
 		}
 
-		NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+		NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 		// Fallback: Greymass v1 history (deprecated but maintained)
 		$request2 = 'https://eos.greymass.com/v1/history/get_actions';
@@ -1526,7 +1537,7 @@ class NMM_Blockchain {
 		));
 
 		if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request2 . ' ): ' . print_r($response2, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request2) . ' ): ' . NMM_Util::summarize_response($response2));
 
 			return array(
 				'result' => 'error',
@@ -1602,7 +1613,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1664,7 +1675,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1725,7 +1736,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1788,7 +1799,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1901,7 +1912,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1917,7 +1928,7 @@ class NMM_Blockchain {
 		// non-object throws a TypeError on PHP 8, which would escape the
 		// verifier's fetch boundary - treat it as the fetch failure it is.
 		if (!is_object($body) || property_exists($body, 'error')) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
 			$result = array(
 				'result' => 'error',
 				'total_received' => '',
@@ -2039,7 +2050,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2100,7 +2111,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2159,7 +2170,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2210,7 +2221,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2281,7 +2292,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2385,7 +2396,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2456,7 +2467,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2519,7 +2530,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2592,7 +2603,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2660,7 +2671,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . $request . ' ): ' . print_r($response, true));
+			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
 
 			return array(
 				'result' => 'error',
@@ -2827,7 +2838,7 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
-				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . print_r($response, true));
+				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . NMM_Util::summarize_response($response));
 
 				// Signal a hard error only if we end up with nothing at all; a
 				// later-page failure still lets us inspect what we collected, and

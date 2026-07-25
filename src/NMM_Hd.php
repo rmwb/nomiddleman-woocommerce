@@ -868,7 +868,14 @@ class NMM_Hd {
 					throw new \Exception('Exceeded the dirty-address gap limit for ' . $cryptoId . ' (explorer may be unavailable); aborting this buffer-fill cycle.');
 				}
 
-				$hdRepo->insert($address, $startIndex, 'dirty');
+				// A dirty marker that fails to land matters as much as the ready
+				// row: without it get_next_index() re-derives this same address
+				// next cycle and burns another explorer check on it, forever.
+				// Throw so the failure is logged with the database's own error
+				// rather than dissolving into a generic "no address" later.
+				if (!$hdRepo->insert($address, $startIndex, 'dirty')) {
+					throw new \Exception('Database insert failed recording dirty ' . $cryptoId . ' HD address ' . $address . ' (see log for the database error).');
+				}
 				$startIndex = $startIndex + 1;
 				$address = self::create_hd_address($cryptoId, $mpk, $startIndex, $hdMode);
 				$skips++;
@@ -879,7 +886,16 @@ class NMM_Hd {
 			throw new \Exception(esc_html($e->getMessage()));
 		}
 
-		$hdRepo->insert($address, $startIndex, 'ready');
+		// The ready row IS the deliverable of this whole function: it is what
+		// claim_oldest_ready() hands to the checkout. Returning normally on a
+		// failed insert used to leave count_ready() at zero with nothing in the
+		// logs - the caller believed an address existed and the customer got a
+		// generic error. Throw instead so every caller's existing error path
+		// (gateway: "unable to get payment address"; cron: log-and-continue)
+		// fires with a real diagnostic.
+		if (!$hdRepo->insert($address, $startIndex, 'ready')) {
+			throw new \Exception(esc_html('Database insert failed storing ready ' . $cryptoId . ' HD address ' . $address . ' (see log for the database error).'));
+		}
 	}
 
 	public static function create_hd_address($cryptoId, $mpk, $index, $hdMode) {

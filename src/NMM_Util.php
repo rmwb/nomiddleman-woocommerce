@@ -51,6 +51,36 @@ class NMM_Util {
 		}
 	}
 
+	/**
+	 * Replaces the values of credential-bearing query parameters with REDACTED
+	 * so a URL can be logged safely (WC logs end up in forums and support
+	 * bundles). Redaction happens only at the point of logging - the real
+	 * request always carries the real values.
+	 */
+	public static function redact_url($url) {
+		return preg_replace('/([?&](?:token|apikey|api_key|key|auth|password)=)[^&#]*/i', '$1REDACTED', (string) $url);
+	}
+
+	/**
+	 * Compact, log-safe summary of a wp_remote_* result: the HTTP status (or
+	 * WP_Error message) plus a truncated body prefix, instead of a print_r of
+	 * the whole response array (which is huge and echoes request headers -
+	 * including credentials - back into the log).
+	 */
+	public static function summarize_response($response) {
+		if (function_exists('is_wp_error') && is_wp_error($response)) {
+			return 'WP_Error: ' . $response->get_error_message();
+		}
+
+		$code = isset($response['response']['code']) ? (int) $response['response']['code'] : 0;
+		$body = isset($response['body']) ? (string) $response['body'] : '';
+		if (strlen($body) > 500) {
+			$body = substr($body, 0, 500) . ' ...[truncated]';
+		}
+
+		return 'http ' . $code . ': ' . $body;
+	}
+
 	private static function debug_logging_enabled() {
 		if (defined('NMM_DEBUG_LOG')) {
 			return (bool) NMM_DEBUG_LOG;

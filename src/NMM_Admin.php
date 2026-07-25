@@ -291,9 +291,35 @@ class NMM_Admin {
                         <input type="text" placeholder="username"
                                name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_user]"
                                value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_user', '')); ?>" />
+                        <?php
+                        // Write-only field: never emit the stored password into the page
+                        // source (browser caches, DOM snapshots, admin-side XSS would all
+                        // expose it). An empty submission means "keep the current value".
+                        $passwordFromConstant = defined('NMM_XMR_RPC_PASSWORD');
+                        $passwordStored = self::value($values, 'XMR_wallet_rpc_password', '') !== '';
+                        ?>
                         <input type="password" placeholder="password" autocomplete="new-password"
                                name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_password]"
-                               value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_password', '')); ?>" />
+                               value="" <?php disabled($passwordFromConstant); ?> />
+                        <?php if ($passwordFromConstant) : ?>
+                            <p class="description"><?php esc_html_e('The RPC password is set via the NMM_XMR_RPC_PASSWORD constant in wp-config.php, so it cannot be changed here. Remove the constant to manage it from this page again.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+                        <?php else : ?>
+                            <p class="description"><?php
+                                if ($passwordStored) {
+                                    esc_html_e('A password is currently saved. Leave this field blank to keep it, or enter a new one to replace it.', 'nomiddleman-crypto-payments-for-woocommerce');
+                                }
+                                else {
+                                    esc_html_e('No password is currently saved. Leave blank for an RPC without authentication.', 'nomiddleman-crypto-payments-for-woocommerce');
+                                }
+                            ?></p>
+                            <?php if ($passwordStored) : ?>
+                                <label>
+                                    <input type="checkbox" value="1"
+                                           name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_password_clear]" />
+                                    <?php esc_html_e('Clear the saved password on save', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
+                                </label>
+                            <?php endif; ?>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endif; ?>
