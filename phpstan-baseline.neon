@@ -7,6 +7,12 @@ parameters:
 			path: nomiddleman-crypto-woocommerce.php
 
 		-
+			message: '#^Negated boolean expression is always false\.$#'
+			identifier: booleanNot.alwaysFalse
+			count: 2
+			path: nomiddleman-crypto-woocommerce.php
+
+		-
 			message: '#^Right side of && is always true\.$#'
 			identifier: booleanAnd.rightAlwaysTrue
 			count: 2
@@ -21,7 +27,7 @@ parameters:
 		-
 			message: '#^Constant NMM_REDUX_SLUG not found\.$#'
 			identifier: constant.notFound
-			count: 1
+			count: 2
 			path: src/NMM_Admin.php
 
 		-
@@ -171,5 +177,5 @@ parameters:
 		-
 			message: '#^Constant DB_NAME not found\.$#'
 			identifier: constant.notFound
-			count: 2
+			count: 3
 			path: src/NMM_Util.php
