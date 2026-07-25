@@ -152,6 +152,44 @@ function t_bech32_encode($hrp, $witnessVersion, $programBytes, $useBech32m) {
 	return $out;
 }
 
+// CashAddr encoder (40-bit polymod, distinct from bech32's 30-bit one), so
+// token-aware vectors can be generated rather than copied. Self-checked below
+// by reproducing the type-0 spec vector from the same hash.
+function t_cashaddr_encode($prefix, $type, $hash) {
+	$charset = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+	$sizeBits = array(20 => 0, 24 => 1, 28 => 2, 32 => 3, 40 => 4, 48 => 5, 56 => 6, 64 => 7);
+	$payload = chr(($type << 3) | $sizeBits[strlen($hash)]) . $hash;
+
+	$data = array(); $acc = 0; $bits = 0;
+	for ($i = 0, $len = strlen($payload); $i < $len; $i++) {
+		$acc = ($acc << 8) | ord($payload[$i]);
+		$bits += 8;
+		while ($bits >= 5) { $bits -= 5; $data[] = ($acc >> $bits) & 31; }
+	}
+	if ($bits > 0) { $data[] = ($acc << (5 - $bits)) & 31; }
+
+	$pre = array();
+	for ($i = 0; $i < strlen($prefix); $i++) { $pre[] = ord($prefix[$i]) & 31; }
+	$pre[] = 0;
+
+	$c = 1;
+	foreach (array_merge($pre, $data, array(0, 0, 0, 0, 0, 0, 0, 0)) as $d) {
+		$c0 = $c >> 35;
+		$c = (($c & 0x07ffffffff) << 5) ^ $d;
+		if ($c0 & 0x01) { $c ^= 0x98f2bc8e61; }
+		if ($c0 & 0x02) { $c ^= 0x79b76d99e2; }
+		if ($c0 & 0x04) { $c ^= 0xf33e5fb3c4; }
+		if ($c0 & 0x08) { $c ^= 0xae2eabe2a8; }
+		if ($c0 & 0x10) { $c ^= 0x1e4f43e470; }
+	}
+	$poly = $c ^ 1;
+
+	$out = '';
+	foreach ($data as $d) { $out .= $charset[$d]; }
+	for ($i = 0; $i < 8; $i++) { $out .= $charset[($poly >> (5 * (7 - $i))) & 31]; }
+	return $prefix . ':' . $out;
+}
+
 // mutate one character (index from the end) within the given charset
 function t_mutate($address, $charset, $fromEnd = 3) {
 	$i = strlen($address) - $fromEnd;
@@ -173,6 +211,12 @@ aok('test encoder: b58check(0x1e, zeros20) matches pinned DOGE vector',
 	t_b58check_encode("\x1e", $zeros20) === 'D596YFweJQuHY1BbjazZYmAbt8jJPbKehC');
 aok('test encoder: bech32(bc, v0, BIP-173 program) matches BIP-173 vector',
 	t_bech32_encode('bc', 0, $bip173Program, false) === 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4');
+
+// hash160 behind the CashAddr spec pair, recovered from the spec vector so the
+// token-aware vectors below are the SAME key in a different address type.
+$cashAddrSpecHash = hex2bin('76a04053bda0a88bda5177b86a15c3b29f559873');
+aok('test encoder: cashaddr(type 0) reproduces the CashAddr spec vector',
+	t_cashaddr_encode('bitcoincash', 0, $cashAddrSpecHash) === 'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a');
 
 // 32-byte x-only key for taproot vectors: the secp256k1 generator's X
 $xonly = hex2bin('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
@@ -244,6 +288,12 @@ $valid = array(
 	array('BCH', 'qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a', 'cashaddr', 'CashAddr without prefix'),
 	array('BCH', \CashAddress\CashAddress::old2new('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'), 'cashaddr', 'library-generated from genesis'),
 	array('BCH', strtoupper('bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a'), 'cashaddr-upper', 'all-upper CashAddr (valid)'),
+	// Token-aware CashAddr (CashTokens upgrade): types 2 and 3 are standard
+	// mainnet destinations and accept plain BCH payments, so a merchant may
+	// legitimately paste one. First is the published spec vector.
+	array('BCH', 'bitcoincash:zr7fzmep8g7h7ymfxy74lgc0v950j3r295z4y4gq0v', 'cashaddr', 'token-aware P2PKH (spec vector)'),
+	array('BCH', t_cashaddr_encode('bitcoincash', 2, $cashAddrSpecHash), 'cashaddr', 'token-aware P2PKH (generated)'),
+	array('BCH', t_cashaddr_encode('bitcoincash', 3, $cashAddrSpecHash), 'cashaddr', 'token-aware P2SH (generated)'),
 
 	// DGB: shares P2PKH version 0x1e with DOGE, S-form P2SH 0x3f, dgb1 segwit
 	array('DGB', 'D596YFweJQuHY1BbjazZYmAbt8jJPbKehC', 'b58', 'zero-hash P2PKH (0x1e)'),
@@ -359,6 +409,17 @@ check('BTC', t_bech32_encode('bc', 1, $xonly, false), false, 'witness v1 with be
 check('BTC', 'bC1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', false, 'mixed-case bech32');
 check('BTC', 'bc1Qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', false, 'mixed-case bech32 (data part)');
 check('BCH', 'bitcoincash:Qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a', false, 'mixed-case CashAddr');
+
+// Token-aware CashAddr boundary: BCH opted in at the CashTokens upgrade, BSV
+// forked before it and never adopted these types, so the same string must be
+// accepted for one coin and refused for the other. Type 4+ is undefined for
+// both - accepting it would let a typo'd version byte through.
+check('BSV', 'bitcoincash:zr7fzmep8g7h7ymfxy74lgc0v950j3r295z4y4gq0v', false, 'token-aware P2PKH rejected for BSV (spec vector)');
+check('BSV', t_cashaddr_encode('bitcoincash', 2, $cashAddrSpecHash), false, 'token-aware P2PKH rejected for BSV');
+check('BSV', t_cashaddr_encode('bitcoincash', 3, $cashAddrSpecHash), false, 'token-aware P2SH rejected for BSV');
+check('BSV', t_cashaddr_encode('bitcoincash', 0, $cashAddrSpecHash), true, 'plain CashAddr still valid for BSV');
+check('BCH', t_cashaddr_encode('bitcoincash', 4, $cashAddrSpecHash), false, 'undefined type 4 (checksum ok)');
+check('BCH', t_cashaddr_encode('bitcoincash', 15, $cashAddrSpecHash), false, 'undefined type 15 (checksum ok)');
 
 // the exact strings the finding demonstrated as wrongly accepted
 check('BTC', 'hello bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', false, "finding: 'hello bc1q...'");

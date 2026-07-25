@@ -324,15 +324,22 @@ function NMM_verify_site_tables() {
     }
 
     global $wpdb;
-    $requiredTables = array(
-        $wpdb->prefix . NMM_HD_TABLE,
-        $wpdb->prefix . NMM_PAYMENT_TABLE,
-        $wpdb->prefix . NMM_CAROUSEL_TABLE,
-        $wpdb->prefix . NMM_SOL_RETRY_TABLE,
+
+    // Each table's schema/version bookkeeping. Recreating a missing table from
+    // its BASE definition while a stale version option still says "current"
+    // would permanently skip the gated verify-then-record migrations that add
+    // later columns/indexes (the base HD table deliberately lacks hd_mode, for
+    // example), so clear the bookkeeping for any missing table first and let
+    // the shipped migrations rebuild it to the current schema.
+    $schemaOptions = array(
+        $wpdb->prefix . NMM_HD_TABLE        => array('nmm_hd_table_version'),
+        $wpdb->prefix . NMM_PAYMENT_TABLE   => array('nmm_payment_index_version'),
+        $wpdb->prefix . NMM_CAROUSEL_TABLE  => array(),
+        $wpdb->prefix . NMM_SOL_RETRY_TABLE => array('nmm_sol_retry_schema', 'nmm_sol_retry_table_created'),
     );
 
     $missing = array();
-    foreach ($requiredTables as $requiredTable) {
+    foreach (array_keys($schemaOptions) as $requiredTable) {
         if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $requiredTable)) !== $requiredTable) {
             $missing[] = $requiredTable;
         }
@@ -341,17 +348,19 @@ function NMM_verify_site_tables() {
     if (!empty($missing)) {
         NMM_Util::log(__FILE__, __LINE__, 'Plugin tables missing for this site (' . implode(', ', $missing) . '); recreating them. This site likely never ran activation (e.g. created after a network activation).', 'warning');
 
-        // The retry table's creation is gated by its schema-version option, so
-        // a missing table with a still-current option would never be rebuilt.
-        // Clear the option (and its pre-versioned flag) so the shipped
-        // create-then-verify path in NMM_maybe_create_sol_retry_table re-runs
-        // and re-records the version only once columns and indexes check out.
-        if (in_array($wpdb->prefix . NMM_SOL_RETRY_TABLE, $missing, true)) {
-            delete_option('nmm_sol_retry_schema');
-            delete_option('nmm_sol_retry_table_created');
+        foreach ($missing as $missingTable) {
+            foreach ($schemaOptions[$missingTable] as $schemaOption) {
+                delete_option($schemaOption);
+            }
         }
 
         NMM_activate_site();
+
+        // The HD migrations normally run from NMM_init_gateways on
+        // plugins_loaded, which already fired this request, so run them now:
+        // a recreated base HD table must gain hd_mode (and the composite
+        // indexes that reference it) immediately, not on the next load.
+        NMM_update_hd_table();
 
         foreach ($missing as $missingTable) {
             if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $missingTable)) !== $missingTable) {

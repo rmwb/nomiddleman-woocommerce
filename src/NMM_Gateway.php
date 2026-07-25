@@ -175,8 +175,6 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $selectedCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
         // phpcs:enable
         WC()->session->set('chosen_crypto_id', $selectedCryptoId);
-        $order->update_meta_data('nmm_chosen_crypto_id', $selectedCryptoId);
-        $order->save();
 
         // Allocate the payment address, monitoring row and on-hold transition
         // NOW, not on the order-received render: a customer who closed the
@@ -185,7 +183,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // path, since the cron only sweeps rows that exist. Doing it here also
         // means bots and link-prefetchers hitting the order-received URL no
         // longer trigger side-effectful allocation.
-        $initResult = $this->initialize_order_payment($order_id);
+        //
+        // The chosen coin is passed INTO the initializer and committed to
+        // order meta under the init lock, not written here: a duplicate
+        // submission carrying a different coin could otherwise overwrite the
+        // meta after the lock holder had already read it, leaving the order
+        // labelled with one coin while the allocated address and amount
+        // belong to another. Under the lock, first commit wins.
+        $initResult = $this->initialize_order_payment($order_id, $selectedCryptoId);
 
         if ($initResult['outcome'] === 'failed') {
             // The order was already marked failed under the init lock. Surface
@@ -300,8 +305,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
      *  - 'missing':     the order does not exist (deleted mid-flight)
      *  - 'failed':      initialization failed; the order was marked wc-failed
      *                   under the lock; 'message' is the customer-facing error
+     *
+     * $requestedCryptoId (checkout only) is the coin the submitting request
+     * chose; it is committed to order meta UNDER the lock so a duplicate
+     * submission with a different coin can never relabel an order whose
+     * address another request is allocating - first commit wins, and an
+     * 'already' outcome deliberately leaves the winner's coin in place.
      */
-    public function initialize_order_payment($order_id) {
+    public function initialize_order_payment($order_id, $requestedCryptoId = null) {
         $order = wc_get_order($order_id);
         if (!$order) {
             return array('outcome' => 'missing', 'message' => '');
@@ -375,12 +386,22 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
             $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
-            $chosenCryptoId = $order->get_meta('nmm_chosen_crypto_id');
-            if (empty($chosenCryptoId) && $this->session_usable()) {
-                // Legacy fallback only: orders written since the meta was
-                // introduced always carry it, and this initializer can now run
-                // without a browsing session (order-pay, future admin tools).
-                $chosenCryptoId = WC()->session->get('chosen_crypto_id');
+            if ($requestedCryptoId !== null && array_key_exists($requestedCryptoId, $this->cryptos)) {
+                // Checkout path: persist the submitting request's coin here,
+                // under the lock, so it can never be overwritten between
+                // another worker reading it and committing an address for it.
+                $order->update_meta_data('nmm_chosen_crypto_id', $requestedCryptoId);
+                $order->save();
+                $chosenCryptoId = $requestedCryptoId;
+            }
+            else {
+                $chosenCryptoId = $order->get_meta('nmm_chosen_crypto_id');
+                if (empty($chosenCryptoId) && $this->session_usable()) {
+                    // Legacy fallback only: orders written since the meta was
+                    // introduced always carry it, and this initializer can now
+                    // run without a browsing session (order-pay, admin tools).
+                    $chosenCryptoId = WC()->session->get('chosen_crypto_id');
+                }
             }
 
             if (empty($chosenCryptoId) || !array_key_exists($chosenCryptoId, $this->cryptos)) {

@@ -114,13 +114,17 @@ class NMM_Address {
 
 			case 'BCH':
 				// Both forms are the same coin: legacy base58check and
-				// CashAddr (with or without 'bitcoincash:').
+				// CashAddr (with or without 'bitcoincash:'). Token-aware
+				// CashAddr types (CashTokens upgrade) are valid BCH
+				// destinations too, including for plain BCH payments.
 				return self::is_base58check($address, array("\x00", "\x05"))
-					|| self::is_cashaddr($address);
+					|| self::is_cashaddr($address, true);
 
 			case 'BSV':
 				// BSV kept BTC's version bytes; some wallets still emit the
-				// CashAddr form it inherited from the BCH split.
+				// CashAddr form it inherited from the BCH split. Token-aware
+				// types stay REJECTED here: BSV forked before CashTokens and
+				// never adopted token-aware addresses.
 				return self::is_base58check($address, array("\x00", "\x05"))
 					|| self::is_cashaddr($address);
 
@@ -516,7 +520,7 @@ class NMM_Address {
 	 * addresses - invalid per spec - would slip through. The polymod below
 	 * matches the one in src/vendor/CashAddress.php.
 	 */
-	private static function is_cashaddr($address) {
+	private static function is_cashaddr($address, $acceptTokenAware = false) {
 		// all-lower or all-upper, never mixed (same rule as bech32)
 		$lower = strtolower($address);
 		if ($address !== $lower && $address !== strtoupper($address)) {
@@ -574,10 +578,12 @@ class NMM_Address {
 			return false;
 		}
 
-		// type bits: 0 = P2PKH, 1 = P2SH; anything else is not a payment
-		// address the plugin should accept
+		// type bits: 0 = P2PKH, 1 = P2SH; 2 and 3 are their token-aware
+		// counterparts standardized by the CashTokens upgrade - valid BCH
+		// payment destinations, so BCH opts in via $acceptTokenAware. BSV
+		// forked before CashTokens and never adopted them, so it does not.
 		$type = ($versionByte >> 3) & 0x0f;
-		if ($type > 1) {
+		if ($type > ($acceptTokenAware ? 3 : 1)) {
 			return false;
 		}
 

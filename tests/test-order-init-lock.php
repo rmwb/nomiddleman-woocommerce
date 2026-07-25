@@ -144,6 +144,40 @@ if (defined('NMM_PAYMENT_TABLE')) {
 	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
 }
 
+// While another worker holds the lock mid-initialization, a duplicate checkout
+// submission naming a DIFFERENT coin must bail 'busy' and write no coin meta at
+// all. Committing the coin before taking the lock (as process_payment used to)
+// let B relabel an order whose address, amount and monitoring row A was already
+// allocating for A's coin - the customer then gets instructions and a QR for a
+// currency the order was never priced in. Must run while connection 2 is still
+// open (it is closed just below), since that is what makes the lock contend.
+if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
+	$gwRace = new NMM_Gateway();
+	$contended = wc_create_order();
+	$contended->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+	$contended->save();
+	$contendedId = $contended->get_id();
+
+	$GLOBALS['wpdb'] = $wpdb2;                                   // stand-in worker A
+	$holderLock = NMM_Util::acquire_order_init_lock($contendedId, 0);
+	$GLOBALS['wpdb'] = $main;
+
+	$busyResult = $gwRace->initialize_order_payment($contendedId, 'ETH');
+	$afterBusy = wc_get_order($contendedId);
+	$afterBusy->read_meta_data(true);
+	lok('contended duplicate bails busy', $holderLock === '1' && isset($busyResult['outcome']) && $busyResult['outcome'] === 'busy',
+		'lock=' . var_export($holderLock, true) . ' outcome=' . (isset($busyResult['outcome']) ? $busyResult['outcome'] : '?'));
+	lok('contended duplicate wrote no coin meta', $afterBusy->get_meta('nmm_chosen_crypto_id') === 'BTC',
+		'got=' . $afterBusy->get_meta('nmm_chosen_crypto_id'));
+	lok('contended duplicate allocated no address', empty($afterBusy->get_meta('wallet_address')),
+		'got=' . var_export($afterBusy->get_meta('wallet_address'), true));
+
+	$GLOBALS['wpdb'] = $wpdb2;
+	if ($holderLock === '1') { NMM_Util::release_order_init_lock($contendedId); }
+	$GLOBALS['wpdb'] = $main;
+	$contended->delete(true);
+}
+
 $wpdb2->close();
 
 // Post-lock recheck must see a wallet_address committed by another worker after
@@ -167,6 +201,33 @@ if (function_exists('wc_create_order')) {
 	lok('forced re-read sees the committed address', $staleOrder->get_meta('wallet_address') === 'ADDR_FROM_HOLDER', 'got=' . $staleOrder->get_meta('wallet_address'));
 
 	$holder->delete(true);
+}
+
+// The chosen coin must be committed UNDER the init lock, not before it. Two
+// submissions of the same order carrying different coins used to race: B could
+// overwrite nmm_chosen_crypto_id after A had already read it, leaving the order
+// labelled with B's coin while the address, amount and monitoring row were all
+// allocated for A's. Emails and the QR then advertise the wrong currency.
+if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
+	$gw = new NMM_Gateway();
+
+	// (1) An order already initialized: a late duplicate submission naming a
+	// different coin must return 'already' and leave the winner's coin alone.
+	$won = wc_create_order();
+	$won->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+	$won->update_meta_data('wallet_address', 'ADDR_ALREADY_COMMITTED');
+	$won->save();
+	$wonId = $won->get_id();
+
+	$lateResult = $gw->initialize_order_payment($wonId, 'ETH');
+	$reread = wc_get_order($wonId);
+	$reread->read_meta_data(true);
+	lok('late duplicate with another coin: outcome already', isset($lateResult['outcome']) && $lateResult['outcome'] === 'already',
+		'got=' . (isset($lateResult['outcome']) ? $lateResult['outcome'] : '?'));
+	lok('late duplicate does not relabel the coin', $reread->get_meta('nmm_chosen_crypto_id') === 'BTC',
+		'got=' . $reread->get_meta('nmm_chosen_crypto_id'));
+	$won->delete(true);
+
 }
 
 // A deleted (or never-existing) order must not fatal the thank-you page:
