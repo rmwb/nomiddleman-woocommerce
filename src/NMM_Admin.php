@@ -72,7 +72,7 @@ class NMM_Admin {
         ?>
         <div class="notice notice-error">
             <p><strong><?php esc_html_e('Nomiddleman Crypto Payments: please re-check these stored wallet addresses.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></p>
-            <p><?php esc_html_e('Wallet-address validation now verifies checksums, and the following saved addresses fail. A mistyped address would still collect customer payments - into an address nobody controls - so the plugin will NOT hand any of them to a customer: checkout for the affected cryptocurrency is unavailable until you correct the address. Your settings have not been changed. Please check each address below against your wallet and re-save it.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+            <p><?php esc_html_e('Wallet-address validation now verifies checksums, and the following saved addresses fail. A mistyped address would still collect customer payments - into an address nobody controls - so the plugin will NOT hand any of them to a customer: a failing address is skipped and the next valid address for that cryptocurrency is used instead. Checkout stops only for a cryptocurrency that has no valid address left at all. Your settings have not been changed. Please check each address below against your wallet and re-save it.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
             <ul style="list-style: disc; padding-left: 2em;">
                 <?php foreach ($invalid as $entry) :
                     if (!is_array($entry) || !isset($entry['crypto'], $entry['address'])) {

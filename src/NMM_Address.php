@@ -23,6 +23,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  *    output and the verification explorers the plugin queries index them.
  *  - CashAddr for BCH (and BSV wallets that emit it), with or without the
  *    'bitcoincash:' prefix; legacy base58check stays accepted too.
+ *  - bech32 / bech32m WITHOUT witness-program semantics, for encodings that
+ *    borrow the string format but are not segwit: Zcash Sapling 'zs1...'
+ *    (bech32) and Unified 'u1...' (bech32m). See bech32_payload().
  *
  * Coins whose checksum is NOT double-SHA256 base58 (Groestlcoin uses Groestl
  * hashing, Decred uses BLAKE256, XRP a different base58 alphabet, XMR Keccak,
@@ -136,13 +139,22 @@ class NMM_Address {
 				return self::is_base58check($address, array("\x00", "\x05"));
 
 			case 'ZEC':
-				// Transparent addresses use two-byte version prefixes
-				// (t1 = 0x1CB8 P2PKH, t3 = 0x1CBD P2SH) - still plain
-				// base58check. Shielded sprout z-addresses have no
-				// double-SHA256 checksum we can verify; anchored pattern
-				// only (sapling zs1/unified u1 were never accepted before
-				// and stay out of scope).
+				// Four mainnet receiving formats, every one of which a merchant
+				// may legitimately paste today:
+				//  - transparent: two-byte version prefixes (t1 = 0x1CB8 P2PKH,
+				//    t3 = 0x1CBD P2SH) - plain base58check, unchanged.
+				//  - Sapling 'zs1...': bech32 (see is_sapling). Standard for
+				//    years; rejecting it was a P1.
+				//  - Unified 'u1...': bech32m (see is_unified). Modern Zcash
+				//    RPCs derive these BY DEFAULT (z_getaddressforaccount), so
+				//    a merchant on current zcashd has nothing else to paste.
+				//  - Sprout 'z...': no double-SHA256 checksum we can verify;
+				//    anchored pattern only, kept exactly as before.
+				// Testnet forms ('ztestsapling1...', 'utest1...') carry a valid
+				// checksum but a different HRP, so they fail on the HRP.
 				return self::is_base58check($address, array("\x1c\xb8", "\x1c\xbd"))
+					|| self::is_sapling($address)
+					|| self::is_unified($address)
 					|| preg_match('/^z[a-zA-Z0-9]{90,96}$/', $address) === 1;
 
 			case 'BLK':
@@ -255,7 +267,15 @@ class NMM_Address {
 				return preg_match('/^2[0-9a-zA-Z]{91,99}$/', $address) === 1;
 
 			case 'LSK':
-				return preg_match('/^[0-9a-zA-Z]{17,22}L$/', $address) === 1;
+				// CHAIN MIGRATION: Lisk left its own L1 and relaunched as an
+				// Ethereum L2, so LSK is now an ERC-20-style token and every
+				// current wallet hands the merchant a standard 0x + 20-byte
+				// address. The retired legacy '...L' form stays accepted -
+				// merchants may still have one stored and we must not refuse a
+				// save over it. Mixed case passes on the 0x form: EIP-55 is
+				// deliberately not implemented anywhere in this validator.
+				return preg_match('/^[0-9a-zA-Z]{17,22}L$/', $address) === 1
+					|| self::is_evm($address);
 
 			case 'XEM':
 				return preg_match('/^N[0-9a-zA-Z]{35,45}$/', $address) === 1;
@@ -264,7 +284,14 @@ class NMM_Address {
 				return preg_match('/^3[0-9a-zA-Z]{31,35}$/', $address) === 1;
 
 			case 'MIOTA':
-				return preg_match('/^[0-9a-zA-Z]{85,95}$/', $address) === 1;
+				// CHAIN MIGRATION: IOTA mainnet moved off the pre-Chrysalis
+				// trytes addresses to 32-byte 0x-prefixed ones (64 hex chars).
+				// Note this is NOT is_evm(): the payload is 32 bytes, not the
+				// 20-byte EVM hash160, so it needs its own length. The legacy
+				// 85-95 char trytes form stays accepted for merchants who still
+				// have one stored.
+				return preg_match('/^[0-9a-zA-Z]{85,95}$/', $address) === 1
+					|| preg_match('/^0x[0-9a-fA-F]{64}$/', $address) === 1;
 
 			case 'APL':
 				return preg_match('/^APL-[a-zA-Z0-9-]{8,42}$/', $address) === 1;
@@ -437,6 +464,74 @@ class NMM_Address {
 			&& $decoded['hrp'] === $hrp
 			&& $decoded['polymod'] === 1
 			&& count($decoded['data']) >= 1;
+	}
+
+	/**
+	 * Lower-level bech32/bech32m check for encodings that use the SAME string
+	 * format as segwit but are NOT witness programs. Verifies the charset,
+	 * the case rule, the hrp and the checksum constant ($constant is 1 for
+	 * bech32, BECH32M_CONST for bech32m), then regroups the 5-bit data into
+	 * bytes and returns them; null on any failure.
+	 *
+	 * This exists so Zcash Sapling/Unified addresses can be checksum-verified
+	 * without going anywhere near is_segwit(): that path reads data[0] as a
+	 * witness version and enforces 2-40 byte programs, which would reject
+	 * every one of them. The segwit rules for BTC/LTC/DGB/... are untouched.
+	 */
+	private static function bech32_payload($address, $hrp, $constant, $maxLen) {
+		$decoded = self::bech32_decode($address, $maxLen);
+
+		if ($decoded === null || $decoded['hrp'] !== $hrp || $decoded['polymod'] !== $constant) {
+			return null;
+		}
+
+		return self::convert_bits($decoded['data'], 5, 8, false);
+	}
+
+	/**
+	 * Zcash Sapling shielded payment address ('zs1...'): bech32 - NOT bech32m,
+	 * NOT a witness program - with hrp 'zs' over an 11-byte diversifier plus a
+	 * 32-byte pk_d, i.e. exactly 43 bytes, which encodes to exactly 78
+	 * characters. Both the byte count and the resulting length are pinned by
+	 * the published all-zero payment address in
+	 * librustzcash/components/zcash_address/src/encoding.rs, which the test
+	 * suite regenerates from 43 zero bytes to prove the length is right.
+	 */
+	private static function is_sapling($address) {
+		$payload = self::bech32_payload($address, 'zs', 1, 90);
+
+		return $payload !== null && count($payload) === 43;
+	}
+
+	/**
+	 * Zcash Unified Address ('u1...', ZIP-316): bech32m with hrp 'u'.
+	 *
+	 * The payload is an F4Jumbled bundle of receivers plus 16 bytes of
+	 * padding, so its size depends entirely on which receivers the wallet
+	 * bundled - 61 bytes (106 chars) for a single shielded receiver, 128 bytes
+	 * (213 chars) for orchard + sapling + P2PKH - and ZIP-316 explicitly
+	 * requires implementations to tolerate receiver typecodes they do not
+	 * know, so tomorrow's UAs can be longer again. Pinning one length would
+	 * therefore reject valid merchant addresses, which is exactly the P1 this
+	 * fixes, so the range below is deliberately permissive: it only rules out
+	 * payloads too small to hold any receiver bundle at all, and validate()'s
+	 * 256-character cap bounds the top end (a 256-char UA is ~155 bytes).
+	 *
+	 * F4Jumble is NOT undone here. It is a length-preserving permutation with
+	 * no error detection of its own, so unjumbling would add no safety: the
+	 * bech32m checksum is what kills every typo and truncation, and that is
+	 * what fund safety needs.
+	 */
+	private static function is_unified($address) {
+		$payload = self::bech32_payload($address, 'u', self::BECH32M_CONST, 256);
+
+		if ($payload === null) {
+			return false;
+		}
+
+		$len = count($payload);
+
+		return $len >= 48 && $len <= 200;
 	}
 
 	/**

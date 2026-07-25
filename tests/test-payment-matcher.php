@@ -279,9 +279,10 @@ pmok('recycled: partial alone does not pay',       pm_rec($wpdb, $pt, $oAlice) =
 
 // Her order expires and is cancelled. The expiry pass stamps the address
 // boundary at that moment - that stamping is asserted end-to-end in
-// test-autopay-cancel.php, which has the coverage machinery that lets a real
-// cancellation proceed; here we set the same boundary directly so this suite
-// stays a focused matcher test with no network or coverage setup.
+// test-autopay-cancel.php ("cancellation stamps the address boundary"), which
+// has the coverage machinery a real cancellation needs; here we set the same
+// boundary directly so this stays a focused matcher test with no network or
+// coverage setup.
 $rp->claim_for_cancellation($oAlice, $amt);
 update_option('nmmpro_BTC_cancelled_at_for_pm_recyc', $pmCancelled, false);
 pmok('recycled: expired order cancelled',          pm_rec($wpdb, $pt, $oAlice) === 'cancelled');
@@ -295,6 +296,17 @@ NMM_Payment::process_address_transactions($btc, 'pm_recyc', array(
 pmok('recycled: Alice funds do NOT complete Bob',  pm_rec($wpdb, $pt, $oBob) === 'unpaid');
 pmok('  Bob order not completed',                  !pm_paidlike($oBob));
 pmok('  Alice pre-cancellation tx not consumed',   !$stg->tx_already_consumed('BTC', 'pm_recyc', 'PMTX_ALICE_1'));
+
+// The boundary is scoped PER ORDER. An order that already existed when the
+// cancellation happened keeps its own earlier payments: applying the cutoff
+// address-wide would strand a paying customer's funds because someone else's
+// order was cancelled. Carol ordered before the boundary and paid before it.
+$oCarol = pm_mkorder();
+$ins($oCarol, 'pm_recyc', $pmNow - (4 * 3600));                    // ordered 4h ago
+NMM_Payment::process_address_transactions($btc, 'pm_recyc', array(
+	new NMM_Transaction($units, 999, $pmNow - (3 * 3600), 'PMTX_CAROL'), // paid 3h ago, pre-boundary
+), 6 * 3600);
+pmok('  order predating the boundary still pays', pm_rec($wpdb, $pt, $oCarol) === 'paid');
 
 // Bob paying properly still works: his own transaction post-dates the boundary.
 NMM_Payment::process_address_transactions($btc, 'pm_recyc', array(

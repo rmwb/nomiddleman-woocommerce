@@ -152,6 +152,47 @@ function t_bech32_encode($hrp, $witnessVersion, $programBytes, $useBech32m) {
 	return $out;
 }
 
+// Generic bech32/bech32m encoder with NO witness-version byte, for the
+// encodings that borrow the bech32 string format without being segwit
+// (Zcash Sapling 'zs' = bech32, Zcash Unified 'u' = bech32m). t_bech32_encode
+// above always prepends a witness version and so cannot produce these.
+// Self-checked below against the published all-zero Sapling address.
+function t_bech32_raw_encode($hrp, $payloadBytes, $useBech32m) {
+	$charset = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+	// 8-bit -> 5-bit with padding
+	$data = array(); $acc = 0; $bits = 0;
+	for ($i = 0, $len = strlen($payloadBytes); $i < $len; $i++) {
+		$acc = ($acc << 8) | ord($payloadBytes[$i]);
+		$bits += 8;
+		while ($bits >= 5) {
+			$bits -= 5;
+			$data[] = ($acc >> $bits) & 31;
+		}
+	}
+	if ($bits > 0) {
+		$data[] = ($acc << (5 - $bits)) & 31;
+	}
+
+	$hrpExp = array();
+	for ($i = 0; $i < strlen($hrp); $i++) { $hrpExp[] = ord($hrp[$i]) >> 5; }
+	$hrpExp[] = 0;
+	for ($i = 0; $i < strlen($hrp); $i++) { $hrpExp[] = ord($hrp[$i]) & 31; }
+
+	$const = $useBech32m ? 0x2bc830a3 : 1;
+	$poly = t_bech32_polymod(array_merge($hrpExp, $data, array(0, 0, 0, 0, 0, 0))) ^ $const;
+	$checksum = array();
+	for ($i = 0; $i < 6; $i++) {
+		$checksum[] = ($poly >> (5 * (5 - $i))) & 31;
+	}
+
+	$out = $hrp . '1';
+	foreach (array_merge($data, $checksum) as $d) {
+		$out .= $charset[$d];
+	}
+	return $out;
+}
+
 // CashAddr encoder (40-bit polymod, distinct from bech32's 30-bit one), so
 // token-aware vectors can be generated rather than copied. Self-checked below
 // by reproducing the type-0 spec vector from the same hash.
@@ -220,6 +261,18 @@ aok('test encoder: cashaddr(type 0) reproduces the CashAddr spec vector',
 
 // 32-byte x-only key for taproot vectors: the secp256k1 generator's X
 $xonly = hex2bin('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
+
+// Zcash Sapling self-check. A Sapling payment address is an 11-byte
+// diversifier + 32-byte pk_d = 43 bytes, bech32-encoded with hrp 'zs'. The
+// all-zero one below is a published test vector from librustzcash
+// (components/zcash_address/src/encoding.rs), so regenerating it from 43 zero
+// bytes proves the raw encoder AND pins the 78-character encoded length that
+// NMM_Address::is_sapling depends on.
+$saplingZeroVector = 'zs1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpq6d8g';
+aok('test encoder: bech32(zs, 43 zero bytes) matches published all-zero Sapling address',
+	t_bech32_raw_encode('zs', str_repeat("\x00", 43), false) === $saplingZeroVector);
+aok('Sapling encoded length is 78 chars (43-byte payload)',
+	strlen($saplingZeroVector) === 78, strlen($saplingZeroVector));
 
 // ---------------------------------------------------------------------
 // registry coverage: every non-token coin must have a validation rule
@@ -339,6 +392,40 @@ $valid = array(
 	array('XTZ', t_b58check_encode("\x06\xa1\x9f", $zeros20), 'pattern', 'generated tz1 (Ed25519)'),
 	array('XTZ', t_b58check_encode("\x06\xa1\xa6", $zeros20), 'pattern', 'generated tz4 (BLS)'),
 
+	// ZEC: all four mainnet receiving formats. Sapling 'zs1...' and Unified
+	// 'u1...' were REJECTED before - a merchant on a modern Zcash node, where
+	// z_getaddressforaccount hands out a Unified Address by default, had
+	// literally nothing it would accept.
+	//
+	// Sources for the two real-world vectors (both re-verified here by their
+	// own bech32/bech32m checksums, which is what makes them trustworthy):
+	//   zs1qqq... / u1qpatys4... - librustzcash test vectors,
+	//       components/zcash_address/src/encoding.rs
+	//   u1pg2aaph...             - librustzcash test vector,
+	//       components/zcash_address/src/kind/unified/address.rs
+	//       (orchard + sapling + P2PKH, 213 chars - the long end of the range)
+	array('ZEC', t_b58check_encode("\x1c\xb8", $zeros20), 'b58', 'generated transparent t1 (0x1CB8)'),
+	array('ZEC', t_b58check_encode("\x1c\xbd", $zeros20), 'b58', 'generated transparent t3 (0x1CBD)'),
+	array('ZEC', $saplingZeroVector, 'bech32', 'Sapling all-zero payment address (librustzcash vector)'),
+	array('ZEC', t_bech32_raw_encode('zs', hex2bin('0102030405060708090a0b') . $xonly, false), 'bech32', 'generated Sapling (11-byte diversifier + 32-byte pk_d)'),
+	array('ZEC', 'u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl', 'bech32', 'Unified Address, single receiver (106 chars)'),
+	array('ZEC', 'u1pg2aaph7jp8rpf6yhsza25722sg5fcn3vaca6ze27hqjw7jvvhhuxkpcg0ge9xh6drsgdkda8qjq5chpehkcpxf87rnjryjqwymdheptpvnljqqrjqzjwkc2ma6hcq666kgwfytxwac8eyex6ndgr6ezte66706e3vaqrd25dzvzkc69kw0jgywtd0cmq52q5lkw6uh7hyvzjse8ksx', 'bech32', 'Unified Address, orchard+sapling+P2PKH (213 chars)'),
+
+	// LSK: Lisk relaunched as an Ethereum L2, so the current form is a plain
+	// 0x address - REJECTED before this fix. Vector is the LSK token contract
+	// on Lisk mainnet (docs.lisk.com "Contracts"); mixed case is deliberate,
+	// EIP-55 is not implemented so it must pass as-is. The legacy '...L' form
+	// is the well-known Lisk genesis account and stays accepted.
+	array('LSK', '0xac485391EB2d7D88253a7F1eF18C37f4242D1A24', 'hex', 'EVM form (Lisk L2, mixed case)'),
+	array('LSK', '16313739661670634666L', 'pattern', 'legacy L1 address'),
+
+	// MIOTA: IOTA mainnet moved to 32-byte 0x addresses (64 hex chars) - note
+	// this is NOT the 40-hex EVM form. The 0x vector is the one cited in the
+	// fund-safety finding; the legacy vector is the documented 90-tryte
+	// Chrysalis migration address (IOTA docs, token migration guide).
+	array('MIOTA', '0x627124ede117d3d695ce34f17a1b4f5a5b4793e71d9ac434963ab2eaaf7fee46', 'pattern', '32-byte 0x address (64 hex)'),
+	array('MIOTA', 'TRANSFERCDJWLVPAIXRWNAPXV9WYKVUZWWKXVBE9JBABJ9D9C9F9OEGADYO9CWDAGZHBRWIXLXG9MAJV9RJEOLXSJW', 'pattern', 'legacy 90-tryte address'),
+
 	// ADA: Shelley bech32 (CIP-19 test vector; the old pattern wrongly
 	// rejected every Shelley address)
 	array('ADA', 'addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x', 'bech32', 'CIP-19 Shelley base address'),
@@ -414,6 +501,55 @@ check('BTC', t_bech32_encode('ltc', 0, $bip173Program, false), false, 'ltc1 reje
 check('BLK', t_bech32_encode('bc', 0, $bip173Program, false), false, 'bc1 rejected for BLK (checksum ok, wrong hrp)');
 check('BTC', t_bech32_encode('blk', 0, $bip173Program, false), false, 'blk1 rejected for BTC (checksum ok, wrong hrp)');
 check('BLK', t_bech32_encode('tblk', 0, $bip173Program, false), false, 'testnet hrp tblk (checksum ok)');
+
+// ---------------------------------------------------------------------
+// ZEC shielded formats: Sapling (bech32, hrp 'zs') and Unified (bech32m,
+// hrp 'u'). Both are checksum-verified WITHOUT witness-program semantics -
+// running them through the segwit rules would reject every one of them on
+// program length, which is the bug class this section pins.
+// ---------------------------------------------------------------------
+
+// corrupted checksum: same length, same charset, one character changed
+check('ZEC', t_mutate($saplingZeroVector, $B32), false, 'Sapling with corrupted checksum');
+check('ZEC', t_mutate($saplingZeroVector, $B32, 20), false, 'Sapling with corrupted payload');
+
+// testnet: checksum is VALID, only the hrp differs - so these must fail on
+// the hrp, exactly like tb1/tltc do for BTC/LTC
+check('ZEC', t_bech32_raw_encode('ztestsapling', str_repeat("\x00", 43), false), false, 'testnet Sapling hrp (checksum ok)');
+check('ZEC', t_bech32_raw_encode('utest', str_repeat("\x00", 61), true), false, 'testnet Unified hrp (checksum ok)');
+
+// variant discipline: Sapling is bech32, Unified is bech32m; swapping the
+// constant must fail even though the string is otherwise well formed
+check('ZEC', t_bech32_raw_encode('zs', str_repeat("\x00", 43), true), false, 'Sapling encoded with bech32m constant');
+check('ZEC', t_bech32_raw_encode('u', str_repeat("\x00", 61), false), false, 'Unified encoded with bech32 constant');
+
+// wrong payload size for the hrp
+check('ZEC', t_bech32_raw_encode('zs', str_repeat("\x00", 42), false), false, 'Sapling with 42-byte payload');
+check('ZEC', t_bech32_raw_encode('zs', str_repeat("\x00", 44), false), false, 'Sapling with 44-byte payload');
+check('ZEC', t_bech32_raw_encode('u', str_repeat("\x00", 8), true), false, 'Unified payload far too small');
+
+// The Sapling example printed in the Zcash docs (zcash.readthedocs.io,
+// "Addresses and Value Pools in Zcash") is mis-transcribed: it is 77
+// characters, not the 78 a 43-byte payload produces, and its bech32 checksum
+// does not verify. Pinned here so nobody "fixes" the validator to accept it.
+check('ZEC', 'zs1z7rejlpsa98s2rrrfkwmaxu53e4ue0ulcrw0h4x5g8jl04tak0d3mm47vdtahatqrlkngh9sly', false, 'mis-transcribed 77-char docs example');
+
+// Sprout acceptance is unchanged by the Sapling/Unified work
+check('ZEC', 'zcU1Cd6zYyZCd2VJF8yKgmzjxdiiU1rgTTjEwoN1CGUWCziPkUTXUjXmX7TMqdMNsTfuiGN1jQoVN4kGxUR4sAPN4XZ7pxb', true, 'legacy Sprout z-address (docs example)');
+
+// ---------------------------------------------------------------------
+// LSK / MIOTA post-migration forms
+// ---------------------------------------------------------------------
+
+check('LSK', '0xac485391EB2d7D88253a7F1eF18C37f4242D1A2', false, 'EVM form one hex short');
+check('LSK', '0xac485391EB2d7D88253a7F1eF18C37f4242D1A244', false, 'EVM form one hex long');
+check('LSK', '0xac485391EB2d7D88253a7F1eF18C37f4242D1A2Z', false, 'EVM form with non-hex char');
+check('LSK', '16313739661670634666', false, 'legacy form without the L suffix');
+
+check('MIOTA', substr('0x627124ede117d3d695ce34f17a1b4f5a5b4793e71d9ac434963ab2eaaf7fee46', 0, -1), false, 'truncated 0x address (63 hex)');
+check('MIOTA', '0x627124ede117d3d695ce34f17a1b4f5a5b4793e71d9ac434963ab2eaaf7fee4600', false, '0x address two hex long');
+// a 20-byte EVM address is NOT a valid IOTA address - the payload is 32 bytes
+check('MIOTA', '0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe', false, '20-byte EVM form rejected (needs 32 bytes)');
 
 // ---------------------------------------------------------------------
 // bech32 vs bech32m discipline (BIP-350) and case rules

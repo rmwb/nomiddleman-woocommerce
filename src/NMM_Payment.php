@@ -668,13 +668,7 @@ class NMM_Payment {
 				continue;
 			}
 
-			if ($txTimeStamp <= self::address_cancelled_at($cryptoId, $address)) {
-				// Predates the last cancellation on this address, so it was sent
-				// towards an order that no longer exists - never towards whoever
-				// holds the address now. See address_cancelled_at().
-				NMM_Util::log(__FILE__, __LINE__, 'Transaction ' . $txHash . ' predates the last cancellation on ' . $cryptoId . ' ' . $address . '; not matching it against a later order.');
-				continue;
-			}
+			$addressCancelledAt = self::address_cancelled_at($cryptoId, $address);
 
 			$paymentRecords = $paymentRepo->get_unpaid_for_address($cryptoId, $address);
 
@@ -689,6 +683,16 @@ class NMM_Payment {
 				// older than the order, less a grace for block-timestamp clock skew.
 				$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 				if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
+					continue;
+				}
+
+				// A transaction sent before this address's last cancellation was
+				// sent towards the order that was cancelled, so it cannot pay an
+				// order created afterwards on the recycled address. Scoped per
+				// order (see tx_barred_by_cancellation) so an order that already
+				// existed keeps its own earlier payments.
+				if (self::tx_barred_by_cancellation($txTimeStamp, $orderedAt, $addressCancelledAt)) {
+					NMM_Util::log(__FILE__, __LINE__, 'Transaction ' . $txHash . ' predates the cancellation on ' . $cryptoId . ' ' . $address . ' that preceded order ' . $record['order_id'] . '; not matching it against that order.', 'warning');
 					continue;
 				}
 
@@ -903,12 +907,13 @@ class NMM_Payment {
 			if (($now - $txTimeStamp) > $transactionLifetime) {
 				continue;
 			}
-			if ($txTimeStamp <= $cancelledAt) {
-				// Sent before this address's last cancellation, so it belongs to
-				// the cancelled order - it can neither pay nor be pooled into a
-				// later one. See address_cancelled_at(); this is what stops one
-				// customer's partials from completing the next customer's order
-				// on a recycled address.
+			if (self::tx_barred_by_cancellation($txTimeStamp, $orderedAt, $cancelledAt)) {
+				// Sent before the cancellation that preceded THIS order, so it
+				// belongs to the cancelled order - it can neither pay nor be
+				// pooled into this one. This is what stops one customer's
+				// partials from completing the next customer's order on a
+				// recycled address, while leaving an order that predates the
+				// cancellation entitled to its own earlier payments.
 				continue;
 			}
 			if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
@@ -985,11 +990,36 @@ class NMM_Payment {
 	}
 
 	/**
+	 * Whether $txTimeStamp is on the wrong side of the cancellation boundary
+	 * FOR THIS ORDER. The boundary is deliberately scoped per order, not
+	 * applied address-wide: an order that already existed when the cancellation
+	 * happened is entitled to its own earlier payments, and rejecting them
+	 * would strand real money. Only an order created AFTER a cancellation is
+	 * barred from the transactions that preceded it.
+	 *
+	 * A row with no ordered_at (legacy, pre-set_ordered_at) is treated as
+	 * "created after": such rows are far older than any matching window, so
+	 * the conservative reading cannot reject a live payment.
+	 */
+	private static function tx_barred_by_cancellation($txTimeStamp, $orderedAt, $cancelledAt) {
+		if ($cancelledAt <= 0 || $txTimeStamp > $cancelledAt) {
+			return false;
+		}
+
+		// The order predates the cancellation - the boundary is not about it.
+		if ($orderedAt > 0 && $orderedAt <= $cancelledAt) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
 	 * Move the cancellation boundary forward. Called when a row is
 	 * conclusively claimed for cancellation, i.e. when that order stops being
 	 * a candidate for any payment on this address.
 	 */
-	private static function stamp_address_cancelled_at($cryptoId, $address, $when = null) {
+	public static function stamp_address_cancelled_at($cryptoId, $address, $when = null) {
 		$when = ($when === null) ? time() : (int) $when;
 		$key = self::address_cancelled_at_key($cryptoId, $address);
 
@@ -1521,7 +1551,12 @@ class NMM_Payment {
 				if (!$order) {
 					// Order deleted - retire the orphaned payment record. Claim it
 					// conditionally so a concurrent verifier still wins the row.
-					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
+					if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) === NMM_Payment_Repo::CLAIM_CLAIMED) {
+						// Same boundary as an expiry cancellation: this order can
+						// never be paid now, so nothing sent before this moment
+						// may pay whatever order gets this address next.
+						self::stamp_address_cancelled_at($cryptoId, $address);
+					}
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
 					continue;
 				}

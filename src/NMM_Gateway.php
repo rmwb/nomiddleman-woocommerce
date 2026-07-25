@@ -365,6 +365,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 if (!empty($order->get_meta('wallet_address'))) {
                     return array('outcome' => 'already', 'message' => '');
                 }
+                // Re-check the status under the lock, not just before it. We may
+                // have waited seconds for the lock, and in that time the order
+                // could have been cancelled, failed, refunded or paid - by an
+                // admin, a webhook, or the verifier. Allocating now would revive
+                // a dead order and push it back to on-hold.
+                if (!$order->has_status(array('pending', 'on-hold'))) {
+                    NMM_Util::log(__FILE__, __LINE__, 'Order ' . $order_id . ' became ' . $order->get_status() . ' while waiting for the init lock; not initializing payment.');
+                    return array('outcome' => 'not_payable', 'message' => '');
+                }
 
                 if ($lockResult === '0') {
                     // The lock works and another request holds it: that request is
