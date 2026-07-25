@@ -159,6 +159,15 @@ function NMM_init_gateways(){
     // executes callbacks added to a later priority of the hook being run.
     add_action('woocommerce_email_order_details', 'NMM_load_gateways_for_email', 5);
 
+    // The order-pay endpoint (WooCommerce's "Pay" link on a pending order)
+    // never passes through the thank-you hook, so a customer returning to an
+    // unpaid order previously had no way to see their payment address again.
+    // Registered here rather than in the gateway constructor because the
+    // receipt template's do_action fires without anything instantiating the
+    // gateways first - the callback resolves (and thereby constructs) the
+    // gateway itself.
+    add_action('woocommerce_receipt_nmmpro_gateway', 'NMM_render_order_receipt');
+
     NMM_Register_Extensions();
     NMM_update_hd_table();
     NMM_maybe_create_sol_retry_table();
@@ -175,6 +184,18 @@ function NMM_init_gateways(){
 function NMM_load_gateways_for_email() {
     if (function_exists('WC') && WC() && is_callable(array(WC(), 'payment_gateways'))) {
         WC()->payment_gateways();
+    }
+}
+
+// Renders the payment details on the order-pay receipt page. See the
+// woocommerce_receipt_nmmpro_gateway registration in NMM_init_gateways.
+function NMM_render_order_receipt($order_id) {
+    if (!function_exists('WC') || !WC() || !is_callable(array(WC(), 'payment_gateways'))) {
+        return;
+    }
+    $gateways = WC()->payment_gateways()->payment_gateways();
+    if (isset($gateways['nmmpro_gateway'])) {
+        $gateways['nmmpro_gateway']->thank_you_page($order_id);
     }
 }
 
