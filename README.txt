@@ -5,7 +5,7 @@ Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.9.8
+Stable Tag: 2.9.9
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -182,6 +182,15 @@ Yes. Filters are available for redirecting verification requests, customizing th
 Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
 
 == Changelog ==
+
+= 2.9.9 =
+* Fund safety: Privacy Mode address generation now refuses to produce an address for any coin or address type it has no version byte mapped for, instead of silently emitting a plausible-looking address that no wallet controls. A new release-gating test verifies the mapping for every HD-capable coin on both math backends
+* Privacy Mode (HD): a database error while stocking a fresh payment address is now logged with the database's own error message and surfaced through the normal checkout error path - previously it was completely silent and the customer just saw a generic "unable to get payment address" with nothing in the logs
+* Reliability: an unexpected PHP error while rendering the order-received page now shows the customer a clear notice (and, during payment setup, safely fails the order) instead of a blank error page; an order whose chosen coin was removed from the plugin in an update now shows a "contact the store" notice on refresh instead of an error page
+* Emails: the payment details block now reads the amount and address from the order itself, so emails resent from the admin screen or sent by background processes include the payment details instead of a blank total
+* Privacy: block-explorer API tokens and similar credentials are stripped from URLs before they are written to the WooCommerce logs, and failed API responses are logged as a short summary instead of a full dump - log excerpts pasted into support threads can no longer leak a paid API token
+* Security: the Monero wallet RPC password is no longer embedded in the settings page HTML. The field is write-only - leave it blank to keep the saved password, tick the new checkbox to clear it - and the password can now be defined as the NMM_XMR_RPC_PASSWORD constant in wp-config.php so it never lives in the database
+* Performance: all exchange-rate lookups now use a 3-second timeout and block-explorer calls an 8-second timeout, so an unresponsive third-party API can no longer stall checkout or the order-received page while several APIs are tried in turn
 
 = 2.9.8 =
 * Checkout: if the payment address cannot be recorded for monitoring, the order now fails with a clear message instead of displaying an address that Autopay is not watching - previously a database error at this moment could send a customer to an address whose payment would never be credited
