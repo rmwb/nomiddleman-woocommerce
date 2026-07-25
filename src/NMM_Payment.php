@@ -789,8 +789,20 @@ class NMM_Payment {
 	 * 'entries' counts eligible NMM_Transaction OBJECTS (not distinct hashes)
 	 * for the caller's split gate.
 	 *
+	 * TWO tiers come back, and they are deliberately not the same set:
+	 *  - 'sum'/'hashes'/'entries'/'hash_ts' are what may PAY an order, so they
+	 *    are confirmation-gated and exclude already-flagged hashes.
+	 *  - 'candidate_ts' is what may be FLAGGED as ambiguous while several
+	 *    unpaid orders share the address: every positive, in-window,
+	 *    unconsumed transaction, confirmed or not. An unconfirmed transaction
+	 *    is already on-chain and already unattributable, and expiry runs in the
+	 *    same cron cycle as this matcher - so if candidacy waited for
+	 *    confirmations, a sibling could be cancelled first and the survivor
+	 *    would later absorb funds that may have been the cancelled order's.
+	 *
 	 * @return array ['sum' => float (smallest units), 'hashes' => string[],
-	 *                'entries' => int, 'hash_ts' => array hash => unix ts]
+	 *                'entries' => int, 'hash_ts' => array hash => unix ts,
+	 *                'candidate_ts' => array hash => unix ts]
 	 */
 	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now, $ambiguousTxs) {
 		$sum = 0;
@@ -798,11 +810,10 @@ class NMM_Payment {
 		$hashTs = array();
 		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 
+		$candidateTs = array();
+
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
-			if ($transaction->get_confirmations() < $requiredConfirmations) {
-				continue;
-			}
 			$txTimeStamp = $transaction->get_time_stamp();
 			if (($now - $txTimeStamp) > $transactionLifetime) {
 				continue;
@@ -819,11 +830,30 @@ class NMM_Payment {
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
 				continue;
 			}
+
+			// Ambiguity candidacy is decided WITHOUT the confirmation gate. A
+			// transaction that is merely waiting for confirmations is already
+			// on-chain and already unattributable while several unpaid orders
+			// share this address - and the verifier runs immediately before the
+			// expiry pass, so a sibling can be cancelled in the very same cron
+			// cycle. Gating candidacy on confirmations would let that pool go
+			// unflagged, and once it confirmed the survivor would be the sole
+			// unpaid row and would swallow funds that may have paid the
+			// cancelled order.
+			if (!isset($candidateTs[$txHash])) {
+				$candidateTs[$txHash] = $txTimeStamp;
+			}
+
 			if (isset($ambiguousTxs[$txHash])) {
 				// Part of a pool flagged while multiple unpaid orders shared
 				// this address: withheld from aggregation until a human
 				// reconciles it or it ages out of the matching window.
 				NMM_Util::log(__FILE__, __LINE__, '---split-payment: withholding ambiguity-flagged tx ' . $txHash . ' on ' . $cryptoId . ' ' . $address);
+				continue;
+			}
+			if ($transaction->get_confirmations() < $requiredConfirmations) {
+				// Not spendable-certain yet: it may contribute on a later tick,
+				// but it must never help clear an order now.
 				continue;
 			}
 
@@ -834,7 +864,8 @@ class NMM_Payment {
 			}
 		}
 
-		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries, 'hash_ts' => $hashTs);
+		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries,
+			'hash_ts' => $hashTs, 'candidate_ts' => $candidateTs);
 	}
 
 	// Option key for the hashes flagged as an ambiguous multi-order pool on
@@ -978,7 +1009,11 @@ class NMM_Payment {
 				if ($contrib['entries'] >= 2 && self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
 					$ambiguousOrderIds[] = $record['order_id'];
 				}
-				foreach ($contrib['hash_ts'] as $implicatedHash => $implicatedTs) {
+				// candidate_ts, NOT hash_ts: everything on-chain for this
+				// address counts as implicated, including transactions still
+				// short of the merchant's confirmation threshold (see
+				// split_payment_contributions).
+				foreach ($contrib['candidate_ts'] as $implicatedHash => $implicatedTs) {
 					$implicatedHashTs[$implicatedHash] = $implicatedTs;
 				}
 			}

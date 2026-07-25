@@ -49,7 +49,8 @@ $ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use
 // this suite touches is cleared up front and again at the end so reruns stay
 // deterministic.
 $pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
-	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_ambsub', 'pm_mo', 'pm_mosub');
+	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_ambsub', 'pm_ambunc',
+	'pm_mo', 'pm_mosub');
 foreach ($pmAddrs as $a) {
 	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
 	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
@@ -250,6 +251,35 @@ NMM_Payment::process_address_transactions($btc, 'pm_ambsub', array_merge($subTxs
 pmok('fresh txs still complete the survivor',      pm_rec($wpdb, $pt, $oSubB) === 'paid');
 pmok('  fresh hashes consumed',                    $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_C') && $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_D'));
 pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_B'));
+
+// --- shared address + UNDER-CONFIRMED partials + sibling expiry --------------
+// The verifier runs immediately before the expiry pass in the same cron cycle,
+// so transactions that are on-chain but still short of the merchant's
+// confirmation threshold must be flagged as ambiguous the moment they are seen
+// on a shared address. If flagging waited for confirmations, this sequence
+// would silently pay the wrong order: both partials unflagged -> sibling
+// expires -> confirmations arrive -> survivor is the sole unpaid row and their
+// sum completes it, using funds that may have paid the cancelled order.
+$oUncA = pm_mkorder(); $ins($oUncA, 'pm_ambunc');
+$oUncB = pm_mkorder(); $ins($oUncB, 'pm_ambunc');
+$uncTxs = array(
+	new NMM_Transaction($units * 0.6, 0, time(), 'PMTX_UNC_A'), // 0 conf < required 2
+	new NMM_Transaction($units * 0.5, 1, time(), 'PMTX_UNC_B'), // 1 conf < required 2
+);
+NMM_Payment::process_address_transactions($btc, 'pm_ambunc', $uncTxs, $life);
+$uncPool = get_option('nmmpro_BTC_split_ambiguous_for_pm_ambunc', array());
+pmok('under-confirmed shared pool: flagged anyway',
+	is_array($uncPool) && isset($uncPool['PMTX_UNC_A']) && isset($uncPool['PMTX_UNC_B']));
+
+// Sibling expires, then the very same transactions confirm.
+$rp->claim_for_cancellation($oUncA, $amt);
+NMM_Payment::process_address_transactions($btc, 'pm_ambunc', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_UNC_A'), // now confirmed
+	new NMM_Transaction($units * 0.5, 999, time(), 'PMTX_UNC_B'),
+), $life);
+pmok('confirmed-after-expiry pool: NOT aggregated', pm_rec($wpdb, $pt, $oUncB) === 'unpaid');
+pmok('  nothing consumed',
+	!$stg->tx_already_consumed('BTC', 'pm_ambunc', 'PMTX_UNC_A') && !$stg->tx_already_consumed('BTC', 'pm_ambunc', 'PMTX_UNC_B'));
 
 // --- multi-output transaction: outputs sum per hash --------------------------
 // UTXO adapters emit one NMM_Transaction per matching OUTPUT: one on-chain tx
