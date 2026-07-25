@@ -7,6 +7,10 @@ on:
     - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -19,3 +23,22 @@ jobs:
           coverage: none
       - name: Probe all explorers and exchange-rate APIs
         run: php tests/smoke-explorers.php
+      # A red scheduled run is easy to miss - track the failure as an issue.
+      # Idempotent: comments on the existing open issue instead of piling up
+      # duplicates.
+      - name: File or update the tracking issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE='Explorer smoke failure'
+          BODY="The weekly explorer smoke run failed - one or more third-party explorer or rate APIs may be down or changed. Failed run: $RUN_URL"
+          NUMBER=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$TITLE\" in:title" --json number,title \
+            --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n1)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi

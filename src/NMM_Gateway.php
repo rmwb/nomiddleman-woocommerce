@@ -133,7 +133,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 return;
             }
             try {
-                $chosenCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
+                $chosenCryptoId = sanitize_text_field($_POST['nmm_currency_id']); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- checked against the configured crypto list below; a slashed value cannot match and is rejected.
                 if (!array_key_exists($chosenCryptoId, $this->cryptos)) {
                     wc_add_notice(__('Please choose a valid cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
                     return;
@@ -161,6 +161,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // delivers it via the Store API's paymentMethodData, which WooCommerce
         // also surfaces through $_POST for legacy gateways.
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce/Store API verify their own nonces before process_payment runs.
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- the value must match a configured crypto id exactly; a slashed value cannot match and is rejected, so wp_unslash() would be a no-op and is deferred to avoid any data-flow change in this release.
         if (empty($_POST['nmm_currency_id']) || !array_key_exists(sanitize_text_field($_POST['nmm_currency_id']), $this->cryptos)) {
             wc_add_notice(__('Please choose a cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
             return array('result' => 'failure');

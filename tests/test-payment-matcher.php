@@ -1,0 +1,198 @@
+<?php
+/**
+ * Live-DB test: NMM_Payment::process_address_transactions() driven DIRECTLY
+ * with injected NMM_Transaction objects (no network) - the seam the method was
+ * split out for. Covers the single-tx matching rules (threshold, tolerance,
+ * order-relative window, consumed-tx bookkeeping, collisions) and the
+ * split-payment aggregation pass (several transactions summing to the order
+ * total). Requires WordPress + WooCommerce + a database. Skips cleanly
+ * standalone.
+ *
+ *   Run:  wp eval-file tests/test-payment-matcher.php
+ */
+
+if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !function_exists('wc_create_order')) {
+	echo "test-payment-matcher: skipped (needs WordPress + WooCommerce + DB)\n";
+	return;
+}
+
+$wpdb = $GLOBALS['wpdb'];
+$pt = $wpdb->prefix . NMM_PAYMENT_TABLE;
+$wpdb->query("DELETE FROM `$pt`");
+
+// wp eval-file runs this file in function scope: track pass/fail through
+// $GLOBALS so the final banner is accurate (see test-autopay-cancel.php).
+$GLOBALS['pm_ok'] = true;
+function pmok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['pm_ok'] = false; } }
+
+function pm_mkorder() { $o = wc_create_order(); $o->set_payment_method('nmmpro_gateway'); $o->set_status('pending'); $o->save(); return $o->get_id(); }
+function pm_rec($wpdb, $pt, $orderId) { return $wpdb->get_var($wpdb->prepare("SELECT status FROM `$pt` WHERE order_id=%d", $orderId)); }
+function pm_hash($wpdb, $pt, $orderId) { return (string) $wpdb->get_var($wpdb->prepare("SELECT tx_hash FROM `$pt` WHERE order_id=%d", $orderId)); }
+function pm_paidlike($orderId) { $o = wc_get_order($orderId); return $o && $o->has_status(array('processing', 'completed')); }
+
+$cryptos = NMM_Cryptocurrencies::get();
+$btc = $cryptos['BTC'];
+$rp = new NMM_Payment_Repo();
+$stg = new NMM_Settings(get_option(NMM_REDUX_ID));
+$amt = '0.00100000';
+$units = 0.001 * (10 ** $btc->get_round_precision()); // 100000 smallest units
+$life = 3600;
+
+$ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use ($wpdb, $pt, $amt) {
+	$wpdb->query($wpdb->prepare(
+		"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
+		$address, $orderedAt === null ? time() : $orderedAt, $orderId, $orderAmount === null ? $amt : $orderAmount));
+};
+
+// Consumed-tx state lives in per-address options that OUTLIVE the table wipe
+// (the harness DB persists between runs); every address this suite touches is
+// cleared up front and again at the end so reruns stay deterministic.
+$pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
+	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr');
+foreach ($pmAddrs as $a) { delete_option('nmmpro_BTC_transactions_consumed_for_' . $a); }
+
+// The matching tolerance is a store setting; pin it to the shipped default
+// (0.1% shortfall) through the same filter the matcher applies, so a harness
+// with customized settings cannot skew the threshold sections.
+add_filter('nmm_autopay_percent', function () { return '0.999'; });
+
+// Required confirmations has no filter - pin it via the settings option (the
+// matcher re-reads NMM_REDUX_ID on every call) and restore the exact original
+// afterwards, since the harness DB persists.
+$pmReduxBak = get_option(NMM_REDUX_ID);
+$pmRedux = is_array($pmReduxBak) ? $pmReduxBak : array();
+$pmRedux['BTC_autopayment_required_confirmations'] = 2;
+update_option(NMM_REDUX_ID, $pmRedux, false);
+
+// --- single-tx pass: threshold and tolerance --------------------------------
+$oExact = pm_mkorder(); $ins($oExact, 'pm_exact');
+NMM_Payment::process_address_transactions($btc, 'pm_exact', array(new NMM_Transaction($units, 999, time(), 'PMTX_EXACT')), $life);
+pmok('exact single match: record paid',            pm_rec($wpdb, $pt, $oExact) === 'paid');
+pmok('  order completed',                          pm_paidlike($oExact));
+pmok('  hash consumed',                            $stg->tx_already_consumed('BTC', 'pm_exact', 'PMTX_EXACT') === true);
+pmok('  hash stored on the row',                   pm_hash($wpdb, $pt, $oExact) === 'PMTX_EXACT');
+
+$oOver = pm_mkorder(); $ins($oOver, 'pm_over');
+NMM_Payment::process_address_transactions($btc, 'pm_over', array(new NMM_Transaction($units * 1.5, 999, time(), 'PMTX_OVER')), $life);
+pmok('overpayment matches',                        pm_rec($wpdb, $pt, $oOver) === 'paid');
+
+// 0.05% short: inside the 0.1% tolerance.
+$oTolIn = pm_mkorder(); $ins($oTolIn, 'pm_tolin');
+NMM_Payment::process_address_transactions($btc, 'pm_tolin', array(new NMM_Transaction($units * 0.9995, 999, time(), 'PMTX_TOLIN')), $life);
+pmok('shortfall inside tolerance matches',         pm_rec($wpdb, $pt, $oTolIn) === 'paid');
+
+// 0.2% short: outside the tolerance - and the near-miss tx must stay
+// unconsumed so a later top-up can aggregate with it.
+$oTolOut = pm_mkorder(); $ins($oTolOut, 'pm_tolout');
+NMM_Payment::process_address_transactions($btc, 'pm_tolout', array(new NMM_Transaction($units * 0.998, 999, time(), 'PMTX_TOLOUT')), $life);
+pmok('shortfall outside tolerance does NOT match', pm_rec($wpdb, $pt, $oTolOut) === 'unpaid');
+pmok('  near-miss tx left unconsumed',             $stg->tx_already_consumed('BTC', 'pm_tolout', 'PMTX_TOLOUT') === false);
+
+// --- order-relative window and consumed bookkeeping -------------------------
+// A tx dated 2h before the order (grace is 1h) must not pay it, even with a
+// matching window wide enough by age alone.
+$oPre = pm_mkorder(); $preOrderedAt = time(); $ins($oPre, 'pm_preord', $preOrderedAt);
+NMM_Payment::process_address_transactions($btc, 'pm_preord', array(new NMM_Transaction($units, 999, $preOrderedAt - 2 * 3600, 'PMTX_PREORD')), 6 * 3600);
+pmok('pre-order tx rejected',                      pm_rec($wpdb, $pt, $oPre) === 'unpaid');
+
+$oCons = pm_mkorder(); $ins($oCons, 'pm_consumed');
+$stg->add_consumed_tx('BTC', 'pm_consumed', 'PMTX_CONSUMED');
+NMM_Payment::process_address_transactions($btc, 'pm_consumed', array(new NMM_Transaction($units, 999, time(), 'PMTX_CONSUMED')), $life);
+pmok('already-consumed tx skipped',                pm_rec($wpdb, $pt, $oCons) === 'unpaid');
+
+// --- split payment: two txs summing to the total ----------------------------
+$oSplit = pm_mkorder(); $ins($oSplit, 'pm_split');
+$splitTxs = array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_SPLIT_A'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_SPLIT_B'),
+);
+NMM_Payment::process_address_transactions($btc, 'pm_split', $splitTxs, $life);
+pmok('split payment: record paid',                 pm_rec($wpdb, $pt, $oSplit) === 'paid');
+pmok('  order completed',                          pm_paidlike($oSplit));
+pmok('  BOTH hashes consumed',                     $stg->tx_already_consumed('BTC', 'pm_split', 'PMTX_SPLIT_A') && $stg->tx_already_consumed('BTC', 'pm_split', 'PMTX_SPLIT_B'));
+pmok('  both hashes stored on the row',            pm_hash($wpdb, $pt, $oSplit) === 'PMTX_SPLIT_A,PMTX_SPLIT_B');
+
+// The aggregate applies the order-relative lower bound per contributor: a
+// pre-order stray must not top up a fresh partial payment.
+$oSplitPre = pm_mkorder(); $spOrderedAt = time(); $ins($oSplitPre, 'pm_splitpre', $spOrderedAt);
+NMM_Payment::process_address_transactions($btc, 'pm_splitpre', array(
+	new NMM_Transaction($units * 0.6, 999, $spOrderedAt - 2 * 3600, 'PMTX_SP_OLD'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_SP_NEW'),
+), 6 * 3600);
+pmok('split with pre-order tx does NOT complete',  pm_rec($wpdb, $pt, $oSplitPre) === 'unpaid');
+pmok('  nothing consumed',                         !$stg->tx_already_consumed('BTC', 'pm_splitpre', 'PMTX_SP_OLD') && !$stg->tx_already_consumed('BTC', 'pm_splitpre', 'PMTX_SP_NEW'));
+
+// --- split payment: confirmation gating -------------------------------------
+// One contributor under the required confirmations (pinned to 2): the sum must
+// NOT complete this tick and the aggregate must consume nothing, so the same
+// transactions complete the order once confirmations arrive.
+$oConf = pm_mkorder(); $ins($oConf, 'pm_conf');
+NMM_Payment::process_address_transactions($btc, 'pm_conf', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_CONF_A'),
+	new NMM_Transaction($units * 0.4, 1, time(), 'PMTX_CONF_B'), // 1 conf < required 2
+), $life);
+pmok('under-confirmed split: NOT completed',       pm_rec($wpdb, $pt, $oConf) === 'unpaid');
+pmok('  nothing consumed by the aggregate',        !$stg->tx_already_consumed('BTC', 'pm_conf', 'PMTX_CONF_A') && !$stg->tx_already_consumed('BTC', 'pm_conf', 'PMTX_CONF_B'));
+NMM_Payment::process_address_transactions($btc, 'pm_conf', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_CONF_A'),
+	new NMM_Transaction($units * 0.4, 2, time(), 'PMTX_CONF_B'), // confirmations arrived
+), $life);
+pmok('completes once confirmations arrive',        pm_rec($wpdb, $pt, $oConf) === 'paid');
+pmok('  both hashes then consumed',                $stg->tx_already_consumed('BTC', 'pm_conf', 'PMTX_CONF_A') && $stg->tx_already_consumed('BTC', 'pm_conf', 'PMTX_CONF_B'));
+
+// --- multi-order collision: no aggregation, warning --------------------------
+// Two unpaid orders share the address (static/carousel reuse) and the combined
+// txs would cover either total. Attribution is ambiguous, so the aggregate must
+// stand down with a warning and leave the txs unconsumed for a later clean tick.
+$oMultiA = pm_mkorder(); $ins($oMultiA, 'pm_multi');
+$oMultiB = pm_mkorder(); $ins($oMultiB, 'pm_multi');
+$GLOBALS['pm_warned'] = false;
+$pmLogSpy = function ($message, $level, $context, $handler) {
+	if ($level === 'warning' && strpos($message, 'split-payment collision') !== false) { $GLOBALS['pm_warned'] = true; }
+	return $message;
+};
+add_filter('woocommerce_logger_log_message', $pmLogSpy, 10, 4);
+NMM_Payment::process_address_transactions($btc, 'pm_multi', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_MULTI_A'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_MULTI_B'),
+), $life);
+remove_filter('woocommerce_logger_log_message', $pmLogSpy, 10);
+pmok('multi-order collision: order A not paid',    pm_rec($wpdb, $pt, $oMultiA) === 'unpaid');
+pmok('multi-order collision: order B not paid',    pm_rec($wpdb, $pt, $oMultiB) === 'unpaid');
+pmok('  collision logged at warning',              $GLOBALS['pm_warned'] === true);
+pmok('  txs left unconsumed',                      !$stg->tx_already_consumed('BTC', 'pm_multi', 'PMTX_MULTI_A') && !$stg->tx_already_consumed('BTC', 'pm_multi', 'PMTX_MULTI_B'));
+
+// --- split payment: DB error on the claim ------------------------------------
+// The hook renames the table away right before the claim (the established
+// CLAIM_DB_ERROR technique from test-autopay-cancel.php). The row state is then
+// unknown: the aggregate must consume NOTHING and touch nothing, so the whole
+// split payment is retried on a later tick.
+$oDbErr = pm_mkorder(); $ins($oDbErr, 'pm_dberr');
+$pmErrHook = function ($orderId, $cryptoId, $address, $hash) use ($oDbErr, $pt, $wpdb) {
+	if ($orderId == $oDbErr) { $wpdb->suppress_errors(true); $wpdb->query("RENAME TABLE `$pt` TO `{$pt}_bak`"); }
+};
+add_action('nmm_before_autopay_complete', $pmErrHook, 10, 4);
+NMM_Payment::process_address_transactions($btc, 'pm_dberr', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_ERR_A'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_ERR_B'),
+), $life);
+remove_action('nmm_before_autopay_complete', $pmErrHook, 10);
+$wpdb->query("RENAME TABLE `{$pt}_bak` TO `$pt`"); // restore; row is still unpaid
+$wpdb->suppress_errors(false);
+pmok('split DB error: record still unpaid',        pm_rec($wpdb, $pt, $oDbErr) === 'unpaid');
+pmok('  order untouched',                          !pm_paidlike($oDbErr));
+pmok('  txs left UNconsumed (retryable)',          !$stg->tx_already_consumed('BTC', 'pm_dberr', 'PMTX_ERR_A') && !$stg->tx_already_consumed('BTC', 'pm_dberr', 'PMTX_ERR_B'));
+// And the retry actually lands once the DB is healthy again.
+NMM_Payment::process_address_transactions($btc, 'pm_dberr', array(
+	new NMM_Transaction($units * 0.6, 999, time(), 'PMTX_ERR_A'),
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_ERR_B'),
+), $life);
+pmok('  next tick completes the split payment',    pm_rec($wpdb, $pt, $oDbErr) === 'paid');
+
+// --- cleanup (the harness DB persists between runs) --------------------------
+remove_all_filters('nmm_autopay_percent');
+if ($pmReduxBak === false) { delete_option(NMM_REDUX_ID); } else { update_option(NMM_REDUX_ID, $pmReduxBak, false); }
+foreach ($pmAddrs as $a) { delete_option('nmmpro_BTC_transactions_consumed_for_' . $a); }
+$wpdb->query("DELETE FROM `$pt`");
+
+echo $GLOBALS['pm_ok'] ? "\nPAYMENT-MATCHER CHECKS PASSED\n" : "\nPAYMENT-MATCHER CHECKS FAILED\n";

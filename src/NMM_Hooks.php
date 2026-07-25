@@ -168,9 +168,11 @@ function NMM_first_mpk_address_ajax() {
 			return;
 		}
 
+		// phpcs:disable WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- every value is validated against a strict format/allowlist below (is_valid_mpk, known crypto id, '0'/'1' flag); none can legitimately contain slashable characters, so wp_unslash() would be a no-op and is deferred to avoid any data-flow change in this release.
 		$mpk = sanitize_text_field($_POST['mpk']);
 		$cryptoId = sanitize_text_field($_POST['cryptoId']);
 		$hdMode = isset($_POST['hdMode']) ? sanitize_text_field($_POST['hdMode']) : '0';
+		// phpcs:enable WordPress.Security.ValidatedSanitizedInput.MissingUnslash
 
 		if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
 			return;

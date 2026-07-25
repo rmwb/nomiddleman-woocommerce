@@ -18,6 +18,75 @@ class NMM_Admin {
     public static function init() {
         add_action('admin_menu', array(__CLASS__, 'register_menu'));
         add_action('admin_init', array(__CLASS__, 'register_settings'));
+
+        // One-shot re-validation of addresses stored under the old sloppy
+        // validation (see NMM_Address::flag_invalid_stored_addresses - it is
+        // flag-guarded, so this is a cheap option read after the first run),
+        // plus the dismissible notice surfacing whatever it found.
+        add_action('admin_init', array('NMM_Address', 'flag_invalid_stored_addresses'));
+        add_action('admin_init', array(__CLASS__, 'maybe_dismiss_invalid_address_notice'));
+        add_action('admin_notices', array(__CLASS__, 'render_invalid_address_notice'));
+    }
+
+    /**
+     * Persistently dismiss the invalid-stored-address notice. A plain
+     * .is-dismissible would come back on every page load; the merchant is
+     * telling us "I have checked these", so the recorded list is deleted.
+     */
+    public static function maybe_dismiss_invalid_address_notice() {
+        if (!isset($_GET['nmm_dismiss_invalid_addresses'])) {
+            return;
+        }
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'nmm_dismiss_invalid_addresses')) {
+            return;
+        }
+
+        delete_option(NMM_Address::INVALID_STORED_OPTION);
+    }
+
+    /**
+     * Warn the merchant about stored wallet addresses that fail the new
+     * checksum/format validation. These were saved under the old unanchored
+     * regexes and are deliberately NOT removed (payment flow must not change
+     * behind the merchant's back) - but every customer payment sent to a
+     * mistyped address is unrecoverable, so the merchant must re-check them.
+     */
+    public static function render_invalid_address_notice() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $invalid = get_option(NMM_Address::INVALID_STORED_OPTION, array());
+
+        if (!is_array($invalid) || count($invalid) === 0) {
+            return;
+        }
+
+        $dismissUrl = wp_nonce_url(
+            add_query_arg('nmm_dismiss_invalid_addresses', '1'),
+            'nmm_dismiss_invalid_addresses'
+        );
+        ?>
+        <div class="notice notice-error">
+            <p><strong><?php esc_html_e('Nomiddleman Crypto Payments: please re-check these stored wallet addresses.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></p>
+            <p><?php esc_html_e('Wallet-address validation now verifies checksums, and the following saved addresses fail. A mistyped address still collects customer payments - into an address nobody controls. They have not been removed, but please confirm each one against your wallet and correct any that are wrong.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+            <ul style="list-style: disc; padding-left: 2em;">
+                <?php foreach ($invalid as $entry) :
+                    if (!is_array($entry) || !isset($entry['crypto'], $entry['address'])) {
+                        continue;
+                    } ?>
+                    <li><strong><?php echo esc_html($entry['crypto']); ?></strong>: <code><?php echo esc_html($entry['address']); ?></code></li>
+                <?php endforeach; ?>
+            </ul>
+            <p>
+                <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMM_REDUX_SLUG)); ?>" class="button button-primary"><?php esc_html_e('Review addresses', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
+                <a href="<?php echo esc_url($dismissUrl); ?>" class="button"><?php esc_html_e('I have checked these - dismiss', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
+            </p>
+        </div>
+        <?php
     }
 
     public static function register_menu() {

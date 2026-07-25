@@ -79,6 +79,20 @@ class NMM_Validation {
 			$newValues['payment_label'] = sanitize_text_field($newValues['payment_label']);
 		}
 
+		// Merchants routinely paste wallet addresses with stray whitespace.
+		// Address validation is now strict (checksums, anchored patterns), so
+		// an invisible trailing space would fail the save; whitespace can
+		// never be part of any supported address format, so trimming here is
+		// always safe and must happen BEFORE validate() reads the values.
+		foreach (array_keys(NMM_Cryptocurrencies::get()) as $cryptoId) {
+			$addressesKey = $cryptoId . '_addresses';
+			if (isset($newValues[$addressesKey]) && is_array($newValues[$addressesKey])) {
+				$newValues[$addressesKey] = array_map(function($address) {
+					return is_string($address) ? trim($address) : $address;
+				}, $newValues[$addressesKey]);
+			}
+		}
+
 		return self::validate($newValues, (array) $oldValues);
 	}
 

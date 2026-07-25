@@ -1,0 +1,34 @@
+# PHPStan configuration for the plugin's own code.
+#
+# The analysis toolchain is installed ad hoc (the repo deliberately carries no
+# composer.json - bundled libraries live in src/vendor): CI runs `composer init`
+# in the workspace root and requires phpstan/phpstan, szepeviktor/phpstan-wordpress
+# (which registers the WordPress stubs itself) and php-stubs/woocommerce-stubs,
+# so `vendor/` below resolves to that throwaway install.
+#
+# phpstan-baseline.neon holds the pre-existing findings from the first run;
+# this job gates NEW regressions only. Regenerate with:
+#   vendor/bin/phpstan analyse -c phpstan.neon.dist --generate-baseline
+includes:
+	- vendor/szepeviktor/phpstan-wordpress/extension.neon
+	- phpstan-baseline.neon
+
+parameters:
+	level: 5
+
+	# analyse at the plugin's minimum supported PHP (see PHPCompatibility scan)
+	phpVersion: 70400
+
+	paths:
+		- nomiddleman-crypto-woocommerce.php
+		- src
+
+	excludePaths:
+		# bundled third-party code is not analysed (the php -l matrix covers it)
+		# but IS still scanned for symbols, so the bundled classes the plugin
+		# calls (HdHelper, QRcode, CashAddress, ...) resolve properly
+		analyse:
+			- src/vendor
+
+	scanFiles:
+		- vendor/php-stubs/woocommerce-stubs/woocommerce-stubs.php

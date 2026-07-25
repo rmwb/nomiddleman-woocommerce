@@ -401,7 +401,10 @@ class NMM_Hd {
 			return self::get_total_received_for_xmy_address($address);
 		}
 		if ($cryptoId === 'BTX') {
-			return self::get_total_received_for_bitcore_address($address, $requiredConfirmations);
+			// chainz's getreceivedbyaddress reports one fixed view and cannot
+			// filter by confirmations (see fetch_distinguishes_confirmations),
+			// so the adapter takes no confirmation argument.
+			return self::get_total_received_for_bitcore_address($address);
 		}
 	}
 
@@ -505,9 +508,9 @@ class NMM_Hd {
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];
-		}		
+		}
 
-		throw new \Exception("Unable to get XMY HD address information from external sources.");
+		throw new \Exception("Unable to get BTX HD address information from external sources.");
 	}
 
 	public static function cancel_expired_addresses($cryptoId, $mpk, $orderCancellationTimeSec, $hdMode) {
