@@ -235,7 +235,12 @@ class NMM_Payment {
 					continue;
 				}
 				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
-				self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime);
+				if (self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime) === false) {
+					// Another verifier holds this subaddress; we did not examine
+					// it, so it must not be certified as covered.
+					$newFailed[] = self::scan_key($record);
+					continue;
+				}
 			}
 			else {
 				$fetched = self::check_address_transactions_for_matching_payments($crypto, $address, $cryptoLifetime);
@@ -506,7 +511,12 @@ class NMM_Payment {
 
 		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
 
-		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
+		if (self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime) === false) {
+			// Another verifier holds this address; we did not examine it. Treat
+			// it exactly like a failed fetch so it is retried and never
+			// certified as covered.
+			return false;
+		}
 
 		return array(
 			'transactions' => is_array($transactions) ? $transactions : array(),
@@ -610,9 +620,12 @@ class NMM_Payment {
 
 		if ($matchLock === '0') {
 			// Another worker is mid-flight on this exact address. Nothing to
-			// wait for; the sweep revisits it next tick.
+			// wait for; the sweep revisits it next tick. Returning false marks
+			// the visit INCOMPLETE: certifying an address we never examined
+			// would let the coverage stamp advance past it, and expiry could
+			// then cancel an order whose payment we simply never looked at.
 			NMM_Util::log(__FILE__, __LINE__, 'Address match lock busy for ' . $cryptoId . ' ' . $address . '; another verifier is processing it. Skipping this tick.');
-			return;
+			return false;
 		}
 
 		// null: advisory locks unavailable on this host. Single-transaction
@@ -652,6 +665,14 @@ class NMM_Payment {
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
 				// Ordinary: we have already processed this tx. Expected, not a warning.
 				NMM_Util::log(__FILE__, __LINE__, 'Already-consumed transaction skipped: ' . $txHash);
+				continue;
+			}
+
+			if ($txTimeStamp <= self::address_cancelled_at($cryptoId, $address)) {
+				// Predates the last cancellation on this address, so it was sent
+				// towards an order that no longer exists - never towards whoever
+				// holds the address now. See address_cancelled_at().
+				NMM_Util::log(__FILE__, __LINE__, 'Transaction ' . $txHash . ' predates the last cancellation on ' . $cryptoId . ' ' . $address . '; not matching it against a later order.');
 				continue;
 			}
 
@@ -802,7 +823,10 @@ class NMM_Payment {
 		}
 
 		if (!$aggregationSafe) {
-			return;
+			// Single-tx matching did run, so the address WAS examined; only the
+			// aggregate pass is withheld. That is a complete visit as far as
+			// coverage is concerned.
+			return true;
 		}
 
 		// Second pass: a customer who pays in SEVERAL transactions (exchange
@@ -815,6 +839,8 @@ class NMM_Payment {
 		// purpose: an order completed above is no longer unpaid, and a hash
 		// consumed above no longer contributes to any sum.
 		self::aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings);
+
+		return true;
 
 		}
 		finally {
@@ -869,11 +895,20 @@ class NMM_Payment {
 		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
 
 		$candidateTs = array();
+		$cancelledAt = self::address_cancelled_at($cryptoId, $address);
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
 			$txTimeStamp = $transaction->get_time_stamp();
 			if (($now - $txTimeStamp) > $transactionLifetime) {
+				continue;
+			}
+			if ($txTimeStamp <= $cancelledAt) {
+				// Sent before this address's last cancellation, so it belongs to
+				// the cancelled order - it can neither pay nor be pooled into a
+				// later one. See address_cancelled_at(); this is what stops one
+				// customer's partials from completing the next customer's order
+				// on a recycled address.
 				continue;
 			}
 			if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
@@ -924,6 +959,45 @@ class NMM_Payment {
 
 		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries,
 			'hash_ts' => $hashTs, 'candidate_ts' => $candidateTs);
+	}
+
+	// Option key for the most recent cancellation on a (crypto, address).
+	// NOTE: the 2.11.0 consumed-tx table migration should absorb this too.
+	private static function address_cancelled_at_key($cryptoId, $address) {
+		return 'nmmpro_' . $cryptoId . '_cancelled_at_for_' . $address;
+	}
+
+	/**
+	 * Timestamp of the most recent expiry-cancellation on this address, or 0.
+	 *
+	 * A cancellation is a hard boundary in a reused address's history: every
+	 * transaction made before it was sent towards the order that has now been
+	 * cancelled, so none of them may ever pay a LATER order on the same
+	 * address. Without this boundary the ordinary static-address lifecycle
+	 * misattributes funds: Alice part-pays, her order expires, the address is
+	 * handed to Bob, Alice tops up - and Alice's partials plus her top-up
+	 * complete BOB's order. The per-order TX_ORDER_SKEW_GRACE_SEC lower bound
+	 * cannot catch it, because it deliberately accepts transactions from up to
+	 * an hour before the order was created.
+	 */
+	private static function address_cancelled_at($cryptoId, $address) {
+		return (int) get_option(self::address_cancelled_at_key($cryptoId, $address), 0);
+	}
+
+	/**
+	 * Move the cancellation boundary forward. Called when a row is
+	 * conclusively claimed for cancellation, i.e. when that order stops being
+	 * a candidate for any payment on this address.
+	 */
+	private static function stamp_address_cancelled_at($cryptoId, $address, $when = null) {
+		$when = ($when === null) ? time() : (int) $when;
+		$key = self::address_cancelled_at_key($cryptoId, $address);
+
+		if ((int) get_option($key, 0) >= $when) {
+			return; // never move the boundary backwards
+		}
+
+		update_option($key, $when, false);
 	}
 
 	// Option key for the hashes flagged as an ambiguous multi-order pool on
@@ -1462,7 +1536,9 @@ class NMM_Payment {
 				if (!$order->has_status(array('pending', 'on-hold'))) {
 					// Terminal non-paid or otherwise not awaiting payment - reconcile
 					// the record but leave the order alone.
-					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
+					if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) === NMM_Payment_Repo::CLAIM_CLAIMED) {
+						self::stamp_address_cancelled_at($cryptoId, $address);
+					}
 					continue;
 				}
 
@@ -1476,6 +1552,13 @@ class NMM_Payment {
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
 					continue;
 				}
+
+				// This order can no longer be paid, so every transaction sent
+				// before now belongs to it and to nothing that follows on this
+				// address. Stamp the boundary BEFORE the order-side work below:
+				// a throw or a slow status transition must not leave a recycled
+				// address able to absorb the departing customer's funds.
+				self::stamp_address_cancelled_at($cryptoId, $address);
 
 				// Hook point immediately before the final transition. Integrations
 				// (and the concurrency test) can observe - or, in a genuine race,

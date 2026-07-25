@@ -50,8 +50,9 @@ $ins = function ($orderId, $address, $orderedAt = null, $orderAmount = null) use
 // deterministic.
 $pmAddrs = array('pm_exact', 'pm_over', 'pm_tolin', 'pm_tolout', 'pm_preord', 'pm_consumed',
 	'pm_multi', 'pm_split', 'pm_splitpre', 'pm_conf', 'pm_dberr', 'pm_ambig', 'pm_ambsub', 'pm_ambunc',
-	'pm_race', 'pm_lock', 'pm_mo', 'pm_mosub');
+	'pm_race', 'pm_lock', 'pm_recyc', 'pm_mo', 'pm_mosub');
 foreach ($pmAddrs as $a) {
+	delete_option('nmmpro_BTC_cancelled_at_for_' . $a);
 	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
 	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
 }
@@ -252,6 +253,56 @@ pmok('fresh txs still complete the survivor',      pm_rec($wpdb, $pt, $oSubB) ==
 pmok('  fresh hashes consumed',                    $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_C') && $stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_D'));
 pmok('  flagged hashes still unconsumed',          !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_A') && !$stg->tx_already_consumed('BTC', 'pm_ambsub', 'PMTX_SUB_B'));
 
+// --- recycled address: one customer's funds must not pay the next order ------
+// The ordinary static-address lifecycle, in sequence rather than concurrently:
+// Alice part-pays, her order expires and is cancelled, the address is handed to
+// Bob, and Alice tops up. Her partial + top-up must NOT complete Bob's order.
+// The concurrent-ambiguity flagging cannot catch this - the two orders are
+// never unpaid at the same time - and the per-order skew grace deliberately
+// accepts transactions from up to an hour before an order was created, which is
+// exactly where Alice's partial sits. The cancellation timestamp is the guard.
+// Timing matters: Alice's partial must land INSIDE the one-hour skew grace
+// before Bob's order, which is exactly where the per-order lower bound cannot
+// reject it. Only the cancellation boundary can.
+$pmNow = time();
+$pmAliceTx   = $pmNow - 2700; // Alice pays 45 min ago
+$pmCancelled = $pmNow - 2400; // her order is cancelled 40 min ago
+$pmBobOrder  = $pmNow - 2100; // Bob gets the address 35 min ago (grace = 1h)
+
+$oAlice = pm_mkorder();
+$ins($oAlice, 'pm_recyc', $pmNow - (26 * 3600));           // ordered 26h ago
+$alicePartial = new NMM_Transaction($units * 0.6, 999, $pmAliceTx, 'PMTX_ALICE_1');
+
+// Alice's partial alone matches nothing (one entry, under the total).
+NMM_Payment::process_address_transactions($btc, 'pm_recyc', array($alicePartial), 6 * 3600);
+pmok('recycled: partial alone does not pay',       pm_rec($wpdb, $pt, $oAlice) === 'unpaid');
+
+// Her order expires and is cancelled. The expiry pass stamps the address
+// boundary at that moment - that stamping is asserted end-to-end in
+// test-autopay-cancel.php, which has the coverage machinery that lets a real
+// cancellation proceed; here we set the same boundary directly so this suite
+// stays a focused matcher test with no network or coverage setup.
+$rp->claim_for_cancellation($oAlice, $amt);
+update_option('nmmpro_BTC_cancelled_at_for_pm_recyc', $pmCancelled, false);
+pmok('recycled: expired order cancelled',          pm_rec($wpdb, $pt, $oAlice) === 'cancelled');
+
+// Bob gets the recycled address; Alice tops up her remaining 0.4 afterwards.
+$oBob = pm_mkorder(); $ins($oBob, 'pm_recyc', $pmBobOrder);
+NMM_Payment::process_address_transactions($btc, 'pm_recyc', array(
+	$alicePartial,                                                        // pre-cancellation
+	new NMM_Transaction($units * 0.4, 999, time(), 'PMTX_ALICE_2'),       // post-cancellation
+), 6 * 3600);
+pmok('recycled: Alice funds do NOT complete Bob',  pm_rec($wpdb, $pt, $oBob) === 'unpaid');
+pmok('  Bob order not completed',                  !pm_paidlike($oBob));
+pmok('  Alice pre-cancellation tx not consumed',   !$stg->tx_already_consumed('BTC', 'pm_recyc', 'PMTX_ALICE_1'));
+
+// Bob paying properly still works: his own transaction post-dates the boundary.
+NMM_Payment::process_address_transactions($btc, 'pm_recyc', array(
+	new NMM_Transaction($units, 999, time(), 'PMTX_BOB'),
+), 6 * 3600);
+pmok('  Bob own payment still completes',          pm_rec($wpdb, $pt, $oBob) === 'paid');
+delete_option('nmmpro_BTC_cancelled_at_for_pm_recyc');
+
 // --- per-address serialization across connections ----------------------------
 // Claiming an order and durably consuming its transactions are two writes, so
 // two verifiers on one address can credit a transaction twice. Matching is
@@ -411,6 +462,7 @@ pmok('  next tick completes the split payment',    pm_rec($wpdb, $pt, $oDbErr) =
 remove_all_filters('nmm_autopay_percent');
 if ($pmReduxBak === false) { delete_option(NMM_REDUX_ID); } else { update_option(NMM_REDUX_ID, $pmReduxBak, false); }
 foreach ($pmAddrs as $a) {
+	delete_option('nmmpro_BTC_cancelled_at_for_' . $a);
 	delete_option('nmmpro_BTC_transactions_consumed_for_' . $a);
 	delete_option('nmmpro_BTC_split_ambiguous_for_' . $a);
 }

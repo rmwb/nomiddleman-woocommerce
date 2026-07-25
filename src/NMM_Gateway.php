@@ -201,7 +201,11 @@ class NMM_Gateway extends WC_Payment_Gateway {
             wc_add_notice($initResult['message'], 'error');
             return array('result' => 'failure');
         }
-        if ($initResult['outcome'] === 'missing') {
+        if ($initResult['outcome'] === 'missing' || $initResult['outcome'] === 'not_payable') {
+            // Should not happen at checkout (WooCommerce has just created this
+            // order as pending), so if it does, something is wrong enough that
+            // returning success - and sending the customer to an order page
+            // with no payment details - would be worse than failing here.
             return array('result' => 'failure');
         }
 
@@ -303,6 +307,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
      *                   concurrent request while we waited on the lock)
      *  - 'busy':        another request holds the lock mid-initialization
      *  - 'missing':     the order does not exist (deleted mid-flight)
+     *  - 'not_payable': the order is not awaiting payment (cancelled, failed,
+     *                   refunded or already paid) - never initialize it
      *  - 'failed':      initialization failed; the order was marked wc-failed
      *                   under the lock; 'message' is the customer-facing error
      *
@@ -316,6 +322,16 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $order = wc_get_order($order_id);
         if (!$order) {
             return array('outcome' => 'missing', 'message' => '');
+        }
+        // Only an order that is actually awaiting payment may be initialized.
+        // Without this, hitting the order-received or order-pay URL of a
+        // cancelled, failed, refunded or already-paid order would allocate a
+        // fresh address and push it back to on-hold - reviving a dead order,
+        // asking the customer to pay again, and putting a monitored address on
+        // an order nobody is watching.
+        if (!$order->has_status(array('pending', 'on-hold'))) {
+            NMM_Util::log(__FILE__, __LINE__, 'Not initializing payment for order ' . $order_id . ': status is ' . $order->get_status() . ', which is not awaiting payment.');
+            return array('outcome' => 'not_payable', 'message' => '');
         }
         if (!empty($order->get_meta('wallet_address'))) {
             return array('outcome' => 'already', 'message' => '');
