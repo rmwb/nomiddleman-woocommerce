@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-21T09:09:10+00:00\n"
+"POT-Creation-Date: 2026-08-21T09:49:09+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: nomiddleman-crypto-payments-for-woocommerce\n"
@@ -392,6 +392,38 @@ msgstr ""
 msgid "Order Cancellation Timer (hr)"
 msgstr ""
 
+#: src/NMM_Blockchain.php:2840
+msgid "Solana RPC URL is empty."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2851
+msgid "Solana RPC URL must use http or https."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2855
+msgid "Solana RPC URL is malformed."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2863
+msgid "Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2869
+msgid "Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2893
+msgid "Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2906
+msgid "Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMM_SOL_ALLOW_PRIVATE_RPC (or use the nmm_sol_allow_private_rpc filter) to allow a validator on this machine or LAN."
+msgstr ""
+
+#: src/NMM_Blockchain.php:2964
+msgid "Solana RPC endpoint cannot be safely reached on this host."
+msgstr ""
+
 #: src/NMM_Blocks_Support.php:52
 #: src/NMM_Gateway.php:123
 msgid "Choose a cryptocurrency"
@@ -501,119 +533,119 @@ msgstr ""
 msgid "This order is no longer awaiting payment. Please do not send any funds. If you believe this is an error, contact the store."
 msgstr ""
 
-#: src/NMM_Gateway.php:466
+#: src/NMM_Gateway.php:476
 msgid "We could not determine which cryptocurrency you selected. Please return to checkout and place the order again."
 msgstr ""
 
-#: src/NMM_Gateway.php:522
-#: src/NMM_Gateway.php:527
+#: src/NMM_Gateway.php:532
+#: src/NMM_Gateway.php:537
 msgid "Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator."
 msgstr ""
 
 #. translators: 1: wallet address, 2: amount, 3: cryptocurrency ticker
-#: src/NMM_Gateway.php:537
+#: src/NMM_Gateway.php:547
 #, php-format
 msgid "Privacy Mode (HD wallet) address %1$s is awaiting payment of %2$s %3$s."
 msgstr ""
 
-#: src/NMM_Gateway.php:564
+#: src/NMM_Gateway.php:574
 msgid "We could not set up payment monitoring for your order, so no payment address has been issued. This order has been cancelled and you have not been charged. Please try again or contact the site administrator."
 msgstr ""
 
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address
-#: src/NMM_Gateway.php:570
+#: src/NMM_Gateway.php:580
 #, php-format
 msgid "Awaiting payment of %1$s %2$s to payment address %3$s."
 msgstr ""
 
 #. translators: %s: error message
-#: src/NMM_Gateway.php:606
+#: src/NMM_Gateway.php:616
 #, php-format
 msgid "Error Message: %s"
 msgstr ""
 
-#: src/NMM_Gateway.php:627
+#: src/NMM_Gateway.php:637
 msgid "Something went wrong."
 msgstr ""
 
-#: src/NMM_Gateway.php:640
+#: src/NMM_Gateway.php:650
 msgid "Payment received - thank you! Your order is being processed."
 msgstr ""
 
-#: src/NMM_Gateway.php:652
+#: src/NMM_Gateway.php:662
 msgid "This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store."
 msgstr ""
 
-#: src/NMM_Gateway.php:707
+#: src/NMM_Gateway.php:717
 msgid "PAYMENT DETAILS"
 msgstr ""
 
-#: src/NMM_Gateway.php:708
-#: src/NMM_Gateway.php:730
+#: src/NMM_Gateway.php:718
+#: src/NMM_Gateway.php:740
 msgid "Address:"
 msgstr ""
 
-#: src/NMM_Gateway.php:709
-#: src/NMM_Gateway.php:733
-#: src/NMM_Gateway.php:793
+#: src/NMM_Gateway.php:719
+#: src/NMM_Gateway.php:743
+#: src/NMM_Gateway.php:803
 msgid "Currency:"
 msgstr ""
 
-#: src/NMM_Gateway.php:710
-#: src/NMM_Gateway.php:736
-#: src/NMM_Gateway.php:805
+#: src/NMM_Gateway.php:720
+#: src/NMM_Gateway.php:746
+#: src/NMM_Gateway.php:815
 msgid "Total:"
 msgstr ""
 
-#: src/NMM_Gateway.php:711
+#: src/NMM_Gateway.php:721
 msgid "Scan a QR code for this payment on your order page:"
 msgstr ""
 
-#: src/NMM_Gateway.php:722
+#: src/NMM_Gateway.php:732
 msgid "Additional Details"
 msgstr ""
 
-#: src/NMM_Gateway.php:724
+#: src/NMM_Gateway.php:734
 msgid "QR Code Payment:"
 msgstr ""
 
-#: src/NMM_Gateway.php:726
+#: src/NMM_Gateway.php:736
 msgid "Payment QR code"
 msgstr ""
 
-#: src/NMM_Gateway.php:739
+#: src/NMM_Gateway.php:749
 msgid "View payment details and QR code on your order page"
 msgstr ""
 
-#: src/NMM_Gateway.php:775
+#: src/NMM_Gateway.php:785
 msgid "Cryptocurrency payment details"
 msgstr ""
 
-#: src/NMM_Gateway.php:778
+#: src/NMM_Gateway.php:788
 msgid "QR Code payment:"
 msgstr ""
 
-#: src/NMM_Gateway.php:784
+#: src/NMM_Gateway.php:794
 msgid "Wallet Address:"
 msgstr ""
 
-#: src/NMM_Gateway.php:835
+#: src/NMM_Gateway.php:845
 msgid "Pay in browser wallet"
 msgstr ""
 
-#: src/NMM_Gateway.php:839
+#: src/NMM_Gateway.php:849
 msgid "Open in Solana wallet"
 msgstr ""
 
-#: src/NMM_Gateway.php:846
+#: src/NMM_Gateway.php:856
 msgid "Waiting for payment… this page updates automatically."
 msgstr ""
 
-#: src/NMM_Gateway.php:859
+#: src/NMM_Gateway.php:869
 msgid "We could not display your payment details for this order. Please contact the store for assistance."
 msgstr ""
 
-#: src/NMM_Gateway.php:870
+#: src/NMM_Gateway.php:880
 msgid "No price API selected. Please contact plug-in support."
 msgstr ""
 
@@ -649,7 +681,7 @@ msgstr ""
 
 #. translators: 1: cryptocurrency ticker, 2: number of hours
 #: src/NMM_Hd.php:632
-#: src/NMM_Payment.php:1419
+#: src/NMM_Payment.php:1467
 #, php-format
 msgid "Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address."
 msgstr ""
@@ -696,12 +728,12 @@ msgid "Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s"
 msgstr ""
 
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: number of transactions, 4: date/time, 5: transaction hashes
-#: src/NMM_Payment.php:1107
+#: src/NMM_Payment.php:1139
 #, php-format
 msgid "Order payment of %1$s %2$s verified across %3$d transactions at %4$s. Transaction Hashes: %5$s"
 msgstr ""
 
-#: src/NMM_Payment.php:1254
+#: src/NMM_Payment.php:1286
 msgid "Could not reach external service to do auto payment processing."
 msgstr ""
 

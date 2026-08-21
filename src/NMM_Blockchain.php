@@ -2837,7 +2837,7 @@ class NMM_Blockchain {
 		$url = trim((string) $url);
 
 		if ($url === '') {
-			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL is empty.');
+			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL is empty.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		$parts = function_exists('wp_parse_url') ? wp_parse_url($url) : parse_url($url);
@@ -2848,11 +2848,11 @@ class NMM_Blockchain {
 		// host at all - is reported as the scheme problem it is.
 		if (is_array($parts) && !empty($parts['scheme'])
 			&& !in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
-			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL must use http or https.');
+			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL must use http or https.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
-			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL is malformed.');
+			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL is malformed.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		// Credentials in the URL would be sent to whatever the host resolves to
@@ -2860,13 +2860,13 @@ class NMM_Blockchain {
 		// path or the query string instead (Helius ?api-key=..., QuickNode
 		// /<token>/), so there is no legitimate reason for userinfo here.
 		if (isset($parts['user']) || isset($parts['pass'])) {
-			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead.');
+			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		if (!class_exists('NMM_Monero') || !method_exists('NMM_Monero', 'validate_rpc_url')) {
 			// Fail closed: without the shared guard we cannot vet the address, and
 			// guessing with a weaker check is exactly what this code exists to avoid.
-			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused.');
+			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		// Neutralise Monero's private-target policy for this call so the decision
@@ -2890,7 +2890,7 @@ class NMM_Blockchain {
 		if (is_wp_error($target)) {
 			// Scheme and shape were already checked above, so the shared guard can
 			// only be objecting to the address itself.
-			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted.');
+			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		if (!empty($target['is_private'])) {
@@ -2903,7 +2903,7 @@ class NMM_Blockchain {
 			$allow = (bool) apply_filters('nmm_sol_allow_private_rpc', $allow, $url, $target['host'], $target['ip']);
 
 			if (!$allow) {
-				return new WP_Error('nmm_sol_rpc', 'Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMM_SOL_ALLOW_PRIVATE_RPC (or use the nmm_sol_allow_private_rpc filter) to allow a validator on this machine or LAN.');
+				return new WP_Error('nmm_sol_rpc', __('Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMM_SOL_ALLOW_PRIVATE_RPC (or use the nmm_sol_allow_private_rpc filter) to allow a validator on this machine or LAN.', 'nomiddleman-crypto-payments-for-woocommerce'));
 			}
 		}
 
@@ -2949,6 +2949,21 @@ class NMM_Blockchain {
 				? NMM_Monero::plan_request($target, $hasCurl, $canPin, false)
 				: array('transport' => 'reject', 'pin' => false);
 
+			// FAIL CLOSED. The planner says reject when it cannot guarantee the
+			// connection reaches the address we vetted - a public hostname on a
+			// host without cURL, so nothing can pin it. reject_unsafe_urls is
+			// NOT a substitute: wp_http_validate_url() does its own DNS lookup
+			// and the streams transport resolves the name AGAIN when it
+			// connects, so a hostile DNS server can answer publicly for the
+			// check and return loopback, LAN or 169.254.169.254 for the
+			// connection. Refuse instead; the caller treats this like any other
+			// failed fetch and marks the address unswept, so a refused endpoint
+			// can never be mistaken for a completed sweep.
+			if ($plan['transport'] === 'reject') {
+				NMM_Util::log(__FILE__, __LINE__, 'Solana RPC request refused: ' . $target['host'] . ' is a hostname this host cannot pin (no cURL), so the address it resolves to at connect time cannot be guaranteed. Use an IP-literal endpoint, or install the cURL extension.', 'error');
+				return new WP_Error('nmm_sol_unpinnable', __('Solana RPC endpoint cannot be safely reached on this host.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			}
+
 			if ($plan['transport'] === 'curl' && !empty($plan['pin'])) {
 				$pin = self::sol_install_pin($target);
 			}
@@ -2966,13 +2981,16 @@ class NMM_Blockchain {
 			}
 		}
 
-		$response = self::api_post($target['url'], $args, false);
-
-		if ($pin !== null) {
-			self::sol_remove_pin($pin);
+		try {
+			return self::api_post($target['url'], $args, false);
 		}
-
-		return $response;
+		finally {
+			// Must run even if the HTTP stack throws: a pin left installed would
+			// keep rewriting DNS for every later request in this process.
+			if ($pin !== null) {
+				self::sol_remove_pin($pin);
+			}
+		}
 	}
 
 	// Pin the next cURL request to this host to the validated IP. Returns the

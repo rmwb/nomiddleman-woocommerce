@@ -50,8 +50,8 @@ class NMM_Autoloader {
 	 * had. Keeping them out preserves exactly today's behaviour.
 	 */
 	private static $notAutoloadable = array(
-		'NMM_Gateway'        => true,
-		'NMM_Blocks_Support' => true,
+		'nmm_gateway'        => true,
+		'nmm_blocks_support' => true,
 	);
 
 	/**
@@ -65,17 +65,23 @@ class NMM_Autoloader {
 	public static function load($class) {
 		// Every class_exists()/new in the request reaches this callback, so
 		// bail on anything that is not ours before touching the filesystem.
-		if (strpos($class, 'NMM_') !== 0) {
+		if (stripos($class, 'NMM_') !== 0) {
 			return;
 		}
 
-		if (isset(self::$notAutoloadable[$class])) {
+		// PHP class names are CASE-INSENSITIVE, so class_exists('NMM_GATEWAY')
+		// reaches here for the same class as NMM_Gateway. Compare the deny-list
+		// case-insensitively or the guard is trivially side-stepped: on a
+		// case-insensitive filesystem the mis-cased name still resolves to
+		// NMM_Gateway.php, which then fatals on its missing WooCommerce parent
+		// exactly as the deny-list exists to prevent.
+		if (isset(self::$notAutoloadable[strtolower($class)])) {
 			return;
 		}
 
 		// Defensive: only ever turn a bare NMM_ identifier into a file name, so
 		// no namespace separator or directory traversal can reach the path.
-		if (!preg_match('/^NMM_[A-Za-z0-9_]+$/', $class)) {
+		if (!preg_match('/^NMM_[A-Za-z0-9_]+$/i', $class)) {
 			return;
 		}
 
