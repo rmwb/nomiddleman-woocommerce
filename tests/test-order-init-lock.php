@@ -265,7 +265,23 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order') && class_e
 	$retryOrder->save();
 	$retryOrder->update_status('wc-failed');
 	$retryId = $retryOrder->get_id();
-	$retryResult = $gwFailed->initialize_order_payment($retryId);
+	// The receipt/order-received path must NOT revive a failed order: it calls
+	// the initializer without the retry flag. WooCommerce fires the thank-you
+	// hook for failed orders too, so a customer holding the order key could
+	// otherwise revisit that URL after the goods sold out and push the order
+	// back to on-hold, reserving stock the merchant no longer has.
+	$receiptResult = $gwFailed->initialize_order_payment($retryId);
+	lok('receipt path refuses to revive a failed order',
+		isset($receiptResult['outcome']) && $receiptResult['outcome'] === 'not_payable',
+		'outcome=' . (isset($receiptResult['outcome']) ? $receiptResult['outcome'] : '?'));
+	$receiptCheck = wc_get_order($retryId);
+	$receiptCheck->read_meta_data(true);
+	lok('  and allocated nothing', empty($receiptCheck->get_meta('wallet_address')));
+	lok('  and left it failed', $receiptCheck->has_status('failed'), 'status=' . $receiptCheck->get_status());
+
+	// The payment SUBMISSION path (checkout / order-pay) may retry it - that is
+	// where WooCommerce has already re-checked stock for a failed order.
+	$retryResult = $gwFailed->initialize_order_payment($retryId, null, true);
 	$retryOutcome = isset($retryResult['outcome']) ? $retryResult['outcome'] : '?';
 	$retryMessage = isset($retryResult['message']) ? $retryResult['message'] : '';
 

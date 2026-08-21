@@ -369,8 +369,32 @@ class NMM_Address {
 	 * Everything else (every other coin, and ZEC's transparent t1/t3 forms)
 	 * is verifiable, so this returns true whenever validate() does.
 	 */
+	/**
+	 * Format check that mirrors NMM_Cryptocurrencies::is_valid_wallet_address
+	 * routing (tokens as EVM, everything else through validate()) without its
+	 * throw for an unknown id - callers here must get a boolean, never an
+	 * exception, because they run at checkout and at settings-save time.
+	 */
+	private static function format_valid_for($cryptoId, $address) {
+		if (class_exists("NMM_Cryptocurrencies")) {
+			$cryptos = NMM_Cryptocurrencies::get();
+			if (array_key_exists($cryptoId, $cryptos) && $cryptos[$cryptoId]->is_erc20_token()) {
+				return self::is_evm($address);
+			}
+		}
+
+		return self::is_known($cryptoId) && self::validate($cryptoId, $address);
+	}
+
 	public static function is_autopay_verifiable_form($cryptoId, $address) {
-		if (!self::validate($cryptoId, $address)) {
+		// Route the FORMAT check exactly as NMM_Cryptocurrencies does, not
+		// through self::validate() directly: the ERC-20 tokens (USDT, USDC,
+		// DAI, LINK and every multi-network stablecoin - 19 of the 58 coins)
+		// have no case in validate(), they are checked as EVM addresses one
+		// level up. Calling validate() here refused every one of them, which
+		// disabled the coin on save and made the carousel skip its seats at
+		// checkout.
+		if (!self::format_valid_for($cryptoId, $address)) {
 			return false;
 		}
 

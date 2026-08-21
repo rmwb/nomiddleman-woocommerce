@@ -937,6 +937,37 @@ class NMM_Payment {
 	 * transaction-to-order binding (the 2.11.0 consumed-tx table), not a
 	 * timestamp heuristic.
 	 */
+	/**
+	 * Can Autopay actually verify a payment to this address?
+	 *
+	 * Used as a brake on auto-cancellation, not on allocation. Returns true
+	 * when we cannot tell (unknown coin, validator unavailable): this gates an
+	 * irreversible action, so an indeterminate answer must not silently stop
+	 * ordinary expiry from working.
+	 */
+	private static function address_verifiable_for_expiry($cryptoId, $address) {
+		if (!class_exists('NMM_Address')) {
+			return true;
+		}
+
+		// Only a WELL-FORMED address that the explorer still cannot report on
+		// earns the reprieve - the Zcash shielded/Unified case, where the
+		// customer can pay successfully and the merchant really does receive
+		// the funds, so cancelling would kill a paid order.
+		//
+		// A MALFORMED address does not qualify and expires as it always has.
+		// It is unverifiable for a different reason: no wallet will send to a
+		// failed checksum, so there is no payment to protect - and treating
+		// those as unverifiable too would quietly stop expiry for every order
+		// a store issued under the older, looser address rules, leaving unpaid
+		// orders to accumulate forever.
+		if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
+			return true;
+		}
+
+		return NMM_Address::is_autopay_verifiable_form($cryptoId, $address);
+	}
+
 	private static function address_is_per_order($cryptoId) {
 		return $cryptoId === "XMR";
 	}
@@ -990,8 +1021,9 @@ class NMM_Payment {
 		// silently become unsafe with no test failing. This asks the data
 		// instead - an address that has EVER carried more than one order,
 		// whatever their statuses, is by definition reused.
-		if ($paymentRepo->count_rows_for_address($cryptoId, $address) > 1) {
-			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' has served more than one order, so it is not per-order after all; not aggregating.', 'warning');
+		$rowsForAddress = $paymentRepo->count_rows_for_address($cryptoId, $address);
+		if ($rowsForAddress === null || $rowsForAddress > 1) {
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ($rowsForAddress === null ? ' could not be confirmed as per-order (count query failed)' : ' has served more than one order, so it is not per-order after all') . '; not aggregating.', 'warning');
 			return;
 		}
 
@@ -1373,6 +1405,22 @@ class NMM_Payment {
 					// Terminal non-paid or otherwise not awaiting payment - reconcile
 					// the record but leave the order alone.
 					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
+					continue;
+				}
+
+				// NEVER auto-cancel an order whose address Autopay cannot look up.
+				// A store upgrading from a release with looser address rules can
+				// still hold unpaid orders that were issued an address the
+				// explorer cannot report on - a Zcash shielded or Unified address
+				// is the known case. Those orders escaped the carousel long before
+				// this code runs, so refusing to hand such an address out at
+				// allocation time does not help them: the address is already on
+				// the order and the customer may already have paid it. Cancelling
+				// is the one irreversible thing we could do, and it would cancel a
+				// GENUINELY PAID order. Leave it for the merchant, who can see the
+				// payment in their own wallet.
+				if (!self::address_verifiable_for_expiry($cryptoId, $address)) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: not cancelling ' . $cryptoId . ' order ' . $orderId . ' - its payment address (' . $address . ') cannot be checked on a public explorer, so an actual payment would be invisible to us. Please confirm this order in your own wallet and complete or cancel it by hand.', 'warning');
 					continue;
 				}
 

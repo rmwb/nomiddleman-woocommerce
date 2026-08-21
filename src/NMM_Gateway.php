@@ -190,7 +190,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // meta after the lock holder had already read it, leaving the order
         // labelled with one coin while the allocated address and amount
         // belong to another. Under the lock, first commit wins.
-        $initResult = $this->initialize_order_payment($order_id, $selectedCryptoId);
+        $initResult = $this->initialize_order_payment($order_id, $selectedCryptoId, true);
 
         if ($initResult['outcome'] === 'failed') {
             // The order was already marked failed under the init lock. Surface
@@ -343,15 +343,25 @@ class NMM_Gateway extends WC_Payment_Gateway {
      * may since have been recycled to someone else, so re-displaying it could
      * credit a stranger's order.
      */
-    private function order_can_initialize($order) {
+    private function order_can_initialize($order, $allowFailedRetry = false) {
         if (NMM_Hd::order_awaits_payment($order)) {
             return true;
         }
 
-        return $order->has_status('failed') && empty($order->get_meta('wallet_address'));
+        // The failed-order carve-out is ONLY for a real payment submission -
+        // checkout or WooCommerce's order-pay form, both of which re-check
+        // stock for a failed order before they reach us. The order-received
+        // page must never use it: WooCommerce fires the thank-you hook for a
+        // failed order too, so a customer holding the order key could revisit
+        // that URL after the goods sold out and quietly move the order back to
+        // on-hold - reserving stock the merchant no longer has and soliciting
+        // payment for something unfulfillable.
+        return $allowFailedRetry
+            && $order->has_status('failed')
+            && empty($order->get_meta('wallet_address'));
     }
 
-    public function initialize_order_payment($order_id, $requestedCryptoId = null) {
+    public function initialize_order_payment($order_id, $requestedCryptoId = null, $allowFailedRetry = false) {
         $order = wc_get_order($order_id);
         if (!$order) {
             return array('outcome' => 'missing', 'message' => '');
@@ -362,7 +372,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // fresh address and push it back to on-hold - reviving a dead order,
         // asking the customer to pay again, and putting a monitored address on
         // an order nobody is watching.
-        if (!$this->order_can_initialize($order)) {
+        if (!$this->order_can_initialize($order, $allowFailedRetry)) {
             NMM_Util::log(__FILE__, __LINE__, 'Not initializing payment for order ' . $order_id . ': status is ' . $order->get_status() . ', which is not awaiting payment.');
             return array('outcome' => 'not_payable', 'message' => '');
         }
@@ -403,7 +413,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // could have been cancelled, failed, refunded or paid - by an
                 // admin, a webhook, or the verifier. Allocating now would revive
                 // a dead order and push it back to on-hold.
-                if (!$this->order_can_initialize($order)) {
+                if (!$this->order_can_initialize($order, $allowFailedRetry)) {
                     NMM_Util::log(__FILE__, __LINE__, 'Order ' . $order_id . ' became ' . $order->get_status() . ' while waiting for the init lock; not initializing payment.');
                     return array('outcome' => 'not_payable', 'message' => '');
                 }
