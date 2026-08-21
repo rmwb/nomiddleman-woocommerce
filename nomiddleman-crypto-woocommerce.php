@@ -21,6 +21,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// Register class autoloading first, before anything else in this file, so that
+// every later hook callback - including the activation, deactivation and
+// uninstall hooks, which run without WooCommerce and therefore without
+// NMM_init_gateways ever executing - can resolve NMM_Settings and the rest of
+// the plugin's classes on demand. See src/NMM_Autoloader.php for what stays an
+// explicit require and why.
+require_once plugin_dir_path(__FILE__) . 'src/NMM_Autoloader.php';
+NMM_Autoloader::register(plugin_dir_path(__FILE__) . 'src');
+
 add_action('init', 'NMM_load_textdomain');
 add_action('plugins_loaded', 'NMM_init_gateways');
 add_action('before_woocommerce_init', 'NMM_declare_wc_feature_compatibility');
@@ -42,7 +51,11 @@ function NMM_register_blocks_support() {
         return;
     }
 
-    require_once(plugin_basename('src/NMM_Blocks_Support.php'));
+    // Not autoloaded: NMM_Blocks_Support extends AbstractPaymentMethodType, so
+    // it can only be loaded once WooCommerce Blocks is present - which is what
+    // the guard above establishes. Keeping the require here means the file is
+    // never reachable through a class_exists() on a request without Blocks.
+    require_once plugin_dir_path(__FILE__) . 'src/NMM_Blocks_Support.php';
 
     add_action('woocommerce_blocks_payment_method_type_registration', function($payment_method_registry) {
         $payment_method_registry->register(new NMM_Blocks_Support());
@@ -58,8 +71,14 @@ define('NMM_SOL_RETRY_TABLE', 'nmmpro_sol_retry');
 define('NMM_LOGFILE_NAME', 'nmm.log');
 define('NMM_REDUX_ID', 'nmmpro_redux_options');
 define('NMM_EXTENSION_KEY', 'nmm_registered_extensions');
+// Directory signature the cached extension list in NMM_EXTENSION_KEY was built
+// from; see NMM_Register_Extensions.
+define('NMM_EXTENSION_SIGNATURE_KEY', 'nmm_extensions_signature');
 
-require_once(plugin_basename('src/NMM_Settings.php'));
+// NMM_Settings was required here, outside NMM_init_gateways, because the
+// activation and uninstall hooks run without WooCommerce and so never reach
+// that function. The autoloader registered at the top of this file covers that
+// - and every other NMM_ class - on demand, from an absolute path.
 
 function NMM_init_gateways(){
 
@@ -75,67 +94,63 @@ function NMM_init_gateways(){
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
-    // Vendor
+    $pluginDir = plugin_dir_path(__FILE__);
+
+    // Vendor. Never autoloaded: these bundled libraries do not use the NMM_
+    // prefix, several files define many classes at once or a class whose name
+    // does not match the file (phpqrcode.php defines QRinput/QRcode/..., and
+    // CashAddress.php defines the namespaced \CashAddress\CashAddress), and
+    // HdHelper.php has load-time side effects the siblings depend on - it
+    // define()s USE_EXT, which CurveFp and NumberTheory read. None of that can
+    // be mapped from a class name to a file, so it stays explicit, guarded by
+    // class_exists() so a host that already ships one of these wins, and in
+    // exactly this order.
     if (!class_exists('bcmath_Utils')) {
-        require_once(plugin_basename('src/vendor/bcmath_Utils.php'));
+        require_once $pluginDir . 'src/vendor/bcmath_Utils.php';
     }
     if (!class_exists('CurveFp')) {
-        require_once(plugin_basename('src/vendor/CurveFp.php'));
+        require_once $pluginDir . 'src/vendor/CurveFp.php';
     }
     if (!class_exists('HdHelper')) {
-        require_once(plugin_basename('src/vendor/HdHelper.php'));
+        require_once $pluginDir . 'src/vendor/HdHelper.php';
     }
     if (!class_exists('gmp_Utils')) {
-        require_once(plugin_basename('src/vendor/gmp_Utils.php'));
+        require_once $pluginDir . 'src/vendor/gmp_Utils.php';
     }
     if (!class_exists('NumberTheory')) {
-        require_once(plugin_basename('src/vendor/NumberTheory.php'));
+        require_once $pluginDir . 'src/vendor/NumberTheory.php';
     }
     if (!class_exists('Point')) {
-        require_once(plugin_basename('src/vendor/Point.php'));
+        require_once $pluginDir . 'src/vendor/Point.php';
     }
     if (!class_exists('\CashAddress\CashAddress')) {
-        require_once(plugin_basename('src/vendor/CashAddress.php'));
+        require_once $pluginDir . 'src/vendor/CashAddress.php';
     }
     if (!class_exists('QRinput')) {
-        require_once(plugin_basename('src/vendor/phpqrcode.php'));
+        require_once $pluginDir . 'src/vendor/phpqrcode.php';
     }
 
-    // Http
-    require_once(plugin_basename('src/NMM_Exchange.php'));
-    require_once(plugin_basename('src/NMM_Blockchain.php'));
+    // Everything else in src/ is one NMM_-prefixed class in a file of the same
+    // name, so NMM_Autoloader (registered at the top of this file) resolves it
+    // on first use and there is no load order left to maintain - NMM_Address
+    // before NMM_Validation, NMM_Cryptocurrency before NMM_Cryptocurrencies and
+    // the rest are now guaranteed by construction. Only the files below cannot
+    // be autoloaded, and they keep their original position and order:
+    //
+    //  - NMM_Hooks.php / NMM_Cron.php define plain functions, not classes; the
+    //    hook registrations right below reference those functions by name.
+    //  - NMM_Admin.php calls NMM_Admin::init() at file scope, so nothing would
+    //    ever reference the class to trigger an autoload and the admin menu,
+    //    settings and notice hooks would silently never be registered.
+    //  - NMM_Gateway.php extends WC_Payment_Gateway. Required here, after the
+    //    WC_Payment_Gateway guard at the top of this function and before
+    //    WooCommerce runs the woocommerce_payment_gateways filter, so the class
+    //    can never be pulled in on a request where its parent does not exist.
+    require_once $pluginDir . 'src/NMM_Hooks.php';
+    require_once $pluginDir . 'src/NMM_Cron.php';
+    require_once $pluginDir . 'src/NMM_Admin.php';
+    require_once $pluginDir . 'src/NMM_Gateway.php';
 
-    // Database
-    require_once(plugin_basename('src/NMM_Carousel_Repo.php'));
-    require_once(plugin_basename('src/NMM_Hd_Repo.php'));
-    require_once(plugin_basename('src/NMM_Payment_Repo.php'));
-    require_once(plugin_basename('src/NMM_Sol_Retry_Repo.php'));
-
-    // Simple Objects
-    require_once(plugin_basename('src/NMM_Cryptocurrency.php'));
-    require_once(plugin_basename('src/NMM_Transaction.php'));
-    
-    // Business Logic
-    require_once(plugin_basename('src/NMM_Address.php'));
-    require_once(plugin_basename('src/NMM_Cryptocurrencies.php'));
-    require_once(plugin_basename('src/NMM_Carousel.php'));
-    require_once(plugin_basename('src/NMM_Hd.php'));    
-    require_once(plugin_basename('src/NMM_Payment.php'));
-
-    // Misc
-    require_once(plugin_basename('src/NMM_Qr.php'));
-    require_once(plugin_basename('src/NMM_Monero.php'));
-    require_once(plugin_basename('src/NMM_Util.php'));
-    require_once(plugin_basename('src/NMM_Hooks.php'));
-    require_once(plugin_basename('src/NMM_Cron.php'));
-    require_once(plugin_basename('src/NMM_Admin.php'));
-    require_once(plugin_basename('src/NMM_Settings.php'));
-    
-    require_once(plugin_basename('src/NMM_Validation.php'));
-
-    // Core
-    require_once(plugin_basename('src/NMM_Gateway.php'));
-    
     add_filter ('cron_schedules', 'NMM_add_interval');
 
     add_action('NMM_cron_hook', 'NMM_do_cron_job');
@@ -276,6 +291,10 @@ function NMM_activate_site() {
     NMM_create_carousel_table();
     NMM_maybe_create_sol_retry_table();
     NMM_maybe_add_payment_indexes();
+    // Activation is the one moment we know the plugin directory was just
+    // written to, so rebuild the cached extension list here rather than leaving
+    // it to the directory-signature check on the next front-end request.
+    NMM_refresh_extension_cache();
 }
 
 // Run a callable once per site. On multisite it visits every blog (the same
@@ -813,12 +832,11 @@ function NMM_create_carousel_table() {
 
     $wpdb->query($query);
 
-    require_once(plugin_basename('src/NMM_Cryptocurrency.php'));
-    require_once(plugin_basename('src/NMM_Carousel_Repo.php'));
-    require_once(plugin_basename('src/NMM_Util.php'));
-    require_once(plugin_basename('src/NMM_Address.php'));
-    require_once(plugin_basename('src/NMM_Cryptocurrencies.php'));
-    
+    // This runs from activation, where WooCommerce may be absent and
+    // NMM_init_gateways therefore never ran, so the classes below used to be
+    // required explicitly here. The autoloader registered at the top of this
+    // file loads each of them (NMM_Carousel_Repo, NMM_Cryptocurrencies,
+    // NMM_Cryptocurrency, NMM_Address, NMM_Util, NMM_Settings) on first use.
     NMM_Carousel_Repo::init();
 
     $cryptos = NMM_Cryptocurrencies::get();
@@ -838,24 +856,108 @@ function NMM_create_carousel_table() {
     }
 }
 
-function NMM_Register_Extensions() {    
-    $extensionsDir = NMM_ABS_PATH . '/src/extensions/';
-    $extensions = scandir($extensionsDir);
-    $extensionsToLoad = [];
-    if (!is_array($extensions)) {
-        return;
+// Absolute path to the extensions directory, with a trailing slash. Uses
+// plugin_dir_path(__FILE__) rather than NMM_ABS_PATH because that constant is
+// only defined inside NMM_init_gateways, which never runs when WooCommerce is
+// inactive - and activation still has to be able to refresh the cache.
+function NMM_extensions_dir() {
+    return plugin_dir_path(__FILE__) . 'src/extensions/';
+}
+
+// A cheap stand-in for "the extensions directory listing". One stat() instead
+// of a scandir(): a directory's mtime moves whenever an entry inside it is
+// added, removed or renamed, which is exactly when the cached list can go
+// stale - including an extension dropped in over FTP that never runs
+// activation. Changes *within* an extension's own folder do not move it, and
+// do not need to: the cache only stores the folder names.
+function NMM_extensions_dir_signature() {
+    $extensionsDir = NMM_extensions_dir();
+
+    if (!is_dir($extensionsDir)) {
+        return 'missing';
     }
-    foreach ($extensions as $extension) {
-        if ( $extension === '.' || $extension === '..' || ! is_dir( $extensionsDir . $extension ) || substr( $extension, 0, 1 ) === '.' || substr( $extension, 0, 1 ) === '@' ) {
+
+    $mtime = filemtime($extensionsDir);
+
+    return ($mtime === false) ? 'unknown' : (string) $mtime;
+}
+
+// Rescan src/extensions/ and record the directory listing in the long-standing
+// NMM_EXTENSION_KEY option (extensions themselves read it, so its shape - a
+// list of directory names - must not change) together with the signature it
+// was built from. Returns the list. Deliberately includes nothing, so it is
+// safe to call from activation, where WooCommerce may be absent.
+function NMM_refresh_extension_cache() {
+    $extensionsDir = NMM_extensions_dir();
+    $entries = is_dir($extensionsDir) ? scandir($extensionsDir) : false;
+
+    // Same guard as the pre-cache version: a scandir() that fails must not be
+    // allowed to rewrite - and thereby wipe - the registered-extensions option.
+    // Fall back to the last known-good list so a paid extension keeps loading.
+    if (!is_array($entries)) {
+        return (array) get_option(NMM_EXTENSION_KEY, array());
+    }
+
+    $extensionsToLoad = array();
+    foreach ($entries as $entry) {
+        if ( $entry === '.' || $entry === '..' || ! is_dir( $extensionsDir . $entry ) || substr( $entry, 0, 1 ) === '.' || substr( $entry, 0, 1 ) === '@' ) {
             continue;
         }
 
-        $extensionsToLoad[] = $extension;
-        @include_once(plugin_basename('src/extensions/' . $extension . '/NMM_' . ucfirst($extension) . '.php'));
+        $extensionsToLoad[] = $entry;
     }
 
     if (get_option(NMM_EXTENSION_KEY) !== $extensionsToLoad) {
         update_option(NMM_EXTENSION_KEY, $extensionsToLoad);
+    }
+
+    $signature = NMM_extensions_dir_signature();
+    if (get_option(NMM_EXTENSION_SIGNATURE_KEY, null) !== $signature) {
+        update_option(NMM_EXTENSION_SIGNATURE_KEY, $signature);
+    }
+
+    return $extensionsToLoad;
+}
+
+// Load any extension installed as src/extensions/<name>/NMM_<Name>.php - the
+// legacy paid "Privacy extension" pathway - and keep NMM_EXTENSION_KEY in sync.
+//
+// This used to scandir() the directory on every single request. The listing is
+// now cached in that same option and rebuilt only when it can actually have
+// changed: when the directory signature moves, when nothing is cached yet, on
+// wp-admin page loads (excluding admin-ajax, which the thank-you page polls
+// every 15 seconds), and from activation via NMM_refresh_extension_cache().
+function NMM_Register_Extensions() {
+    $extensionsDir = NMM_extensions_dir();
+
+    $rescan = (is_admin() && !wp_doing_ajax())
+        || get_option(NMM_EXTENSION_SIGNATURE_KEY, null) !== NMM_extensions_dir_signature();
+
+    $extensionsToLoad = $rescan
+        ? NMM_refresh_extension_cache()
+        : (array) get_option(NMM_EXTENSION_KEY, array());
+
+    foreach ($extensionsToLoad as $extension) {
+        // The names come from scandir(), but they round-trip through an option,
+        // so re-check that nothing can escape the extensions directory before
+        // building a path that is about to be include()d.
+        if (!is_string($extension) || $extension === '' || strpbrk($extension, '/\\') !== false || strpos($extension, '..') !== false) {
+            continue;
+        }
+
+        $extensionFile = $extensionsDir . $extension . '/NMM_' . ucfirst($extension) . '.php';
+
+        // Was @include_once: a missing or unreadable extension file silently
+        // did nothing, so a half-installed paid extension was indistinguishable
+        // from one that had simply been switched off. Log it instead
+        // (NMM_Util::log de-duplicates, so this cannot flood the log) and carry
+        // on - one broken extension must not take the gateway down with it.
+        if (!is_readable($extensionFile)) {
+            NMM_Util::log(__FILE__, __LINE__, 'Extension "' . $extension . '" is registered but ' . $extensionFile . ' is missing or unreadable; skipping it.', 'warning');
+            continue;
+        }
+
+        include_once($extensionFile);
     }
 }
 

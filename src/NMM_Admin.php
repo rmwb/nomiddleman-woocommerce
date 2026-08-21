@@ -226,14 +226,17 @@ class NMM_Admin {
 
                         <div class="nmm-tab-panel" id="nmm-tab-pricing">
                             <h2><?php esc_html_e('Pricing Options', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
-                            <p class="description"><?php esc_html_e('Price is the average of the APIs selected. At least one must be selected. Adding more can slow down thank you page loading.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+                            <p class="description"><?php esc_html_e('Price is agreed across the APIs selected: with three or more the median is used and sources far from it are discarded, with two they must agree closely, and with one there is no cross-check at all. At least one must be selected; two or more is strongly recommended. Adding more can slow down thank you page loading.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+                            <p class="description"><?php esc_html_e('Sources marked "quotes USDT" price the coin against Tether rather than US dollars. That is normally a rounding difference, but it can drift if USDT loses its peg.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                             <?php
+                            /* translators: appended to an exchange name, e.g. "Binance (quotes USDT)" */
+                            $usdtNote = ' (' . __('quotes USDT', 'nomiddleman-crypto-payments-for-woocommerce') . ')';
                             $priceApis = array(
                                 '0' => 'CoinGecko',
                                 '1' => 'HitBTC',
-                                '2' => 'GateIO',
-                                '3' => 'Binance',
-                                '4' => 'Poloniex',
+                                '2' => 'Gate.io' . $usdtNote,
+                                '3' => 'Binance' . $usdtNote,
+                                '4' => 'Poloniex' . $usdtNote,
                             );
                             $selectedApis = (array) self::value($values, 'selected_price_apis', array('0'));
                             ?>
@@ -389,6 +392,21 @@ class NMM_Admin {
                                 </label>
                             <?php endif; ?>
                         <?php endif; ?>
+                    </td>
+                </tr>
+                <?php endif; ?>
+
+                <?php if ($cid === 'SOL') : ?>
+                <tr class="nmm-requires-mode" data-modes="1">
+                    <th scope="row"><?php esc_html_e('RPC Endpoint', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
+                    <td>
+                        <input type="text" class="regular-text" placeholder="<?php echo esc_attr(NMM_Blockchain::sol_default_rpc_url()); ?>"
+                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[SOL_rpc_url]"
+                               value="<?php echo esc_attr(self::value($values, 'SOL_rpc_url', '')); ?>" />
+                        <p class="description"><?php
+                            /* translators: %s: the default public Solana RPC endpoint URL */
+                            printf(esc_html__('Leave blank to use the public endpoint %s. That endpoint is heavily rate-limited and its operators state it is not intended for production use, so a busy store should point this at a dedicated provider (Helius, QuickNode, Alchemy, Triton...) or its own validator - for example https://mainnet.helius-rpc.com/?api-key=YOUR-KEY. Must be an http(s) URL that speaks the standard Solana JSON-RPC (getSignaturesForAddress and getTransaction); addresses on the local network are rejected unless the NMM_SOL_ALLOW_PRIVATE_RPC constant allows them.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html(NMM_Blockchain::sol_default_rpc_url()));
+                        ?></p>
                     </td>
                 </tr>
                 <?php endif; ?>

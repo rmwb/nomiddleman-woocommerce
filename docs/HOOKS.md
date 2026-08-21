@@ -65,6 +65,47 @@ argument distinguishing `'verification'` from `'exchange'` calls).
 The Monero wallet RPC is deliberately **not** filtered: its URL is already
 merchant-configured directly in the settings.
 
+### Solana: setting first, filter last
+
+Solana verification has both a settings field (**Solana → RPC Endpoint**) and
+this filter, and they compose in one order:
+
+1. The **RPC Endpoint** setting replaces the built-in default
+   (`https://api.mainnet-beta.solana.com`). Blank means the default.
+2. `nmm_api_url` then runs on that URL, so **the filter always wins** — it can
+   rewrite or key-stamp whatever the setting produced.
+
+Both are vetted before the request is sent (http/https only, no embedded
+credentials, DNS-resolved and checked against private/loopback/link-local
+ranges, and the connection is pinned to the vetted IP where cURL allows it).
+The one difference: a URL that came from the **setting** may not point into
+private space unless the site defines `NMM_SOL_ALLOW_PRIVATE_RPC` (or hooks
+`nmm_sol_allow_private_rpc`), whereas a URL produced by `nmm_api_url` may — it
+is PHP running on the server, the same trust level as the plugin itself, so a
+filter pointing Solana at a validator on `127.0.0.1` or the LAN keeps working
+exactly as it did before the setting existed.
+
+```php
+// Send Solana verification to a validator on the LAN, whatever the setting says.
+add_filter( 'nmm_api_url', function ( $url ) {
+    if ( strpos( $url, 'solana' ) !== false ) {
+        return 'http://10.0.0.20:8899';
+    }
+    return $url;
+} );
+```
+
+### `nmm_sol_allow_private_rpc` — permit a local Solana RPC in the setting
+
+```php
+apply_filters( 'nmm_sol_allow_private_rpc', $allow, $url, $host, $ip );
+```
+
+Returns `false` by default: a URL typed into the settings screen must not be
+able to aim the server at loopback, LAN or cloud-metadata addresses. Return
+`true` (or define `NMM_SOL_ALLOW_PRIVATE_RPC` in `wp-config.php`) when the
+store legitimately runs its own validator on this machine or network.
+
 ## Checkout and payment behavior
 
 ### `nmm_customer_message`
@@ -207,6 +248,92 @@ lifetime plus 30 minutes, so a filter returning zero, a negative number, or a
 value shorter than the payment window can never delete a still-live retry entry.
 Use it to lengthen retention (e.g. to keep evidence for longer), not to shorten
 it below the matching window.
+
+## Exchange rates
+
+The USD price that sets the customer's crypto total is **agreed** across the
+price APIs selected under Pricing Options, not averaged: a mean lets one
+wrong-but-nonzero source (stale cache, wrong pair, hijacked endpoint) drag the
+total in proportion to how wrong it is.
+
+- **3 or more sources** — take the median, discard every source further than
+  `nmm_rate_outlier_tolerance` from it, then take the median of the survivors.
+  At least two sources must survive, or no rate is trusted.
+- **2 sources** — a two-element median is just their mean, so the pair must
+  *agree* to within the tolerance instead; if it does, the **lower** quote is
+  used (a too-high USD price silently underpays the merchant, a too-low one
+  slightly overpays and is visible and refundable). If it does not, neither is
+  used — nothing present can say which one is lying.
+- **1 source** — used, because it is the shipped default, but logged at
+  warning level: there is no cross-check of any kind.
+- **0 sources** — checkout fails. A rate is never assumed.
+
+An agreed rate is then checked against the last-known-good rate and stored as
+the new one. When nothing live can be trusted the last-known-good rate is served
+for a bounded window (see `nmm_rate_max_stale_seconds`) and checkout fails after
+that rather than charging a price nobody can vouch for. Every one of these
+events is logged at warning level (WooCommerce > Status > Logs, source
+`nomiddleman`).
+
+Note that Gate.io, Binance and Poloniex quote against **USDT**, not USD; the
+outlier rule is what contains that difference if Tether loses its peg.
+
+### `nmm_rate_outlier_tolerance`
+
+How far one source may sit from the median before it is discarded, as a
+fraction (default `0.05`, i.e. 5%). Also the agreement threshold for the
+two-source rule above. Honest venues differ by fractions of a percent, so this
+is far above normal spread and far below a broken feed. Clamped to
+`0.001`–`1.0`.
+
+```php
+apply_filters( 'nmm_rate_outlier_tolerance', $fraction, $cryptoId );
+```
+
+### `nmm_rate_jump_threshold`
+
+How far a freshly agreed rate may move from a **fresh** last-known-good rate
+before it must be corroborated, as a fraction (default `0.10`, i.e. 10%).
+A larger move is charged only when at least two surviving sources agree on it,
+or — for a single-source store — when the same level is still being reported
+`nmm_rate_jump_corroboration_seconds` later. Otherwise it is rejected and the
+last-known-good rate is served instead. The guard is skipped when the
+last-known-good rate is itself older than `nmm_rate_max_stale_seconds`, since a
+stale anchor says nothing about the current market. Clamped to `0.001`–`1.0`.
+
+```php
+apply_filters( 'nmm_rate_jump_threshold', $fraction, $cryptoId );
+```
+
+### `nmm_rate_max_stale_seconds`
+
+Maximum age of a last-known-good rate that may still be charged when the live
+fetches produce no trusted price (default `1800`, 30 minutes). Long enough to
+ride out a routine rate-limit lockout or exchange maintenance window without
+breaking checkout, short enough that the price charged is still within the drift
+the merchant already accepts by holding a quote open. Past it, checkout errors.
+Return `0` to disable the stale tier entirely (any failed lookup then fails
+checkout). Hard-capped at 6 hours, so no filter can make the plugin charge
+yesterday's price.
+
+```php
+apply_filters( 'nmm_rate_max_stale_seconds', $seconds, $cryptoId );
+```
+
+### `nmm_rate_jump_corroboration_seconds`
+
+For a store with only **one** price API selected, a large move cannot be
+corroborated by a second source, so it is corroborated in time instead: the same
+level must still be reported this many seconds later before it is charged
+(default `900`, 15 minutes). Long enough that a single bad response expires
+first, short enough that a genuine crash is picked up inside the stale-rate
+window. Clamped to `60`–`21600`.
+
+```php
+apply_filters( 'nmm_rate_jump_corroboration_seconds', $seconds, $cryptoId );
+```
+
+Selecting a second price API is a better fix than loosening any of these.
 
 ## Appearance
 

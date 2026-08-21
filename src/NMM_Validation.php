@@ -103,6 +103,35 @@ class NMM_Validation {
 		$atLeastOneInvalidCrypto = false;
 		$errorMessages = [];
 
+		// Solana RPC endpoint. Blank means "use the built-in public default", so
+		// only a value the merchant actually typed is checked - with the same
+		// guard that runs before every request (scheme, no embedded credentials,
+		// and no private/loopback/link-local target), so a URL that would be
+		// refused at fetch time can never be saved and silently break Autopay.
+		// An unusable value is reverted rather than stored: verification keeps
+		// working against the previous endpoint while the merchant fixes it.
+		$solRpcUrl = $newSettings->get_sol_rpc_url();
+
+		if ($solRpcUrl !== '' && class_exists('NMM_Blockchain')) {
+			$solTarget = NMM_Blockchain::validate_sol_rpc_url($solRpcUrl);
+
+			if (is_wp_error($solTarget)) {
+				$oldSolRpcUrl = $oldSettings->get_sol_rpc_url();
+				$newValues['SOL_rpc_url'] = $oldSolRpcUrl;
+
+				/* translators: 1: the rejected URL, 2: the reason it was rejected */
+				$errorMessages[] = sprintf(__('The Solana RPC endpoint %1$s was not saved: %2$s', 'nomiddleman-crypto-payments-for-woocommerce'),
+										   esc_html($solRpcUrl),
+										   esc_html($solTarget->get_error_message()));
+
+				if ($oldSolRpcUrl === '') {
+					/* translators: %s: the default public Solana RPC endpoint URL */
+					$errorMessages[] = sprintf(__('Solana verification is using the default public endpoint %s until a valid one is saved.', 'nomiddleman-crypto-payments-for-woocommerce'),
+											   esc_html(NMM_Blockchain::sol_default_rpc_url()));
+				}
+			}
+		}
+
 		foreach (NMM_Cryptocurrencies::get() as $crypto) {
 			$invalidCryptoSettings = false;
 			$cryptoId = $crypto->get_id();

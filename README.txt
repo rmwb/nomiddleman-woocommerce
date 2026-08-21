@@ -142,7 +142,7 @@ All requests below are made server-side by the store. The only data ever transmi
 * Cardano: Koios (api.koios.rest)
 * Tezos: TzKT (api.tzkt.io)
 * Tron and USDT TRC-20: Tronscan (apilist.tronscan.org)
-* Solana: public mainnet RPC (api.mainnet-beta.solana.com)
+* Solana: a JSON-RPC endpoint chosen by the merchant on the Solana settings tab, defaulting to the public mainnet RPC (api.mainnet-beta.solana.com) when the field is left blank. The public endpoint is rate-limited and its operators state it is not for production use, so the field can be pointed at a dedicated provider (Helius, QuickNode, Alchemy, Triton) or the merchant's own validator; only the payment address and transaction signatures are sent, whichever endpoint is used.
 * EOS: Greymass (eos.greymass.com) and EOSRIO Hyperion (eos.hyperion.eosrio.io)
 * Stellar: Horizon (horizon.stellar.org)
 * Waves: nodes.wavesnodes.com
@@ -157,7 +157,7 @@ All requests below are made server-side by the store. The only data ever transmi
 * Lisk (defunct network): node08.lisk.io
 * DeepOnion (defunct explorer): explorer.deeponion.org
 
-**Merchant-configured endpoints.** Monero Autopay talks only to the merchant's own monero-wallet-rpc URL entered in settings - no third party is involved. Any verification endpoint above can be redirected to the merchant's own node or explorer instance with the nmm_api_url filter.
+**Merchant-configured endpoints.** Monero Autopay talks only to the merchant's own monero-wallet-rpc URL entered in settings - no third party is involved. Solana Autopay uses the RPC endpoint entered on the Solana tab (the public mainnet RPC when blank). Any verification endpoint above can be redirected to the merchant's own node or explorer instance with the nmm_api_url filter.
 
 **QR codes** are generated locally in memory. No QR or image service is contacted.
 

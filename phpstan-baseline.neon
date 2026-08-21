@@ -3,7 +3,7 @@ parameters:
 		-
 			message: '#^Constant NMM_ABS_PATH not found\.$#'
 			identifier: constant.notFound
-			count: 2
+			count: 1
 			path: nomiddleman-crypto-woocommerce.php
 
 		-
@@ -47,6 +47,24 @@ parameters:
 			identifier: argument.type
 			count: 1
 			path: src/NMM_Admin.php
+
+		-
+			message: '#^Call to function method_exists\(\) with ''NMM_Monero'' and ''curl_resolve_entry'' will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: src/NMM_Blockchain.php
+
+		-
+			message: '#^Call to function method_exists\(\) with ''NMM_Monero'' and ''plan_request'' will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: src/NMM_Blockchain.php
+
+		-
+			message: '#^Call to function method_exists\(\) with ''NMM_Monero'' and ''validate_rpc_url'' will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: src/NMM_Blockchain.php
 
 		-
 			message: '#^Strict comparison using \!\=\= between mixed and null will always evaluate to true\.$#'

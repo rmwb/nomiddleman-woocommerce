@@ -47,8 +47,14 @@ class NMM_Blockchain {
 		return $response;
 	}
 
-	private static function api_post($request, $args = array()) {
-		$request = apply_filters('nmm_api_url', $request);
+	// $applyUrlFilter lets a caller that has ALREADY run the URL through
+	// nmm_api_url (and vetted the result - see sol_rpc_target) suppress the
+	// second application, so a filter is never applied twice to one request and
+	// cannot hand us a URL that skipped validation.
+	private static function api_post($request, $args = array(), $applyUrlFilter = true) {
+		if ($applyUrlFilter) {
+			$request = apply_filters('nmm_api_url', $request);
+		}
 		$host = (string) parse_url($request, PHP_URL_HOST);
 
 		if (self::host_unavailable($host)) {
@@ -2732,10 +2738,297 @@ class NMM_Blockchain {
 		);
 	}
 
+	// ------------------------------------------------------------------
+	// Solana JSON-RPC endpoint (merchant-configurable)
+	// ------------------------------------------------------------------
+
+	// Solana Labs' public mainnet RPC: keyless, so stock installs keep working
+	// untouched, but it is explicitly NOT meant for production use and throttles
+	// getSignaturesForAddress hard. Merchants point the SOL_rpc_url setting at
+	// Helius, QuickNode or their own validator instead.
+	const SOL_DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
+
+	public static function sol_default_rpc_url() {
+		return self::SOL_DEFAULT_RPC_URL;
+	}
+
+	/**
+	 * Work out - and vet - the Solana JSON-RPC endpoint to use for this request.
+	 *
+	 * PRECEDENCE: the SOL_rpc_url setting replaces the built-in default, and the
+	 * nmm_api_url filter then runs LAST, so PHP-level code always wins over the
+	 * stored setting (it is the documented escape hatch and must still be able to
+	 * rewrite or key-stamp whatever the setting produced). The filter is applied
+	 * HERE, not inside api_post, so that whatever it returns is validated before
+	 * we fetch it; the Solana requests consequently call api_post with the filter
+	 * suppressed so it is never applied twice.
+	 *
+	 * Returns a validated target array (see validate_sol_rpc_url) or a WP_Error.
+	 */
+	private static function sol_rpc_target() {
+		$configured = self::SOL_DEFAULT_RPC_URL;
+
+		if (defined('NMM_REDUX_ID') && class_exists('NMM_Settings')) {
+			$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+			$fromSettings = $nmmSettings->get_sol_rpc_url();
+			if ($fromSettings !== '') {
+				$configured = $fromSettings;
+			}
+		}
+
+		$url = apply_filters('nmm_api_url', $configured);
+		if (!is_string($url) || trim($url) === '') {
+			$url = $configured;
+		}
+		$fromFilter = (trim($url) !== $configured);
+
+		// The built-in default is our own compile-time constant, not merchant
+		// input, so it needs no SSRF vetting - and vetting it would put a DNS
+		// lookup in front of every Solana request on every stock install.
+		if (!$fromFilter && $configured === self::SOL_DEFAULT_RPC_URL) {
+			return array(
+				'url' => self::SOL_DEFAULT_RPC_URL,
+				'host' => (string) parse_url(self::SOL_DEFAULT_RPC_URL, PHP_URL_HOST),
+				'port' => 443,
+				'ip' => '',
+				'is_literal' => false,
+				'is_private' => false,
+				'is_default' => true,
+			);
+		}
+
+		// A URL produced by the nmm_api_url filter comes from PHP running on this
+		// server, which is already a higher trust level than the settings screen
+		// (a manage_options user, or a site admin on multisite who is NOT the host
+		// admin). It is still checked for scheme/shape, but - as before this
+		// setting existed - it may point at a node on the local network.
+		return self::validate_sol_rpc_url($url, $fromFilter);
+	}
+
+	/**
+	 * SSRF guard for the merchant-configurable Solana RPC endpoint: a URL typed
+	 * into the settings screen is fetched by the SERVER, so without vetting it
+	 * would be a way to reach internal services, cloud metadata (169.254.169.254)
+	 * or loopback-only admin ports, and to smuggle non-HTTP schemes.
+	 *
+	 * The address vetting is NOT a second implementation: after the scheme/shape
+	 * checks it hands the URL to NMM_Monero::validate_rpc_url(), the guard the
+	 * Monero wallet RPC field already uses, which resolves the host (A, then
+	 * AAAA), classifies the result with FILTER_FLAG_NO_PRIV_RANGE |
+	 * FILTER_FLAG_NO_RES_RANGE, treats an unresolvable host as private, and
+	 * returns the exact IP so the connection can later be pinned to it
+	 * (see sol_post/sol_install_pin for the DNS-rebinding half).
+	 *
+	 * The private/loopback POLICY is decided here rather than there, because the
+	 * two coins need opposite defaults: monero-wallet-rpc normally IS on
+	 * localhost, while a Solana RPC on loopback/private space is the exception.
+	 * So Monero's own policy hook is neutralised for the duration of the call and
+	 * a private target is refused on every install unless the merchant opts in
+	 * with the NMM_SOL_ALLOW_PRIVATE_RPC constant or the nmm_sol_allow_private_rpc
+	 * filter (both PHP-level, i.e. out of reach of the settings screen).
+	 *
+	 * $trusted marks a URL that came from PHP (the nmm_api_url filter) rather
+	 * than from the settings screen; such a URL may target private space without
+	 * the extra opt-in, preserving the filter's pre-existing behaviour.
+	 *
+	 * Returns array( url, host, port, ip, is_literal, is_private ) or a WP_Error.
+	 */
+	public static function validate_sol_rpc_url($url, $trusted = false) {
+		$url = trim((string) $url);
+
+		if ($url === '') {
+			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL is empty.');
+		}
+
+		$parts = function_exists('wp_parse_url') ? wp_parse_url($url) : parse_url($url);
+
+		// Anything but http/https (file://, gopher://, ftp://, dict:// ...) is a
+		// local-file-read or protocol-smuggling attempt, never an RPC endpoint.
+		// Checked before the host, so file:///etc/passwd - which parses with no
+		// host at all - is reported as the scheme problem it is.
+		if (is_array($parts) && !empty($parts['scheme'])
+			&& !in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
+			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL must use http or https.');
+		}
+
+		if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL is malformed.');
+		}
+
+		// Credentials in the URL would be sent to whatever the host resolves to
+		// and would end up in logs and backtraces. Every provider keys on the
+		// path or the query string instead (Helius ?api-key=..., QuickNode
+		// /<token>/), so there is no legitimate reason for userinfo here.
+		if (isset($parts['user']) || isset($parts['pass'])) {
+			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead.');
+		}
+
+		if (!class_exists('NMM_Monero') || !method_exists('NMM_Monero', 'validate_rpc_url')) {
+			// Fail closed: without the shared guard we cannot vet the address, and
+			// guessing with a weaker check is exactly what this code exists to avoid.
+			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused.');
+		}
+
+		// Neutralise Monero's private-target policy for this call so the decision
+		// below is the only one that applies to Solana (and so a merchant's
+		// nmm_xmr_allow_private_rpc callback cannot loosen the Solana path).
+		$allowAll = null;
+		if (function_exists('add_filter') && function_exists('remove_filter')) {
+			$allowAll = function ($allow) { return true; };
+			add_filter('nmm_xmr_allow_private_rpc', $allowAll, PHP_INT_MAX);
+		}
+
+		try {
+			$target = NMM_Monero::validate_rpc_url($url);
+		}
+		finally {
+			if ($allowAll !== null) {
+				remove_filter('nmm_xmr_allow_private_rpc', $allowAll, PHP_INT_MAX);
+			}
+		}
+
+		if (is_wp_error($target)) {
+			// Scheme and shape were already checked above, so the shared guard can
+			// only be objecting to the address itself.
+			return new WP_Error('nmm_sol_rpc', 'Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted.');
+		}
+
+		if (!empty($target['is_private'])) {
+			$allow = $trusted || (defined('NMM_SOL_ALLOW_PRIVATE_RPC') ? (bool) NMM_SOL_ALLOW_PRIVATE_RPC : false);
+			/**
+			 * Allow a Solana RPC endpoint on loopback/private/link-local space
+			 * (a validator on the same box or LAN). Off by default: the settings
+			 * screen must not be able to aim the server at internal services.
+			 */
+			$allow = (bool) apply_filters('nmm_sol_allow_private_rpc', $allow, $url, $target['host'], $target['ip']);
+
+			if (!$allow) {
+				return new WP_Error('nmm_sol_rpc', 'Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMM_SOL_ALLOW_PRIVATE_RPC (or use the nmm_sol_allow_private_rpc filter) to allow a validator on this machine or LAN.');
+			}
+		}
+
+		$target['url'] = $url;
+		$target['is_default'] = false;
+
+		return $target;
+	}
+
+	/**
+	 * POST a JSON-RPC body to an already-vetted Solana endpoint.
+	 *
+	 * Validation alone only proves where the host pointed a moment ago, so this
+	 * closes the DNS-rebinding half the same way NMM_Monero does: for a PUBLIC
+	 * hostname target the WordPress cURL handle is pinned (CURLOPT_RESOLVE) to
+	 * the exact IP that was vetted, so the name cannot re-resolve into private
+	 * space between validation and connect. IP literals have no DNS to rebind,
+	 * and a target the merchant explicitly allowed into private space cannot be
+	 * escalated by rebinding it into private space, so neither is pinned.
+	 *
+	 * When pinning is impossible (no cURL, a libcurl without CURLOPT_RESOLVE, or
+	 * a filtered-away transport) the request instead carries reject_unsafe_urls,
+	 * which makes WordPress re-resolve and re-check the host - and any redirect
+	 * target - immediately before it is fetched. Redirects are refused outright
+	 * either way, since a 302 is the simplest way to walk a vetted public
+	 * endpoint over to an internal one.
+	 */
+	private static function sol_post($target, $args) {
+		$args['redirection'] = 0;
+
+		$pin = null;
+		$isPublicHostname = empty($target['is_default'])
+							&& empty($target['is_literal'])
+							&& empty($target['is_private'])
+							&& !empty($target['ip']);
+
+		if ($isPublicHostname) {
+			$hasCurl = function_exists('curl_init');
+			$canPin = $hasCurl && defined('CURLOPT_RESOLVE') && function_exists('add_filter');
+
+			// Same rebinding decision the Monero path makes, from the same code.
+			$plan = (class_exists('NMM_Monero') && method_exists('NMM_Monero', 'plan_request'))
+				? NMM_Monero::plan_request($target, $hasCurl, $canPin, false)
+				: array('transport' => 'reject', 'pin' => false);
+
+			if ($plan['transport'] === 'curl' && !empty($plan['pin'])) {
+				$pin = self::sol_install_pin($target);
+			}
+
+			if ($pin === null) {
+				$args['reject_unsafe_urls'] = true;
+			}
+			elseif (filter_var($target['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+					&& in_array((int) $target['port'], array(80, 443, 8080), true)) {
+				// Belt and braces: the pin only takes effect if WordPress actually
+				// uses its cURL transport. Where WordPress's own validator cannot
+				// break a legitimate endpoint (IPv4, standard port) let it re-check
+				// the host too, so a streams-transport install is still covered.
+				$args['reject_unsafe_urls'] = true;
+			}
+		}
+
+		$response = self::api_post($target['url'], $args, false);
+
+		if ($pin !== null) {
+			self::sol_remove_pin($pin);
+		}
+
+		return $response;
+	}
+
+	// Pin the next cURL request to this host to the validated IP. Returns the
+	// registered callback (so it can be removed again) or null when the install
+	// cannot pin.
+	private static function sol_install_pin($target) {
+		if (!function_exists('add_filter') || !defined('CURLOPT_RESOLVE')
+			|| !class_exists('NMM_Monero') || !method_exists('NMM_Monero', 'curl_resolve_entry')) {
+			return null;
+		}
+
+		$entry = NMM_Monero::curl_resolve_entry($target['host'], $target['port'], $target['ip']);
+		$host = strtolower($target['host']);
+
+		$callback = function ($handle, $args, $url) use ($entry, $host) {
+			if (strtolower((string) parse_url($url, PHP_URL_HOST)) !== $host) {
+				return; // some other request happening to run inside this window
+			}
+			curl_setopt($handle, CURLOPT_RESOLVE, array($entry));
+			curl_setopt($handle, CURLOPT_FOLLOWLOCATION, false);
+		};
+
+		// http_api_curl is an ACTION (WordPress fires it with do_action_ref_array
+		// and passes the cURL handle by reference); nothing consumes a return
+		// value, so it is registered and removed as one.
+		add_action('http_api_curl', $callback, 10, 3);
+
+		return $callback;
+	}
+
+	private static function sol_remove_pin($callback) {
+		if (function_exists('remove_action')) {
+			remove_action('http_api_curl', $callback, 10);
+		}
+	}
+
 	public static function get_sol_address_transactions($address, $transactionLifetime = null) {
 
-		// public mainnet RPC, keyless; only finalized transactions are listed
-		$rpc = 'https://api.mainnet-beta.solana.com';
+		// Merchant-configurable endpoint, defaulting to the public mainnet RPC;
+		// vetted here (SSRF) once per fetch rather than per request. Only
+		// finalized transactions are listed.
+		$rpc = self::sol_rpc_target();
+
+		if (is_wp_error($rpc)) {
+			NMM_Util::log(__FILE__, __LINE__, 'Solana RPC endpoint refused: ' . $rpc->get_error_message(), 'error');
+
+			// An unusable endpoint means this address was NOT checked. It must
+			// never look like a completed sweep, or the Autopay verifier could
+			// certify coverage and cancel a funded order.
+			self::$solFetchComplete[$address] = false;
+
+			return array(
+				'result' => 'error',
+				'total_received' => '',
+			);
+		}
 
 		// getSignaturesForAddress returns newest-first. Carousel SOL addresses
 		// are reused, so a valid payment can be buried under later activity - or
@@ -2827,7 +3120,7 @@ class NMM_Blockchain {
 				$sigParams['before'] = $before;
 			}
 
-			$response = self::api_post($rpc, array(
+			$response = self::sol_post($rpc, array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => json_encode(array(
 					'jsonrpc' => '2.0',
@@ -3137,8 +3430,9 @@ class NMM_Blockchain {
 	// caller should retry it), and true when we got a usable finalized result;
 	// the second element is an NMM_Transaction when the tx credited $address,
 	// otherwise null.
+	// $rpc is the vetted target array from sol_rpc_target(), not a bare URL.
 	private static function sol_inspect_signature($rpc, $signature, $address) {
-		$txResponse = self::api_post($rpc, array(
+		$txResponse = self::sol_post($rpc, array(
 			'headers' => array('Content-Type' => 'application/json'),
 			'body' => json_encode(array(
 				'jsonrpc' => '2.0',

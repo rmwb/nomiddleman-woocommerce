@@ -307,6 +307,22 @@ class NMM_Settings {
 		return '';
 	}
 
+	/**
+	 * Merchant-configured Solana JSON-RPC endpoint (Helius, QuickNode, own
+	 * validator...). Empty means "use the built-in default", which
+	 * NMM_Blockchain::SOL_DEFAULT_RPC_URL supplies - existing installs that
+	 * never touch this field keep the public mainnet RPC they had before.
+	 * Whatever is stored here is SSRF-vetted by
+	 * NMM_Blockchain::validate_sol_rpc_url() before any request is made.
+	 */
+	public function get_sol_rpc_url() {
+		if (is_array($this->settings) && array_key_exists('SOL_rpc_url', $this->settings)) {
+			return trim((string) $this->settings['SOL_rpc_url']);
+		}
+
+		return '';
+	}
+
 	public function get_blockcypher_token() {
 		$tokenKey = 'blockcypher_token';
 

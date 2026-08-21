@@ -2,14 +2,14 @@
 # This file is distributed under the GNU General Public License v3.0.
 msgid ""
 msgstr ""
-"Project-Id-Version: Nomiddleman Crypto Payments for WooCommerce 2.9.0\n"
+"Project-Id-Version: Nomiddleman Bitcoin and Crypto Payments for WooCommerce 2.10.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/nomiddleman-crypto-payments-for-woocommerce\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-07-11T10:44:11+00:00\n"
+"POT-Creation-Date: 2026-08-21T09:09:10+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: nomiddleman-crypto-payments-for-woocommerce\n"
@@ -39,446 +39,617 @@ msgstr ""
 msgid "https://github.com/rmwb/nomiddleman-woocommerce"
 msgstr ""
 
-#: src/NMM_Admin.php:25
-msgid "Nomiddleman Crypto Settings"
+#: nomiddleman-crypto-woocommerce.php:969
+msgid "Nomiddleman Privacy Mode math extension"
 msgstr ""
 
-#: src/NMM_Admin.php:26
-#: src/NMM_Gateway.php:24
-#: src/NMM_Gateway.php:36
-msgid "Nomiddleman Crypto Payments"
+#: nomiddleman-crypto-woocommerce.php:973
+msgid "Nomiddleman database tables"
 msgstr ""
 
-#: src/NMM_Admin.php:72
-#: src/NMM_Admin.php:111
-msgid "General Settings"
+#: nomiddleman-crypto-woocommerce.php:986
+msgid "The Nomiddleman database tables are present"
 msgstr ""
 
-#: src/NMM_Admin.php:73
-#: src/NMM_Admin.php:125
-msgid "Select Cryptocurrencies"
+#: nomiddleman-crypto-woocommerce.php:989
+#: nomiddleman-crypto-woocommerce.php:1030
+msgid "Nomiddleman Crypto"
 msgstr ""
 
-#: src/NMM_Admin.php:82
-#: src/NMM_Admin.php:152
-msgid "Pricing Options"
+#: nomiddleman-crypto-woocommerce.php:992
+msgid "All database tables the plugin needs for this site exist, so address assignment and payment tracking can work."
+msgstr ""
+
+#: nomiddleman-crypto-woocommerce.php:1015
+msgid "Nomiddleman database tables are missing for this site"
+msgstr ""
+
+#. translators: %s: comma-separated list of missing database table names
+#: nomiddleman-crypto-woocommerce.php:1018
+#, php-format
+msgid "The following plugin tables do not exist for this site: %s. Checkout with the crypto gateway will fail until they are created. This usually means the site was created after the plugin was network activated on an older plugin version. Deactivating and reactivating the plugin recreates them; the plugin also attempts an automatic repair on admin page loads."
+msgstr ""
+
+#: nomiddleman-crypto-woocommerce.php:1027
+msgid "The PHP extension for Privacy Mode is available"
+msgstr ""
+
+#: nomiddleman-crypto-woocommerce.php:1033
+msgid "The gmp or bcmath PHP extension is enabled, so Privacy Mode (HD wallet) address generation will work."
+msgstr ""
+
+#: nomiddleman-crypto-woocommerce.php:1054
+msgid "Privacy Mode is enabled but its PHP extension is missing"
+msgstr ""
+
+#: nomiddleman-crypto-woocommerce.php:1055
+msgid "Privacy Mode needs the gmp or bcmath PHP extension"
+msgstr ""
+
+#: nomiddleman-crypto-woocommerce.php:1056
+msgid "Nomiddleman Privacy Mode generates a fresh HD wallet address for each order using elliptic-curve math that PHP cannot do on its own. Neither the gmp nor the bcmath PHP extension is enabled, so Privacy Mode address generation will fail with a misleading \"check your MPK\" error. Ask your host to enable the gmp extension (preferred) or bcmath, then retry. Coins set to Classic or Autopay Mode are unaffected."
+msgstr ""
+
+#: src/NMM_Admin.php:74
+msgid "Nomiddleman Crypto Payments: please re-check these stored wallet addresses."
+msgstr ""
+
+#: src/NMM_Admin.php:75
+msgid "Wallet-address validation now verifies checksums, and the following saved addresses fail. A mistyped address would still collect customer payments - into an address nobody controls - so the plugin will NOT hand any of them to a customer: a failing address is skipped and the next valid address for that cryptocurrency is used instead. Checkout stops only for a cryptocurrency that has no valid address left at all. Your settings have not been changed. Please check each address below against your wallet and re-save it."
+msgstr ""
+
+#: src/NMM_Admin.php:85
+msgid "Review addresses"
 msgstr ""
 
 #: src/NMM_Admin.php:86
+msgid "I have checked these - dismiss"
+msgstr ""
+
+#: src/NMM_Admin.php:94
+msgid "Nomiddleman Crypto Settings"
+msgstr ""
+
+#: src/NMM_Admin.php:95
+#: src/NMM_Gateway.php:25
+#: src/NMM_Gateway.php:54
+msgid "Nomiddleman Crypto Payments"
+msgstr ""
+
+#: src/NMM_Admin.php:141
+#: src/NMM_Admin.php:187
+msgid "General Settings"
+msgstr ""
+
+#: src/NMM_Admin.php:142
+#: src/NMM_Admin.php:201
+msgid "Select Cryptocurrencies"
+msgstr ""
+
+#: src/NMM_Admin.php:151
+#: src/NMM_Admin.php:228
+msgid "Pricing Options"
+msgstr ""
+
+#: src/NMM_Admin.php:155
 msgid "Nomiddleman Crypto Payments for Woocommerce"
 msgstr ""
 
-#: src/NMM_Admin.php:114
+#: src/NMM_Admin.php:162
+msgid "Privacy Mode is unavailable on this server."
+msgstr ""
+
+#: src/NMM_Admin.php:163
+msgid "Generating HD wallet addresses needs the PHP gmp extension (preferred) or bcmath, and neither is enabled. Ask your host to enable one, then reload this page. Classic and Autopay Modes are unaffected."
+msgstr ""
+
+#: src/NMM_Admin.php:190
 msgid "Payment Label"
 msgstr ""
 
-#: src/NMM_Admin.php:115
+#: src/NMM_Admin.php:191
 #: src/NMM_Blocks_Support.php:51
-#: src/NMM_Settings.php:90
+#: src/NMM_Settings.php:160
 msgid "Pay with cryptocurrency"
 msgstr ""
 
-#: src/NMM_Admin.php:116
+#: src/NMM_Admin.php:192
 msgid "This will be displayed on the checkout screen when the customer selects their payment option."
 msgstr ""
 
-#: src/NMM_Admin.php:117
+#: src/NMM_Admin.php:193
 msgid "Customer Payment Message"
 msgstr ""
 
-#: src/NMM_Admin.php:119
+#: src/NMM_Admin.php:195
 msgid "This is displayed above the crypto payment details on the payment screen (After the customer clicks \"Checkout\")."
 msgstr ""
 
-#: src/NMM_Admin.php:126
+#: src/NMM_Admin.php:202
 msgid "Choose the cryptocurrencies you want to accept, save, then configure each one on its own tab."
 msgstr ""
 
-#: src/NMM_Admin.php:153
-msgid "Price is the average of the APIs selected. At least one must be selected. Adding more can slow down thank you page loading."
+#: src/NMM_Admin.php:229
+msgid "Price is agreed across the APIs selected: with three or more the median is used and sources far from it are discarded, with two they must agree closely, and with one there is no cross-check at all. At least one must be selected; two or more is strongly recommended. Adding more can slow down thank you page loading."
 msgstr ""
 
-#: src/NMM_Admin.php:176
+#: src/NMM_Admin.php:230
+msgid "Sources marked \"quotes USDT\" price the coin against Tether rather than US dollars. That is normally a rounding difference, but it can drift if USDT loses its peg."
+msgstr ""
+
+#. translators: appended to an exchange name, e.g. "Binance (quotes USDT)"
+#: src/NMM_Admin.php:233
+msgid "quotes USDT"
+msgstr ""
+
+#: src/NMM_Admin.php:255
 msgid "API Keys (optional)"
 msgstr ""
 
-#: src/NMM_Admin.php:179
+#: src/NMM_Admin.php:258
 msgid "BlockCypher API Token"
 msgstr ""
 
-#: src/NMM_Admin.php:181
+#: src/NMM_Admin.php:260
 msgid "Optional. LTC and DOGE payment verification uses BlockCypher, whose keyless tier allows roughly 100 requests per hour. A free token from blockcypher.com raises that substantially for busier stores."
 msgstr ""
 
-#: src/NMM_Admin.php:188
+#: src/NMM_Admin.php:267
 msgid "Save Settings"
 msgstr ""
 
 #. translators: %s: cryptocurrency name
-#: src/NMM_Admin.php:211
+#: src/NMM_Admin.php:290
 #, php-format
 msgid "The mode previously configured for %s can no longer verify payments"
 msgstr ""
 
-#: src/NMM_Admin.php:212
+#: src/NMM_Admin.php:291
 msgid "every public API for it has shut down. Orders in this mode will never confirm automatically. Please switch to Classic Mode (manual confirmation) below and save."
 msgstr ""
 
 #. translators: %s: cryptocurrency ticker
-#: src/NMM_Admin.php:220
+#: src/NMM_Admin.php:299
 #, php-format
 msgid "Autopay Mode is unavailable for %s: no working transaction API exists anymore."
 msgstr ""
 
 #. translators: %s: cryptocurrency ticker
-#: src/NMM_Admin.php:224
+#: src/NMM_Admin.php:303
 #, php-format
 msgid "Privacy Mode is unavailable for %s: no working balance API exists anymore."
 msgstr ""
 
-#: src/NMM_Admin.php:231
+#: src/NMM_Admin.php:310
 msgid "Markup/Markdown %"
 msgstr ""
 
-#: src/NMM_Admin.php:236
+#: src/NMM_Admin.php:315
 msgid "This will increase/decrease the amount of cryptocurrency the customer will owe for the order. (4.8 = 4.8% markup, -10.0 = 10% markdown). Only the crypto amount changes; the fiat value shown to the customer stays the same."
 msgstr ""
 
-#: src/NMM_Admin.php:240
+#: src/NMM_Admin.php:319
 msgid "Mode"
 msgstr ""
 
-#: src/NMM_Admin.php:243
+#: src/NMM_Admin.php:322
 msgid "Classic Mode"
 msgstr ""
 
-#: src/NMM_Admin.php:245
+#: src/NMM_Admin.php:324
 msgid "Autopay Mode"
 msgstr ""
 
-#: src/NMM_Admin.php:245
+#: src/NMM_Admin.php:324
 msgid "(BETA)"
 msgstr ""
 
-#: src/NMM_Admin.php:248
+#: src/NMM_Admin.php:327
 msgid "Privacy Mode"
 msgstr ""
 
-#: src/NMM_Admin.php:256
+#: src/NMM_Admin.php:335
 msgid "Autopay Disclaimer"
 msgstr ""
 
-#: src/NMM_Admin.php:259
+#: src/NMM_Admin.php:338
 msgid "Please note Autopay Mode is still in <strong>beta</strong>. There is no guarantee every order will be processed correctly."
 msgstr ""
 
-#: src/NMM_Admin.php:260
+#: src/NMM_Admin.php:339
 msgid "<strong>Adjusting the following settings can improve Autopay accuracy:</strong>"
 msgstr ""
 
-#: src/NMM_Admin.php:262
+#: src/NMM_Admin.php:341
 msgid "<strong>Wallet Addresses:</strong> Adding more addresses greatly increases autopay reliability while increasing privacy. <em>We suggest having as many addresses as orders you get an hour in that cryptocurrency.</em>"
 msgstr ""
 
-#: src/NMM_Admin.php:263
+#: src/NMM_Admin.php:342
 msgid "<strong>Order Cancellation Timer:</strong> Reducing this will not only increase autopay reliability but also reduce the effects of volatility. <em>We suggest a value of 1 hour for high throughput stores.</em>"
 msgstr ""
 
-#: src/NMM_Admin.php:264
+#: src/NMM_Admin.php:343
 msgid "<strong>Auto-Confirm Percentage:</strong> Do not touch this unless you know what you are doing."
 msgstr ""
 
-#: src/NMM_Admin.php:273
+#: src/NMM_Admin.php:352
 msgid "Wallet RPC URL"
 msgstr ""
 
-#: src/NMM_Admin.php:278
+#: src/NMM_Admin.php:357
 msgid "Your own monero-wallet-rpc endpoint (a view-only wallet is enough). Each order gets a fresh subaddress and payments are verified through this RPC - your view key never leaves your server. If the RPC runs on another host, protect it with --rpc-login and fill in the credentials below."
 msgstr ""
 
-#: src/NMM_Admin.php:282
+#: src/NMM_Admin.php:361
 msgid "Wallet RPC Login (optional)"
 msgstr ""
 
-#: src/NMM_Admin.php:295
+#: src/NMM_Admin.php:377
+msgid "The RPC password is set via the NMM_XMR_RPC_PASSWORD constant in wp-config.php, so it cannot be changed here. Remove the constant to manage it from this page again."
+msgstr ""
+
+#: src/NMM_Admin.php:381
+msgid "A password is currently saved. Leave this field blank to keep it, or enter a new one to replace it."
+msgstr ""
+
+#: src/NMM_Admin.php:384
+msgid "No password is currently saved. Leave blank for an RPC without authentication."
+msgstr ""
+
+#: src/NMM_Admin.php:391
+msgid "Clear the saved password on save"
+msgstr ""
+
+#: src/NMM_Admin.php:401
+msgid "RPC Endpoint"
+msgstr ""
+
+#. translators: %s: the default public Solana RPC endpoint URL
+#: src/NMM_Admin.php:408
+#, php-format
+msgid "Leave blank to use the public endpoint %s. That endpoint is heavily rate-limited and its operators state it is not intended for production use, so a busy store should point this at a dedicated provider (Helius, QuickNode, Alchemy, Triton...) or its own validator - for example https://mainnet.helius-rpc.com/?api-key=YOUR-KEY. Must be an http(s) URL that speaks the standard Solana JSON-RPC (getSignaturesForAddress and getTransaction); addresses on the local network are rejected unless the NMM_SOL_ALLOW_PRIVATE_RPC constant allows them."
+msgstr ""
+
+#: src/NMM_Admin.php:415
 msgid "Wallet Addresses"
 msgstr ""
 
-#: src/NMM_Admin.php:308
+#: src/NMM_Admin.php:428
 msgid "Remove address"
 msgstr ""
 
-#: src/NMM_Admin.php:308
+#: src/NMM_Admin.php:428
 msgid "Remove"
 msgstr ""
 
-#: src/NMM_Admin.php:311
+#: src/NMM_Admin.php:431
 msgid "Add Address"
 msgstr ""
 
-#: src/NMM_Admin.php:318
+#: src/NMM_Admin.php:438
 msgid "Privacy Mode MPK"
 msgstr ""
 
-#: src/NMM_Admin.php:323
+#: src/NMM_Admin.php:443
 msgid "Your HD Wallet Master Public Key. We highly recommend using a brand new MPK for each store you run. You run the risk of address reuse and incorrectly processed orders if you use your MPK for multiple stores and/or purposes."
 msgstr ""
 
-#: src/NMM_Admin.php:327
+#: src/NMM_Admin.php:447
 msgid "Privacy Mode Sample Addresses"
 msgstr ""
 
-#: src/NMM_Admin.php:329
+#: src/NMM_Admin.php:449
 msgid "PLEASE VERIFY YOU CONTROL THESE ADDRESSES BEFORE SAVING OR ELSE LOSS OF FUNDS WILL OCCUR!"
 msgstr ""
 
-#: src/NMM_Admin.php:334
+#: src/NMM_Admin.php:454
 msgid "Addresses will be generated when a valid MPK is entered"
 msgstr ""
 
-#: src/NMM_Admin.php:337
+#: src/NMM_Admin.php:457
 msgid "Due to lack of convention around MPK xpub prefixes, it is not possible to guess which address format an xpub should generate. Only legacy addresses starting with \"1\" are generated."
 msgstr ""
 
-#: src/NMM_Admin.php:341
+#: src/NMM_Admin.php:461
 msgid "HD Wallet Auto-Confirm Percentage"
 msgstr ""
 
-#: src/NMM_Admin.php:344
+#: src/NMM_Admin.php:463
 msgid "Privacy Mode will automatically confirm payments that are this percentage of the total amount requested. (1 = 100%), (0.94 = 94%)"
 msgstr ""
 
-#: src/NMM_Admin.php:345
+#: src/NMM_Admin.php:464
 msgid "Privacy Mode Required Confirmations"
 msgstr ""
 
-#: src/NMM_Admin.php:348
-#: src/NMM_Admin.php:364
+#: src/NMM_Admin.php:466
+#: src/NMM_Admin.php:479
 msgid "The number of confirmations a payment needs before it is considered a valid payment."
 msgstr ""
 
-#: src/NMM_Admin.php:349
+#: src/NMM_Admin.php:467
 msgid "Privacy Mode Order Cancellation Timer (hr)"
 msgstr ""
 
-#: src/NMM_Admin.php:352
-#: src/NMM_Admin.php:369
+#: src/NMM_Admin.php:469
+#: src/NMM_Admin.php:483
 msgid "Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)"
 msgstr ""
 
-#: src/NMM_Admin.php:356
+#: src/NMM_Admin.php:473
 msgid "Auto-Confirm Percentage"
 msgstr ""
 
-#: src/NMM_Admin.php:359
+#: src/NMM_Admin.php:475
 msgid "Auto-Payment will automatically confirm payments within this percentage of the total requested. Lowering it increases the risk of matching the wrong payment - change with care."
 msgstr ""
 
-#: src/NMM_Admin.php:361
+#: src/NMM_Admin.php:477
 msgid "Required Confirmations"
 msgstr ""
 
-#: src/NMM_Admin.php:366
+#: src/NMM_Admin.php:481
 msgid "Order Cancellation Timer (hr)"
 msgstr ""
 
 #: src/NMM_Blocks_Support.php:52
-#: src/NMM_Gateway.php:104
+#: src/NMM_Gateway.php:123
 msgid "Choose a cryptocurrency"
 msgstr ""
 
 #: src/NMM_Blocks_Support.php:53
-#: src/NMM_Gateway.php:118
-#: src/NMM_Gateway.php:147
+#: src/NMM_Gateway.php:137
+#: src/NMM_Gateway.php:171
 msgid "Please choose a cryptocurrency."
 msgstr ""
 
-#: src/NMM_Exchange.php:104
+#: src/NMM_Carousel.php:63
+msgid "No payment address is available for the cryptocurrency you selected. Please choose another, or contact the site administrator."
+msgstr ""
+
+#: src/NMM_Carousel.php:78
+msgid "We could not allocate a payment address for your order. Please try again, or contact the site administrator."
+msgstr ""
+
+#: src/NMM_Carousel.php:106
+msgid "No valid payment address is configured for the cryptocurrency you selected. Please choose another, or contact the site administrator."
+msgstr ""
+
+#: src/NMM_Exchange.php:106
 msgid "Could not reach the currency conversion service. Please try again."
 msgstr ""
 
 #. translators: %s: currency code
-#: src/NMM_Exchange.php:111
+#: src/NMM_Exchange.php:113
 #, php-format
 msgid "Could not convert %s to USD. Please try again."
 msgstr ""
 
-#: src/NMM_Gateway.php:25
+#: src/NMM_Exchange.php:250
+msgid "No cryptocurrency exchanges could be reached, please try again."
+msgstr ""
+
+#: src/NMM_Exchange.php:253
+msgid "The exchange rate could not be confirmed right now. Please try again in a few minutes."
+msgstr ""
+
+#: src/NMM_Gateway.php:26
 msgid "Allow customers to pay using cryptocurrency"
 msgstr ""
 
-#: src/NMM_Gateway.php:41
+#: src/NMM_Gateway.php:59
 msgid "Nomiddleman Plugin Settings"
 msgstr ""
 
-#: src/NMM_Gateway.php:52
+#: src/NMM_Gateway.php:70
 msgid "General settings"
 msgstr ""
 
-#: src/NMM_Gateway.php:57
+#: src/NMM_Gateway.php:75
 msgid "Enable/Disable"
 msgstr ""
 
-#: src/NMM_Gateway.php:59
+#: src/NMM_Gateway.php:77
 msgid "Enable cryptocurrency payments"
 msgstr ""
 
-#: src/NMM_Gateway.php:167
+#: src/NMM_Gateway.php:143
+msgid "Please choose a valid cryptocurrency."
+msgstr ""
+
+#: src/NMM_Gateway.php:211
+msgid "This order is no longer awaiting payment, so no payment address can be issued. Please place a new order or contact the store."
+msgstr ""
+
+#: src/NMM_Gateway.php:231
 msgid "Confirm the payment in your wallet…"
 msgstr ""
 
 #. translators: %s: truncated transaction hash
-#: src/NMM_Gateway.php:169
+#: src/NMM_Gateway.php:233
 #, php-format
 msgid "Transaction sent (%s…). Waiting for the network to confirm — this page updates automatically."
 msgstr ""
 
-#: src/NMM_Gateway.php:170
+#: src/NMM_Gateway.php:234
 msgid "Your wallet does not know this network. Please add it in your wallet and try again."
 msgstr ""
 
-#: src/NMM_Gateway.php:171
+#: src/NMM_Gateway.php:235
 msgid "Payment cancelled in wallet."
 msgstr ""
 
-#: src/NMM_Gateway.php:172
+#: src/NMM_Gateway.php:236
 msgid "Could not start the wallet payment. You can still pay by scanning the QR code or copying the address."
 msgstr ""
 
-#: src/NMM_Gateway.php:173
+#: src/NMM_Gateway.php:237
 msgid "Payment received — thank you!"
 msgstr ""
 
 #. translators: 1: amount received, 2: amount expected
-#: src/NMM_Gateway.php:175
+#: src/NMM_Gateway.php:239
 #, php-format
 msgid "Partial payment received: %1$s of %2$s. Please send the remaining amount to the same address."
 msgstr ""
 
-#: src/NMM_Gateway.php:186
-msgid "Payment received - thank you! Your order is being processed."
+#: src/NMM_Gateway.php:279
+msgid "We are preparing your payment details. This will be ready in a few seconds - please refresh this page."
 msgstr ""
 
-#: src/NMM_Gateway.php:256
+#: src/NMM_Gateway.php:289
+msgid "This order is no longer awaiting payment. Please do not send any funds. If you believe this is an error, contact the store."
+msgstr ""
+
+#: src/NMM_Gateway.php:466
+msgid "We could not determine which cryptocurrency you selected. Please return to checkout and place the order again."
+msgstr ""
+
+#: src/NMM_Gateway.php:522
+#: src/NMM_Gateway.php:527
 msgid "Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator."
 msgstr ""
 
 #. translators: 1: wallet address, 2: amount, 3: cryptocurrency ticker
-#: src/NMM_Gateway.php:270
+#: src/NMM_Gateway.php:537
 #, php-format
 msgid "Privacy Mode (HD wallet) address %1$s is awaiting payment of %2$s %3$s."
 msgstr ""
 
+#: src/NMM_Gateway.php:564
+msgid "We could not set up payment monitoring for your order, so no payment address has been issued. This order has been cancelled and you have not been charged. Please try again or contact the site administrator."
+msgstr ""
+
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address
-#: src/NMM_Gateway.php:295
+#: src/NMM_Gateway.php:570
 #, php-format
 msgid "Awaiting payment of %1$s %2$s to payment address %3$s."
 msgstr ""
 
 #. translators: %s: error message
-#: src/NMM_Gateway.php:321
+#: src/NMM_Gateway.php:606
 #, php-format
 msgid "Error Message: %s"
 msgstr ""
 
-#: src/NMM_Gateway.php:326
+#: src/NMM_Gateway.php:627
 msgid "Something went wrong."
 msgstr ""
 
-#: src/NMM_Gateway.php:347
+#: src/NMM_Gateway.php:640
+msgid "Payment received - thank you! Your order is being processed."
+msgstr ""
+
+#: src/NMM_Gateway.php:652
+msgid "This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store."
+msgstr ""
+
+#: src/NMM_Gateway.php:707
 msgid "PAYMENT DETAILS"
 msgstr ""
 
-#: src/NMM_Gateway.php:348
-#: src/NMM_Gateway.php:370
+#: src/NMM_Gateway.php:708
+#: src/NMM_Gateway.php:730
 msgid "Address:"
 msgstr ""
 
-#: src/NMM_Gateway.php:349
-#: src/NMM_Gateway.php:373
-#: src/NMM_Gateway.php:429
+#: src/NMM_Gateway.php:709
+#: src/NMM_Gateway.php:733
+#: src/NMM_Gateway.php:793
 msgid "Currency:"
 msgstr ""
 
-#: src/NMM_Gateway.php:350
-#: src/NMM_Gateway.php:376
-#: src/NMM_Gateway.php:441
+#: src/NMM_Gateway.php:710
+#: src/NMM_Gateway.php:736
+#: src/NMM_Gateway.php:805
 msgid "Total:"
 msgstr ""
 
-#: src/NMM_Gateway.php:351
+#: src/NMM_Gateway.php:711
 msgid "Scan a QR code for this payment on your order page:"
 msgstr ""
 
-#: src/NMM_Gateway.php:362
+#: src/NMM_Gateway.php:722
 msgid "Additional Details"
 msgstr ""
 
-#: src/NMM_Gateway.php:364
+#: src/NMM_Gateway.php:724
 msgid "QR Code Payment:"
 msgstr ""
 
-#: src/NMM_Gateway.php:366
+#: src/NMM_Gateway.php:726
 msgid "Payment QR code"
 msgstr ""
 
-#: src/NMM_Gateway.php:379
+#: src/NMM_Gateway.php:739
 msgid "View payment details and QR code on your order page"
 msgstr ""
 
-#: src/NMM_Gateway.php:411
+#: src/NMM_Gateway.php:775
 msgid "Cryptocurrency payment details"
 msgstr ""
 
-#: src/NMM_Gateway.php:414
+#: src/NMM_Gateway.php:778
 msgid "QR Code payment:"
 msgstr ""
 
-#: src/NMM_Gateway.php:420
+#: src/NMM_Gateway.php:784
 msgid "Wallet Address:"
 msgstr ""
 
-#: src/NMM_Gateway.php:471
+#: src/NMM_Gateway.php:835
 msgid "Pay in browser wallet"
 msgstr ""
 
-#: src/NMM_Gateway.php:475
+#: src/NMM_Gateway.php:839
 msgid "Open in Solana wallet"
 msgstr ""
 
-#: src/NMM_Gateway.php:482
+#: src/NMM_Gateway.php:846
 msgid "Waiting for payment… this page updates automatically."
 msgstr ""
 
-#: src/NMM_Gateway.php:499
+#: src/NMM_Gateway.php:859
+msgid "We could not display your payment details for this order. Please contact the store for assistance."
+msgstr ""
+
+#: src/NMM_Gateway.php:870
 msgid "No price API selected. Please contact plug-in support."
 msgstr ""
 
-#: src/NMM_Gateway.php:549
-msgid "No cryptocurrency exchanges could be reached, please try again."
+#. translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address, 4: order status
+#: src/NMM_Hd.php:216
+#, php-format
+msgid "Late payment of %1$s %2$s received at Privacy Mode address %3$s after this order became %4$s. The order has NOT been completed automatically - please reconcile this payment manually."
 msgstr ""
 
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: date/time
-#: src/NMM_Hd.php:68
+#: src/NMM_Hd.php:299
 #, php-format
 msgid "Order payment of %1$s %2$s verified at %3$s."
 msgstr ""
 
+#. translators: 1: amount received, 2: cryptocurrency ticker, 3: wallet address, 4: order status
+#: src/NMM_Hd.php:340
+#, php-format
+msgid "Late partial payment of %1$s %2$s received at Privacy Mode address %3$s after this order became %4$s. The customer has NOT been asked for further payment and the order has NOT been changed - please reconcile this payment manually."
+msgstr ""
+
 #. translators: 1: amount received, 2: cryptocurrency ticker, 3: remaining amount, 4: wallet address
-#: src/NMM_Hd.php:88
+#: src/NMM_Hd.php:352
 #, php-format
 msgid "New payment was received but is still under order total. Received payment of %1$s %2$s.<br>Remaining payment required: %3$s<br>Wallet Address: %4$s"
 msgstr ""
 
 #. translators: 1: amount received, 2: cryptocurrency ticker, 3: date/time, 4: remaining amount, 5: wallet address
-#: src/NMM_Hd.php:103
+#: src/NMM_Hd.php:367
 #, php-format
 msgid "Payment of %1$s %2$s received at %3$s. This is under the amount required to process this order.<br>Remaining payment required: %4$s<br>Wallet Address: %5$s"
 msgstr ""
 
 #. translators: 1: cryptocurrency ticker, 2: number of hours
-#: src/NMM_Hd.php:257
-#: src/NMM_Payment.php:302
+#: src/NMM_Hd.php:632
+#: src/NMM_Payment.php:1419
 #, php-format
 msgid "Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address."
 msgstr ""
@@ -500,60 +671,90 @@ msgstr ""
 msgid "Partial payment received for Order %d"
 msgstr ""
 
-#: src/NMM_Hooks.php:282
+#: src/NMM_Hooks.php:176
 msgid "You have entered a valid Segwit MPK."
 msgstr ""
 
-#: src/NMM_Hooks.php:283
+#: src/NMM_Hooks.php:177
 msgid "Segwit MPKs (ypub/zpub) are not supported - please use an xpub."
 msgstr ""
 
-#: src/NMM_Monero.php:107
+#: src/NMM_Monero.php:286
 msgid "Could not create a Monero payment address. Please try again or contact the site administrator."
 msgstr ""
 
 #. translators: 1: cryptocurrency ticker, 2: transaction hash
-#: src/NMM_Payment.php:102
+#: src/NMM_Payment.php:728
 #, php-format
 msgid "This order has a matching %1$s transaction but we cannot verify it due to other orders with similar payment totals. Please reconcile manually. Transaction Hash: %2$s"
 msgstr ""
 
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: date/time, 4: transaction hash
-#: src/NMM_Payment.php:119
+#: src/NMM_Payment.php:805
 #, php-format
 msgid "Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s"
 msgstr ""
 
-#: src/NMM_Payment.php:269
+#. translators: 1: amount, 2: cryptocurrency ticker, 3: number of transactions, 4: date/time, 5: transaction hashes
+#: src/NMM_Payment.php:1107
+#, php-format
+msgid "Order payment of %1$s %2$s verified across %3$d transactions at %4$s. Transaction Hashes: %5$s"
+msgstr ""
+
+#: src/NMM_Payment.php:1254
 msgid "Could not reach external service to do auto payment processing."
 msgstr ""
 
-#: src/NMM_Validation.php:64
+#. translators: 1: the rejected URL, 2: the reason it was rejected
+#: src/NMM_Validation.php:123
+#, php-format
+msgid "The Solana RPC endpoint %1$s was not saved: %2$s"
+msgstr ""
+
+#. translators: %s: the default public Solana RPC endpoint URL
+#: src/NMM_Validation.php:129
+#, php-format
+msgid "Solana verification is using the default public endpoint %s until a valid one is saved."
+msgstr ""
+
+#: src/NMM_Validation.php:149
 msgid "Monero Autopay needs a valid monero-wallet-rpc URL. Disabling Monero."
 msgstr ""
 
+#. translators: 1: cryptocurrency name, 2: comma-separated list of the affected addresses
+#: src/NMM_Validation.php:192
+#, php-format
+msgid "%1$s Autopay confirms payments by looking the address up on a public block explorer, and these saved addresses cannot be looked up that way, so they will not be given to customers: %2$s. Use a transparent t-address (t1... or t3...) for Zcash Autopay - shielded (zs1... or z...), Unified (u1...) and TEX (tex1...) addresses cannot be automatically verified - or switch this cryptocurrency to Classic mode."
+msgstr ""
+
 #. translators: %1$s: cryptocurrency name
-#: src/NMM_Validation.php:82
+#: src/NMM_Validation.php:201
+#, php-format
+msgid "%1$s has no Autopay-verifiable wallet address. Disabling %1$s."
+msgstr ""
+
+#. translators: %1$s: cryptocurrency name
+#: src/NMM_Validation.php:212
 #, php-format
 msgid "%1$s has no valid wallet addresses. Disabling %1$s."
 msgstr ""
 
 #. translators: %1$s: cryptocurrency name
-#: src/NMM_Validation.php:97
-#: src/NMM_Validation.php:110
-#: src/NMM_Validation.php:118
+#: src/NMM_Validation.php:228
+#: src/NMM_Validation.php:241
+#: src/NMM_Validation.php:249
 #, php-format
 msgid "%1$s has an invalid HD MPK. Disabling %1$s."
 msgstr ""
 
 #. translators: %s: cryptocurrency name
-#: src/NMM_Validation.php:106
+#: src/NMM_Validation.php:237
 #, php-format
 msgid "Please use an xpub MPK. Disabling %s."
 msgstr ""
 
 #. translators: 1: cryptocurrency name, 2: the invalid address
-#: src/NMM_Validation.php:132
+#: src/NMM_Validation.php:263
 #, php-format
 msgid "%1$s has invalid address: %2$s"
 msgstr ""

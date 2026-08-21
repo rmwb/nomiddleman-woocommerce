@@ -154,6 +154,8 @@ jobs:
         run: php tests/test-monero-url.php
       - name: Settings bounds (server-side clamping) tests
         run: php tests/test-settings-bounds.php
+      - name: Exchange-rate consensus (median, outlier rejection, stale tier) tests
+        run: php tests/test-exchange-rate.php
 
   db-integration:
     name: Autopay + retry queue (WordPress + WooCommerce + MariaDB)
