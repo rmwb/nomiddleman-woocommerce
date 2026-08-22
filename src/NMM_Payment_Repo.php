@@ -110,6 +110,46 @@ class NMM_Payment_Repo {
 		return $oldest;
 	}
 
+	/**
+	 * Per-currency unpaid backlog: how many payment rows are still awaiting
+	 * payment for each coin, and when the oldest of them was created. Feeds the
+	 * read-only status screen (NMM_Dashboard), which must not build SQL of its
+	 * own - every table access stays behind this class.
+	 *
+	 * One grouped, index-served query (the status prefix of unpaid_expiry) so a
+	 * large backlog is aggregated in MySQL rather than loaded into PHP to be
+	 * counted. Read-only: the status screen never writes.
+	 *
+	 * Returns ['CRYPTO' => ['unpaid_count' => int, 'oldest_ordered_at' => int]],
+	 * ordered by currency so the screen's row order is stable.
+	 */
+	public function unpaid_backlog_by_crypto() {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			"SELECT `cryptocurrency`,
+					COUNT(*) AS `unpaid_count`,
+					MIN(`ordered_at`) AS `oldest_ordered_at`
+			 FROM `$this->tableName`
+			 WHERE `status` = 'unpaid'
+			 GROUP BY `cryptocurrency`
+			 ORDER BY `cryptocurrency`",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the only interpolation is $this->tableName ($wpdb->prefix + a plugin constant); the statement binds no values at all, so there is nothing for $wpdb->prepare() to escape.
+
+		$backlog = array();
+		if (is_array($rows)) {
+			foreach ($rows as $row) {
+				$backlog[$row['cryptocurrency']] = array(
+					'unpaid_count'      => (int) $row['unpaid_count'],
+					'oldest_ordered_at' => (int) $row['oldest_ordered_at'],
+				);
+			}
+		}
+
+		return $backlog;
+	}
+
 	// Number of distinct unpaid (cryptocurrency, address) pairs. A single scalar,
 	// so the cron can size its per-tick budget without loading the whole backlog
 	// into PHP.
