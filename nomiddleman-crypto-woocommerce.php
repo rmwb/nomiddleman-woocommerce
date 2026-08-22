@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.9
+Version: 2.9.10
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -71,7 +71,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.9');
+    define('NMM_VERSION', '2.9.10');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -141,7 +141,7 @@ function NMM_init_gateways(){
     add_action('woocommerce_order_status_changed', 'NMM_update_database_when_admin_changes_order_status', 10, 3);
     
     if (is_admin()) {
-        add_action('wp_ajax_firstmpkaddress', 'NMM_first_mpk_address_ajax');
+        add_action('wp_ajax_nmm_first_mpk_address', 'NMM_first_mpk_address_ajax');
         add_filter('site_status_tests', 'NMM_register_site_health_test');
     }
 
@@ -188,7 +188,7 @@ function NMM_cleanup_legacy_qr_files() {
 
     if (is_array($files)) {
         foreach ($files as $file) {
-            @unlink($file);
+            wp_delete_file($file);
         }
     }
 
@@ -324,7 +324,7 @@ function NMM_create_sol_retry_table() {
             KEY `first_failed` (`first_failed_at`)
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_deactivate() {
@@ -385,7 +385,7 @@ function NMM_drop_sol_retry_table() {
         $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
         foreach ($blogIds as $blogId) {
             switch_to_blog($blogId);
-            $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+            $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
             delete_option('nmm_sol_retry_schema');
             delete_option('nmm_sol_retry_table_created');
             restore_current_blog();
@@ -393,7 +393,7 @@ function NMM_drop_sol_retry_table() {
         return;
     }
 
-    $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+    $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
     delete_option('nmm_sol_retry_schema');
     delete_option('nmm_sol_retry_table_created');
 }
@@ -403,7 +403,7 @@ function NMM_drop_mpk_address_table() {
     $tableName = $wpdb->prefix . NMM_HD_TABLE;
     
     $query = "DROP TABLE IF EXISTS `$tableName`";
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_drop_payment_table() {
@@ -411,7 +411,7 @@ function NMM_drop_payment_table() {
     $tableName = $wpdb->prefix . NMM_PAYMENT_TABLE;    
     
     $query = "DROP TABLE IF EXISTS `$tableName`";
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_drop_carousel_table() {
@@ -419,7 +419,7 @@ function NMM_drop_carousel_table() {
     $tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;    
     
     $query = "DROP TABLE IF EXISTS `$tableName`";
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_create_hd_mpk_address_table() {
@@ -452,7 +452,7 @@ function NMM_create_hd_mpk_address_table() {
                composite indexes that reference it are added there too (1.3->1.4). */
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_update_hd_table() {
@@ -643,7 +643,7 @@ function NMM_create_payment_table() {
             KEY `unpaid_expiry` (`status`, `ordered_at`)
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 // Add the composite indexes the Autopay hot paths need to existing payment
@@ -695,7 +695,7 @@ function NMM_create_carousel_table() {
             UNIQUE KEY `cryptocurrency` (`cryptocurrency`)
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 
     require_once(plugin_basename('src/NMM_Cryptocurrency.php'));
     require_once(plugin_basename('src/NMM_Carousel_Repo.php'));

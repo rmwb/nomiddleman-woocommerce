@@ -27,7 +27,7 @@ class NMM_Blockchain {
 	private static function api_get($request, $args = array()) {
 		// lets merchants point a coin at their own node or explorer instance
 		$request = apply_filters('nmm_api_url', $request);
-		$host = (string) parse_url($request, PHP_URL_HOST);
+		$host = (string) wp_parse_url($request, PHP_URL_HOST);
 
 		if (self::host_unavailable($host)) {
 			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
@@ -49,7 +49,7 @@ class NMM_Blockchain {
 
 	private static function api_post($request, $args = array()) {
 		$request = apply_filters('nmm_api_url', $request);
-		$host = (string) parse_url($request, PHP_URL_HOST);
+		$host = (string) wp_parse_url($request, PHP_URL_HOST);
 
 		if (self::host_unavailable($host)) {
 			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
@@ -407,35 +407,6 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_blockbook_total_received_for_xmy_address($address) {		
-		$userAgentString = self::get_user_agent_string();
-		
-		$request = 'https://blockbook.myralicious.com/api/address/' . $address;
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceived = (float) json_decode($response['body'])->balance;
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => $totalReceived,
-		);
-
-		return $result;
-	}
 
 	public static function get_chainz_total_received_for_btx_address($address) {
 		$userAgentString = self::get_user_agent_string();
@@ -1106,109 +1077,6 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_btx_address_transactions($address) {
-		
-		$request = 'https://insight.bitcore.cc/api/addr/' . $address;
-		
-		$response = self::api_get($request);
-
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body']);
-
-		$transactionIds = $body->transactions;
-		if (!is_array($transactionIds)) {
-			$result = array(
-				'result' => 'error',
-				'message' => 'No transactions found',
-			);
-
-			return $result;
-		}
-		// Raw page (the Insight /addr txid list covers BOTH directions and may
-		// be a bounded page; entries carry no timestamps) for the truncation
-		// check.
-		self::note_raw_page(count($transactionIds), null);
-
-		$transactions = array();
-		$detailFailed = false;
-
-		foreach ($transactionIds as $transactionId) {
-
-				$request2 = 'https://insight.bitcore.cc/api/tx/' . $transactionId;
-
-				$response2 = self::api_get($request2);
-
-				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-					// A skipped detail lookup is an UNverified potential
-					// payment - remember it so this visit can never certify
-					// coverage (see below), then keep collecting the rest.
-					$detailFailed = true;
-					continue;
-				}
-
-				$rawTransaction = json_decode($response2['body']);
-
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
-					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure. That includes an
-					// EMPTY vout list: every real transaction has outputs, so
-					// an empty list means the body was truncated.
-					$detailFailed = true;
-					continue;
-				}
-
-				$vouts = $rawTransaction->vout;
-
-			foreach ($rawTransaction->vout as $vout) {
-				$voutAddresses = (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) ? $vout->scriptPubKey->addresses : array();
-				if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
-					// An output we cannot conclusively inspect might BE the
-					// payment, so this visit must never certify coverage (see
-					// vout_inspectable for the rule).
-					$detailFailed = true;
-					continue;
-				}
-				if (isset($voutAddresses[0]) && $voutAddresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000,
-														  $rawTransaction->confirmations,
-														  $rawTransaction->time,
-														  $rawTransaction->txid);
-				}
-			}
-		}
-
-		if ($detailFailed) {
-			// With nothing collected the whole visit failed - report an error
-			// so the verifier retries next tick. With payments collected,
-			// return them (never discard a found payment) but overwrite the
-			// raw-page note with the unbounded-incomplete sentinel so the
-			// truncation check can never certify this visit as coverage.
-			if (empty($transactions)) {
-				return array(
-					'result' => 'error',
-					'total_received' => '',
-				);
-			}
-			self::note_raw_page(PHP_INT_MAX, null);
-		}
-
-		$result = array (
-			'result' => 'success',
-			'transactions' => $transactions,
-		);
-
-		return $result;
-	}
 
 	public static function get_dash_address_transactions($address) {		
 		
@@ -1792,57 +1660,6 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_lsk_address_transactions($address) {
-		
-		$request = 'https://node08.lisk.io/api/transactions?recipientId=' . $address . '&limit=10&offset=0&sort=amount%3Aasc';
-
-		$response = self::api_get($request);
-
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body']);
-
-		$rawTransactions = $body->data;
-		if (!is_array($rawTransactions)) {
-			$result = array(
-				'result' => 'error',
-				'message' => 'No transactions found',
-			);
-
-			return $result;
-		}
-
-		// Raw page for the truncation check. This endpoint is recipient-
-		// filtered server-side (recipientId) and the entries carry only a
-		// Lisk-epoch timestamp the parser does not decode (it emits time()),
-		// so the oldest raw timestamp is unknown.
-		self::note_raw_page(count($rawTransactions), null);
-
-		$transactions = array();
-		foreach ($rawTransactions as $rawTransaction) {				
-			$transactions[] = new NMM_Transaction($rawTransaction->amount, 
-												  $rawTransaction->confirmations, 
-												  time(),
-												  $rawTransaction->id);
-		
-		}
-
-		$result = array (
-			'result' => 'success',
-			'transactions' => $transactions,
-		);
-
-		return $result;
-	}
 
 	public static function get_ltc_address_transactions($address) {
 		$userAgentString = self::get_user_agent_string();
@@ -1904,144 +1721,6 @@ class NMM_Blockchain {
         return $result;
 	}
 
-	public static function get_onion_address_transactions($address) {
-		
-		//$request = 'https://explorer.deeponion.org/ext/getaddress/' . $address;
-		$request = 'http://onionexplorer.youngwebsolutions.com:3001/ext/getaddress/' . $address;
-		
-		$response = self::api_get($request);
-
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body']);
-
-		// A malformed 200 body decodes to null/scalar; property_exists() on a
-		// non-object throws a TypeError on PHP 8, which would escape the
-		// verifier's fetch boundary - treat it as the fetch failure it is.
-		if (!is_object($body) || property_exists($body, 'error')) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-			return $result;
-		}
-
-		$rawTransactionIds = $body->last_txs;
-		if (is_array($rawTransactionIds)) {
-			// each entry costs one HTTP request; only inspect the most recent ones
-			$rawTransactionIds = array_slice($rawTransactionIds, -25);
-		}
-		if (!is_array($rawTransactionIds)) {
-			$result = array(
-				'result' => 'error',
-				'message' => 'No transactions found',
-			);
-
-			return $result;
-		}
-
-		// Raw page the matcher works from (getaddress returns BOTH directions;
-		// we keep the newest 25 client-side). last_txs entries carry no
-		// timestamp - those only arrive when each tx is fetched below - so the
-		// oldest raw timestamp is unknown.
-		self::note_raw_page(count($rawTransactionIds), null);
-
-		$transactions = array();
-		$detailFailed = false;
-
-		foreach ($rawTransactionIds as $rawTransactionId) {
-			if ($rawTransactionId->type === 'vout' || $rawTransactionId->type === 'vin') {
-
-				$txId = $rawTransactionId->addresses;
-
-				$request2 = 'https://explorer.deeponion.org/api/getrawtransaction?txid=' . $txId . '&decrypt=1';
-
-				$response2 = self::api_get($request2);
-
-				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-					// A skipped detail lookup is an UNverified potential
-					// payment - remember it so this visit can never certify
-					// coverage (see below), then keep collecting the rest.
-					$detailFailed = true;
-					continue;
-				}
-
-				$rawTransaction = json_decode($response2['body']);
-
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
-					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure. That includes an
-					// EMPTY vout list: every real transaction has outputs, so
-					// an empty list means the body was truncated.
-					$detailFailed = true;
-					continue;
-				}
-
-				$vouts = $rawTransaction->vout;
-
-				foreach ($vouts as $vout) {
-					// newer nodes emit scriptPubKey.address (singular); older ones an addresses array
-					$voutAddresses = array();
-					if (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) {
-						$voutAddresses = $vout->scriptPubKey->addresses;
-					}
-					elseif (isset($vout->scriptPubKey->address)) {
-						$voutAddresses = array($vout->scriptPubKey->address);
-					}
-
-					if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
-						// An output we cannot conclusively inspect might BE
-						// the payment, so this visit must never certify
-						// coverage (see vout_inspectable for the rule).
-						$detailFailed = true;
-						continue;
-					}
-
-					if (in_array($address, $voutAddresses, true)) {
-						$transactions[] = new NMM_Transaction($vout->value * 100000000,
-															  isset($rawTransaction->confirmations) ? $rawTransaction->confirmations : 0,
-															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
-															  $rawTransaction->txid);
-					}
-				}
-
-
-
-			}
-		}
-
-		if ($detailFailed) {
-			// With nothing collected the whole visit failed - report an error
-			// so the verifier retries next tick. With payments collected,
-			// return them (never discard a found payment) but overwrite the
-			// raw-page note with the unbounded-incomplete sentinel so the
-			// truncation check can never certify this visit as coverage.
-			if (empty($transactions)) {
-				return array(
-					'result' => 'error',
-					'total_received' => '',
-				);
-			}
-			self::note_raw_page(PHP_INT_MAX, null);
-		}
-
-		$result = array (
-			'result' => 'success',
-			'transactions' => $transactions,
-		);
-
-		return $result;
-	}
 
 	public static function get_trx_address_transactions($address) {
 		
@@ -2163,57 +1842,6 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_xem_address_transactions($address) {
-		
-		$request = 'http://108.61.168.86:7890/account/transfers/incoming?address=' . $address;
-
-		$response = self::api_get($request);
-
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body']);
-
-		$rawTransactions = $body->data;
-		if (!is_array($rawTransactions)) {
-			$result = array(
-				'result' => 'error',
-				'message' => 'No transactions found',
-			);
-
-			return $result;
-		}
-
-		// Raw page for the truncation check. This endpoint is recipient-
-		// filtered server-side (transfers/incoming) and the entries carry only
-		// a NEM-epoch timestamp the parser does not decode (it emits time()),
-		// so the oldest raw timestamp is unknown.
-		self::note_raw_page(count($rawTransactions), null);
-
-		$transactions = array();
-		foreach ($rawTransactions as $rawTransaction) {				
-			$transactions[] = new NMM_Transaction($rawTransaction->transaction->amount, 
-												  10000, 
-												  time(),
-												  $rawTransaction->meta->hash->data);
-		
-		}
-
-		$result = array (
-			'result' => 'success',
-			'transactions' => $transactions,
-		);
-
-		return $result;
-	}
 
 	public static function get_xlm_address_transactions($address) {
 		$request = 'https://horizon.stellar.org/accounts/' . $address . '/payments?order=desc';
@@ -2285,109 +1913,6 @@ class NMM_Blockchain {
 		return $result;
 	}
 
-	public static function get_xmy_address_transactions($address) {
-		
-		$request = 'https://blockbook.myralicious.com/api/address/' . $address;
-		
-		$response = self::api_get($request);
-
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body']);
-
-		$transactionIds = $body->transactions;
-		if (!is_array($transactionIds)) {
-			$result = array(
-				'result' => 'error',
-				'message' => 'No transactions found',
-			);
-
-			return $result;
-		}
-		// Raw page (the Blockbook address txid list covers BOTH directions and
-		// is served in bounded pages; entries carry no timestamps) for the
-		// truncation check.
-		self::note_raw_page(count($transactionIds), null);
-
-		$transactions = array();
-		$detailFailed = false;
-
-		foreach ($transactionIds as $transactionId) {
-
-				$request2 = 'https://blockbook.myralicious.com/api/tx/' . $transactionId;
-
-				$response2 = self::api_get($request2);
-
-				if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-					// A skipped detail lookup is an UNverified potential
-					// payment - remember it so this visit can never certify
-					// coverage (see below), then keep collecting the rest.
-					$detailFailed = true;
-					continue;
-				}
-
-				$rawTransaction = json_decode($response2['body']);
-
-				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
-					// HTTP 200 with a malformed, partial or error body is just
-					// as uninspected as a transport failure. That includes an
-					// EMPTY vout list: every real transaction has outputs, so
-					// an empty list means the body was truncated.
-					$detailFailed = true;
-					continue;
-				}
-
-				$vouts = $rawTransaction->vout;
-
-			foreach ($rawTransaction->vout as $vout) {
-				$voutAddresses = (isset($vout->scriptPubKey->addresses) && is_array($vout->scriptPubKey->addresses)) ? $vout->scriptPubKey->addresses : array();
-				if (!self::vout_inspectable($voutAddresses, isset($vout->value) ? $vout->value : null)) {
-					// An output we cannot conclusively inspect might BE the
-					// payment, so this visit must never certify coverage (see
-					// vout_inspectable for the rule).
-					$detailFailed = true;
-					continue;
-				}
-				if (isset($voutAddresses[0]) && $voutAddresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000,
-														  $rawTransaction->confirmations,
-														  $rawTransaction->time,
-														  $rawTransaction->txid);
-				}
-			}
-		}
-
-		if ($detailFailed) {
-			// With nothing collected the whole visit failed - report an error
-			// so the verifier retries next tick. With payments collected,
-			// return them (never discard a found payment) but overwrite the
-			// raw-page note with the unbounded-incomplete sentinel so the
-			// truncation check can never certify this visit as coverage.
-			if (empty($transactions)) {
-				return array(
-					'result' => 'error',
-					'total_received' => '',
-				);
-			}
-			self::note_raw_page(PHP_INT_MAX, null);
-		}
-
-		$result = array (
-			'result' => 'success',
-			'transactions' => $transactions,
-		);
-
-		return $result;
-	}
 
 	public static function get_xrp_address_transactions($address) {
 		

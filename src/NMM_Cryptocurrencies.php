@@ -9,6 +9,13 @@ class NMM_Cryptocurrencies {
 
 	// Coins whose Autopay transaction-verification API no longer exists anywhere
 	// (chain sunset or every public explorer gone). Classic Mode still works.
+	// Re-checked 2026-08-21: Lisk's L1 service is gone (node08.lisk.io and
+	// service.lisk.com no longer resolve), the NEM node the plugin shipped
+	// stopped answering, DeepOnion's remaining explorer times out, Myriad's
+	// blockbook now serves a parked page, and insight.bitcore.cc returns 521.
+	// The request code for all five was removed rather than left pointing at
+	// dead hosts; chainz.cryptoid.info still covers BTX balances for Privacy
+	// Mode.
 	private static $autopayUnverifiable = array('LSK', 'XEM', 'ONION', 'XMY', 'BTX');
 
 	// Coins whose Privacy Mode (HD) balance API no longer exists
@@ -131,8 +138,6 @@ class NMM_Cryptocurrencies {
             'POT' => new NMM_Cryptocurrency('POT', 'Potcoin', 18, 'potcoin_logo_small.png', 60, '', false, false, true, ''),
             // https://www.reddit.com/r/OntologyNetwork/comments/9duf28/api_to_get_ont_balance/
             'ONT' => new NMM_Cryptocurrency('ONT', 'Ontology', 18, 'ontology_logo_small.png', 60, '', false, false, true, ''),            
-            
-            // https://api.iogateway.cloud/api/Tangle/address/SDCUDAWKRZWFJFWROUAYVTKLZIGDNBDMBLZIWFWNXZLFRKPUGECMMZGPUFYZGANUZEP9VRPTFTVCKZVAWVRJTWZQDD/transactions
             
             'MIOTA' => new NMM_Cryptocurrency('MIOTA', 'Iota', 18, 'iota_logo_small.png', 60, '', false, false, true, ''),
         );

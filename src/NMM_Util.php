@@ -151,6 +151,89 @@ class NMM_Util {
 		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::order_init_lock_name($orderId)));
 	}
 
+	/**
+	 * The pinned request currently in flight: the token that identifies it, the
+	 * URL it was issued for, the cURL options to install, and whether the cURL
+	 * transport actually installed them. Static because http_api_curl is a
+	 * global action - the callback has no other route back to this request.
+	 */
+	private static $pinnedRequest = null;
+
+	/**
+	 * POST through WordPress's HTTP API with extra cURL options installed from
+	 * the http_api_curl action, instead of driving cURL ourselves.
+	 *
+	 * WordPress fires http_api_curl only when it selects its cURL transport,
+	 * and its streams transport resolves the hostname AGAIN when it connects -
+	 * the DNS-rebinding window an IP pin exists to close. So the streams
+	 * transport is filtered off for the duration of this call: when cURL is
+	 * unavailable WordPress returns its own "no HTTP transports available"
+	 * error rather than quietly connecting unpinned. Whether the callback ran
+	 * is then checked as a second gate, so a transport that ignores the action
+	 * can never silently drop the pin (fail closed, never fail open).
+	 *
+	 * Returns a wp_remote-shaped response array, or WP_Error.
+	 */
+	public static function post_with_curl_options($url, $args, $curlOptions) {
+		$token = 'nmm_' . md5(uniqid('', true));
+
+		self::$pinnedRequest = array(
+			'token'   => $token,
+			'url'     => $url,
+			'options' => $curlOptions,
+			'applied' => false,
+		);
+
+		$args['nmm_pinned_token'] = $token;
+		$args['redirection'] = 0; // never follow a redirect to another target
+
+		add_action('http_api_curl', array(__CLASS__, 'apply_pinned_curl_options'), 10, 3);
+		add_filter('use_streams_transport', '__return_false', 99);
+
+		$response = wp_remote_post($url, $args);
+
+		remove_filter('use_streams_transport', '__return_false', 99);
+		remove_action('http_api_curl', array(__CLASS__, 'apply_pinned_curl_options'), 10);
+
+		$applied = !empty(self::$pinnedRequest['applied']);
+		self::$pinnedRequest = null;
+
+		if (!$applied) {
+			return new WP_Error(
+				'nmm_pin_unavailable',
+				'The request was not sent over a connection that could be pinned to the validated address.'
+			);
+		}
+
+		return $response;
+	}
+
+	/**
+	 * http_api_curl callback. Public because WordPress invokes it; a no-op
+	 * unless a pinned request is in flight. The token and URL are both matched
+	 * before anything is installed, so options meant for our request - which
+	 * may carry RPC credentials - can never be applied to another plugin's
+	 * request that happens to be dispatched inside the same window.
+	 */
+	public static function apply_pinned_curl_options($handle, $parsedArgs = array(), $requestUrl = '') {
+		if (self::$pinnedRequest === null) {
+			return;
+		}
+
+		$token = isset($parsedArgs['nmm_pinned_token']) ? $parsedArgs['nmm_pinned_token'] : '';
+
+		if ($token !== self::$pinnedRequest['token'] || $requestUrl !== self::$pinnedRequest['url']) {
+			return;
+		}
+
+		if (!empty(self::$pinnedRequest['options'])) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt_array -- this configures WordPress's OWN cURL handle from the http_api_curl action, which is the documented way to set options the HTTP API does not expose (CURLOPT_RESOLVE pinning and digest auth). No request is issued here.
+			curl_setopt_array($handle, self::$pinnedRequest['options']);
+		}
+
+		self::$pinnedRequest['applied'] = true;
+	}
+
 }
 
 ?>

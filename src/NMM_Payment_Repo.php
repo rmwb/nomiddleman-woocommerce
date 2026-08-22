@@ -64,11 +64,11 @@ class NMM_Payment_Repo {
 				   WHERE `status` = 'unpaid'";
 
 		if ($orderedBefore === null) {
-			return $wpdb->get_results($select, ARRAY_A);
+			return $wpdb->get_results($select, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the only interpolation is $this->tableName ($wpdb->prefix + a plugin constant); every value is bound through $wpdb->prepare().
 		}
 
 		return $wpdb->get_results($wpdb->prepare(
-			$select . " AND `ordered_at` < %d",
+			$select . " AND `ordered_at` < %d", // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the only interpolation is $this->tableName ($wpdb->prefix + a plugin constant); every value is bound through $wpdb->prepare().
 			(int) $orderedBefore
 		), ARRAY_A);
 	}
@@ -207,7 +207,7 @@ class NMM_Payment_Repo {
 		}
 
 		$sql = "SELECT DISTINCT `cryptocurrency`, `address` FROM `$this->tableName` WHERE `status` = 'unpaid' AND (" . implode(' OR ', $clauses) . ")";
-		$rows = $wpdb->get_results($wpdb->prepare($sql, $args), ARRAY_A);
+		$rows = $wpdb->get_results($wpdb->prepare($sql, $args), ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- the interpolated part is a list of literal %s placeholders built in this function; every value is bound through $wpdb->prepare().
 
 		$live = array();
 		if (is_array($rows)) {

@@ -76,7 +76,7 @@ class NMM_Exchange {
             return $total;
         }
 
-        $transientKey = $fromCurr . '_to_USD';
+        $transientKey = 'nmm_fx_' . strtolower($fromCurr) . '_to_usd';
         $conversionRate = get_transient( $transientKey );
 
         if ($conversionRate !== false && is_numeric($conversionRate)) {
@@ -168,7 +168,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_coingecko_price($cryptoId, $updateInterval) {
-        $transientKey = 'coingecko_' . $cryptoId . '_price';
+        $transientKey = 'nmm_rate_coingecko_' . $cryptoId;
         $coingeckoPrice = get_transient($transientKey);
 
         // if transient is found in database just return it
@@ -208,7 +208,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_hitbtc_price($cryptoId, $updateInterval) {
-        $transientKey = 'hitbtc_' . $cryptoId . '_price';
+        $transientKey = 'nmm_rate_hitbtc_' . $cryptoId;
         $hitbtcPrice = get_transient($transientKey);
 
         if ($hitbtcPrice !== false) {
@@ -236,7 +236,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_gateio_price($cryptoId, $updateInterval) {
-        $transientKey = 'gateio_' . $cryptoId . '_price';
+        $transientKey = 'nmm_rate_gateio_' . $cryptoId;
         $gateioPrice = get_transient($transientKey);
 
         if ($gateioPrice !== false) {
@@ -265,7 +265,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_binance_price($cryptoId, $updateInterval) {
-        $transientKey = 'binance_' . $cryptoId . '_price';
+        $transientKey = 'nmm_rate_binance_' . $cryptoId;
         $binancePrice = get_transient($transientKey);
 
         if ($binancePrice !== false) {
@@ -293,7 +293,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_poloniex_price($cryptoId, $updateInterval) {
-        $transientKey = 'poloniex_' . $cryptoId . '_price';
+        $transientKey = 'nmm_rate_poloniex_' . $cryptoId;
         $poloniexPrice = get_transient($transientKey);
 
         if ($poloniexPrice !== false) {

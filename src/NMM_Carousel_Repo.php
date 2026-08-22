@@ -38,8 +38,8 @@ class NMM_Carousel_Repo {
 		}
 
 		if (count($values) > 0) {
-			$wpdb->query($wpdb->prepare(
-				"INSERT INTO `$tableName` (`cryptocurrency`) VALUES " . implode(', ', $placeholders),
+			$wpdb->query($wpdb->prepare( // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- the interpolated part is a list of literal %s placeholders built in this function; every value is bound through $wpdb->prepare().
+				"INSERT INTO `$tableName` (`cryptocurrency`) VALUES " . implode(', ', $placeholders), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- the interpolated part is a list of literal %s placeholders built in this function; every value is bound through $wpdb->prepare().
 				$values
 			));
 		}
