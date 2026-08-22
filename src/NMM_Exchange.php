@@ -176,6 +176,75 @@ class NMM_Exchange {
     const RATE_GOOD_RETENTION_SECONDS = 86400;
 
     /**
+     * Highest USD price for one unit of any supported asset that is still
+     * treated as a real quote. A quote above it is not a price, it is a broken
+     * or hostile response, and is dropped like a zero one.
+     *
+     * $10,000,000. The bound has to sit in the gap between two numbers:
+     *
+     *   Above every plausible price. BTC is by far the most expensive asset
+     *   this plugin supports and its all-time high is on the order of $10^5.
+     *   $10M is ~100x above that, so it survives a 100x bull run, a redenominated
+     *   quote, or any rally anyone could argue for; nothing else on the supported
+     *   list (ETH, BNB, MKR ...) is within three orders of magnitude of it.
+     *
+     *   Below every price that rounds a real order to nothing. The gateway
+     *   charges round($usdTotal / $price, $precision) with $precision 8 for
+     *   BTC-like coins (18 for ETH-like ones). At 8 decimals a $1 order - the
+     *   smallest a store realistically takes - only rounds to zero once the
+     *   price passes $2x10^8, twenty times this bound; at $10M it still comes
+     *   out as a non-zero 0.00000010. A zero crypto total is what makes the
+     *   whole chain dangerous: Privacy Mode reads "received >= expected" as paid
+     *   in full and completes an order that received nothing.
+     *
+     * is_finite() alone does not close this: 1e309 decodes to INF and is caught,
+     * but 1e308 is finite, positive, numeric, and just as fatal.
+     */
+    const RATE_MAX_PLAUSIBLE_PRICE = 10000000.0;
+
+    /**
+     * Absolute ceiling for the plausibility bound, whatever the filter returns.
+     * $100,000,000 is the highest price at which a $1 order still produces a
+     * non-zero amount at 8 decimals (0.00000001), so no filter can widen the
+     * bound far enough to let a quote round a real order down to free.
+     */
+    const RATE_PRICE_HARD_CAP = 100000000.0;
+
+    /**
+     * How far an accepted rate may drift from the slow-moving reference price
+     * before it has to be corroborated (fraction: 0.40 = 40%).
+     *
+     * The per-tick jump threshold cannot see cumulative drift: ten successive
+     * 9.9% moves are each under it, and walk the charged price from 100 to 257
+     * without the guard ever firing. This bounds the total, not the step.
+     *
+     * 40% is chosen from the honest side. No supported major asset has moved
+     * more than ~40% inside a six-hour window in its history - the worst days on
+     * record (12 Mar 2020, 19 May 2021) were roughly -30% to -37% spread across
+     * a whole day, which is under 10% per reference window and re-bases as it
+     * goes. So a genuine 30% day never trips this, in either direction, even if
+     * the move is concentrated into a couple of hours. What it does remove is
+     * the unbounded ratchet: one compromised API can now move the charged price
+     * by at most 40% per window instead of arbitrarily far, and it can only do
+     * that while shouting in the log.
+     */
+    const RATE_REFERENCE_DRIFT_LIMIT = 0.40;
+
+    /**
+     * How long the reference price stays fixed before it re-bases onto the
+     * current accepted rate (6 hours).
+     *
+     * Long enough that the drift limit actually bites: the cache warmer ticks
+     * every few minutes, so hundreds of ticks fall inside one window and a
+     * ratchet is capped by the limit rather than by its step size. Short enough
+     * that an honest store is never held to an out-of-date view of the market
+     * for more than one window - a real move that does exceed the limit is
+     * accepted as soon as the reference ages out, and until then checkout serves
+     * the anchor and then errors, rather than charging an unverified price.
+     */
+    const RATE_REFERENCE_WINDOW_SECONDS = 21600;
+
+    /**
      * USD price for one unit of $cryptoId, agreed across the merchant's
      * selected exchange APIs. Shared entry point for both callers: the checkout
      * page (NMM_Gateway) and the background cache warmer (NMM_warm_price_caches).
@@ -196,23 +265,30 @@ class NMM_Exchange {
         $candidates = self::collect_prices($cryptoId, $updateInterval, $selectedPriceApis);
 
         $maxStale = self::filtered_seconds('nmm_rate_max_stale_seconds', self::RATE_MAX_STALE_SECONDS, $cryptoId, 0, self::RATE_STALE_HARD_CAP);
+        $refWindow = self::filtered_seconds('nmm_rate_reference_window_seconds', self::RATE_REFERENCE_WINDOW_SECONDS, $cryptoId, HOUR_IN_SECONDS, 7 * 24 * HOUR_IN_SECONDS);
         $options = array(
-            'tolerance'     => self::filtered_fraction('nmm_rate_outlier_tolerance', self::RATE_OUTLIER_TOLERANCE, $cryptoId),
-            'jump'          => self::filtered_fraction('nmm_rate_jump_threshold', self::RATE_JUMP_THRESHOLD, $cryptoId),
-            'max_stale'     => $maxStale,
-            'corroboration' => self::filtered_seconds('nmm_rate_jump_corroboration_seconds', self::RATE_JUMP_CORROBORATION_SECONDS, $cryptoId, 60, self::RATE_STALE_HARD_CAP),
+            'tolerance'        => self::filtered_fraction('nmm_rate_outlier_tolerance', self::RATE_OUTLIER_TOLERANCE, $cryptoId),
+            'jump'             => self::filtered_fraction('nmm_rate_jump_threshold', self::RATE_JUMP_THRESHOLD, $cryptoId),
+            'max_stale'        => $maxStale,
+            'corroboration'    => self::filtered_seconds('nmm_rate_jump_corroboration_seconds', self::RATE_JUMP_CORROBORATION_SECONDS, $cryptoId, 60, self::RATE_STALE_HARD_CAP),
+            'max_price'        => self::filtered_price('nmm_rate_max_plausible_price', self::RATE_MAX_PLAUSIBLE_PRICE, $cryptoId),
+            'drift'            => self::filtered_fraction('nmm_rate_reference_drift_limit', self::RATE_REFERENCE_DRIFT_LIMIT, $cryptoId),
+            'reference_window' => $refWindow,
         );
 
         $goodKey = 'nmm_rate_good_' . $cryptoId;
         $pendingKey = 'nmm_rate_pending_' . $cryptoId;
+        $referenceKey = 'nmm_rate_reference_' . $cryptoId;
 
         $lastGood = get_transient($goodKey);
         $lastGood = is_array($lastGood) ? $lastGood : null;
         $pending = get_transient($pendingKey);
         $pending = is_array($pending) ? $pending : null;
+        $reference = get_transient($referenceKey);
+        $reference = is_array($reference) ? $reference : null;
 
         $now = time();
-        $state = self::evaluate_rate($candidates, $lastGood, $pending, $now, $options);
+        $state = self::evaluate_rate($candidates, $lastGood, $pending, $now, $options, $reference);
 
         // Persist (or clear) the pending single-source move.
         if ($state['pending'] === null) {
@@ -222,6 +298,15 @@ class NMM_Exchange {
         }
         else {
             set_transient($pendingKey, $state['pending'], 2 * HOUR_IN_SECONDS);
+        }
+
+        // Persist the slow reference. Never deleted from here: a missing
+        // reference is no cumulative bound at all, so it is only ever rewritten
+        // (with its original timestamp when it has not re-based). The TTL is
+        // kept comfortably longer than the window it is measured over, because
+        // an expired record would silently re-base the bound early.
+        if (is_array($state['reference'])) {
+            set_transient($referenceKey, $state['reference'], max(2 * $refWindow, self::RATE_GOOD_RETENTION_SECONDS));
         }
 
         foreach ($state['warnings'] as $warning) {
@@ -326,6 +411,12 @@ class NMM_Exchange {
      * Agrees a single USD price from the candidate prices. Pure: no HTTP, no
      * transients, no logging - the caller does that with what it returns.
      *
+     * A quote is only a candidate at all if it is a plausible price: numeric,
+     * finite, above zero and at or below RATE_MAX_PLAUSIBLE_PRICE. Anything else
+     * is dropped before any of the rules below are applied, so an absurd quote
+     * cannot become a consensus, and four sources agreeing on an absurd quote
+     * cannot either.
+     *
      * The rules, and why:
      *
      *   0 sources - nothing to charge. status 'none'; the caller falls back to
@@ -355,9 +446,16 @@ class NMM_Exchange {
      * @param array $candidates label => price
      * @return array{price: float|null, status: string, sources: int, kept: array, rejected: array, warnings: array}
      */
-    public static function consensus_price(array $candidates, $tolerance = self::RATE_OUTLIER_TOLERANCE) {
+    public static function consensus_price(array $candidates, $tolerance = self::RATE_OUTLIER_TOLERANCE, $maxPrice = self::RATE_MAX_PLAUSIBLE_PRICE) {
         $tolerance = (float) $tolerance;
+        $maxPrice = (float) $maxPrice;
+
+        if (!is_finite($maxPrice) || $maxPrice <= 0) {
+            $maxPrice = self::RATE_MAX_PLAUSIBLE_PRICE;
+        }
+
         $clean = array();
+        $implausible = array();
 
         foreach ($candidates as $label => $price) {
             // is_finite is load-bearing, not belt and braces: a source that
@@ -366,9 +464,29 @@ class NMM_Exchange {
             // the order total to ZERO crypto - which Privacy Mode reads as
             // fully paid (received >= 0), completing an order that received
             // no funds at all.
-            if (is_numeric($price) && is_finite((float) $price) && (float) $price > 0) {
-                $clean[$label] = (float) $price;
+            if (!is_numeric($price) || !is_finite((float) $price) || (float) $price <= 0) {
+                continue;
             }
+
+            // ...and is_finite alone is not enough, because the same free order
+            // falls out of a merely ABSURD number. 1e308 is finite and positive,
+            // four sources agreeing on it produce a consensus of 1e308, and
+            // round(100 / 1e308, 8) - and at 18 decimals too - is 0.0. So a quote
+            // has to be a plausible PRICE, not just a usable float. See
+            // RATE_MAX_PLAUSIBLE_PRICE for how the bound is placed between "above
+            // anything BTC could conceivably reach" and "below anything that
+            // rounds a real order down to nothing".
+            //
+            // A quote over the bound is dropped exactly like a zero or an INF
+            // one: it never reaches the median, it does not count towards
+            // $result['sources'], and if that leaves nothing the ordinary
+            // "no sources" path fires and checkout errors. It is never a 0 price.
+            if ((float) $price > $maxPrice) {
+                $implausible[] = $label;
+                continue;
+            }
+
+            $clean[$label] = (float) $price;
         }
 
         $result = array(
@@ -379,6 +497,15 @@ class NMM_Exchange {
             'rejected' => array(),
             'warnings' => array(),
         );
+
+        if (count($implausible) > 0) {
+            $result['warnings'][] = array(
+                'code'    => 'implausible_price',
+                'message' => 'Ignored price source(s) ' . implode(', ', $implausible) . ' quoting more than '
+                    . $maxPrice . ' USD per unit - that is not a price, and dividing an order total by it '
+                    . 'rounds the amount owed to zero.',
+            );
+        }
 
         if ($result['sources'] === 0) {
             return $result;
@@ -472,22 +599,33 @@ class NMM_Exchange {
      * max age. An older anchor says nothing about what the market should be doing
      * now, and holding checkout to it would reject genuine overnight drift.
      *
-     * Pure: the caller loads/stores $lastGood and $pending and does the logging.
+     * That per-tick guard is not enough on its own, because it only ever sees
+     * one step. A single source can walk the price in steps that each sit just
+     * under the threshold - ten 9.9% moves never enter the guard and take the
+     * charged rate from 100 to 257 - so a SECOND, slower guard bounds the total:
+     * see reference_guard() below.
+     *
+     * Pure: the caller loads/stores $lastGood, $pending and $reference and does
+     * the logging.
      *
      * @param array      $candidates label => price
      * @param array|null $lastGood   array('price' => float, 'time' => int)
      * @param array|null $pending    array('price' => float, 'first_seen' => int)
      * @param int        $now        unix time
-     * @param array      $options    tolerance, jump, max_stale, corroboration
+     * @param array      $options    tolerance, jump, max_stale, corroboration,
+     *                               max_price, drift, reference_window
+     * @param array|null $reference  array('price' => float, 'time' => int)
      */
-    public static function evaluate_rate(array $candidates, $lastGood, $pending, $now, array $options = array()) {
+    public static function evaluate_rate(array $candidates, $lastGood, $pending, $now, array $options = array(), $reference = null) {
         $tolerance = isset($options['tolerance']) ? (float) $options['tolerance'] : self::RATE_OUTLIER_TOLERANCE;
         $jump = isset($options['jump']) ? (float) $options['jump'] : self::RATE_JUMP_THRESHOLD;
         $maxStale = isset($options['max_stale']) ? (int) $options['max_stale'] : self::RATE_MAX_STALE_SECONDS;
         $corroboration = isset($options['corroboration']) ? (int) $options['corroboration'] : self::RATE_JUMP_CORROBORATION_SECONDS;
+        $maxPrice = isset($options['max_price']) ? (float) $options['max_price'] : self::RATE_MAX_PLAUSIBLE_PRICE;
 
-        $state = self::consensus_price($candidates, $tolerance);
+        $state = self::consensus_price($candidates, $tolerance, $maxPrice);
         $state['pending'] = null;
+        $state['reference'] = null;
 
         if ($state['price'] === null) {
             // Keep any pending move alive: a tick that reached nobody must not
@@ -497,65 +635,163 @@ class NMM_Exchange {
             return $state;
         }
 
+        // "Corroborated" means the same thing to both guards: at least two
+        // sources survived outlier rejection and agree on this price.
+        $corroborated = count($state['kept']) >= 2;
+
         $anchor = null;
         if (is_array($lastGood) && isset($lastGood['price'], $lastGood['time'])
             && (float) $lastGood['price'] > 0 && ($now - (int) $lastGood['time']) <= $maxStale) {
             $anchor = (float) $lastGood['price'];
         }
 
-        if ($anchor === null) {
+        $move = $anchor === null ? 0.0 : abs($state['price'] - $anchor) / $anchor;
+
+        if ($anchor !== null && $move > $jump) {
+            $heldLevel = is_array($pending) && isset($pending['price'], $pending['first_seen'])
+                && (float) $pending['price'] > 0
+                && abs($state['price'] - (float) $pending['price']) / (float) $pending['price'] <= $tolerance;
+
+            if ($corroborated) {
+                $state['warnings'][] = array(
+                    'code'    => 'jump_corroborated',
+                    'message' => 'Rate moved ' . round($move * 100, 2) . '% from the last known good value ('
+                        . $anchor . ' -> ' . $state['price'] . '); accepted, corroborated by '
+                        . count($state['kept']) . ' agreeing sources.',
+                );
+            }
+            elseif ($heldLevel && ($now - (int) $pending['first_seen']) >= $corroboration) {
+                $state['warnings'][] = array(
+                    'code'    => 'jump_confirmed_over_time',
+                    'message' => 'Rate moved ' . round($move * 100, 2) . '% from the last known good value ('
+                        . $anchor . ' -> ' . $state['price'] . '); accepted after the only configured source held the new level for '
+                        . ($now - (int) $pending['first_seen']) . 's.',
+                );
+            }
+            else {
+                // Keep the ORIGINAL level while the clock runs, not the latest
+                // quote. Storing the newest price alongside the original
+                // first_seen let a single source ratchet: each tick only had to
+                // land within tolerance of the PREVIOUS pending price, so walking
+                // up ~4.9% a minute promoted a price four times the anchor after
+                // the corroboration window - while never once holding a level.
+                // Comparing against the original means a drifting source falls
+                // out of tolerance and restarts the clock.
+                $state['pending'] = array(
+                    'price'      => $heldLevel ? (float) $pending['price'] : $state['price'],
+                    'first_seen' => $heldLevel ? (int) $pending['first_seen'] : (int) $now,
+                );
+                $state['price'] = null;
+                $state['status'] = 'jump_rejected';
+                $state['warnings'][] = array(
+                    'code'    => 'jump_rejected',
+                    'message' => 'Rejected a ' . round($move * 100, 2) . '% rate move (' . $anchor . ' -> '
+                        . $state['pending']['price'] . ') reported by a single source with nothing to corroborate it.',
+                );
+
+                return $state;
+            }
+        }
+
+        // Everything that reaches here has passed the per-tick guard. The
+        // cumulative guard gets the last word.
+        return self::reference_guard($state, $reference, $anchor, $pending, $now, $corroborated, $options);
+    }
+
+    /**
+     * Cumulative movement guard. Pure.
+     *
+     * Alongside the last-known-good anchor - which follows the price on every
+     * accepted tick, and so can be led anywhere one small step at a time - a
+     * REFERENCE price is pinned and left alone for a whole window (default 6h).
+     * An accepted rate has to sit within RATE_REFERENCE_DRIFT_LIMIT of it.
+     *
+     * Why the reference re-bases on TIME rather than on price: if it only ever
+     * moved when a price was accepted, a store whose market genuinely ran past
+     * the limit would reject every subsequent quote forever - the bound would
+     * deadlock the very store it is protecting. Ageing out means the worst case
+     * is one window of "not trusted", after which the current market becomes the
+     * new reference and checkout recovers on its own.
+     *
+     * Why time corroboration does NOT unlock this guard (unlike the jump guard):
+     * the whole failure being fixed is a single source patiently walking the
+     * price. Letting it through by waiting would restore the ratchet with extra
+     * steps. Only >= 2 agreeing sources - the same standard used everywhere else
+     * in this file - can move faster than the limit, which is why multi-source
+     * stores are unaffected in practice.
+     *
+     * When it does trip, the rate is simply not trusted: price null, so the
+     * caller serves the anchor for the rest of the stale window and then fails
+     * checkout. It never results in a price being charged.
+     */
+    private static function reference_guard($state, $reference, $anchor, $pending, $now, $corroborated, array $options) {
+        $limit = isset($options['drift']) ? (float) $options['drift'] : self::RATE_REFERENCE_DRIFT_LIMIT;
+        $window = isset($options['reference_window']) ? (int) $options['reference_window'] : self::RATE_REFERENCE_WINDOW_SECONDS;
+
+        $refPrice = null;
+        $refTime = (int) $now;
+
+        if (is_array($reference) && isset($reference['price'], $reference['time'])
+            && is_numeric($reference['price']) && is_finite((float) $reference['price']) && (float) $reference['price'] > 0) {
+            $refPrice = (float) $reference['price'];
+            $refTime = (int) $reference['time'];
+        }
+        elseif ($anchor !== null && is_finite((float) $anchor) && (float) $anchor > 0) {
+            // First tick after this guard ships (or after the record was lost):
+            // seed from the last-known-good anchor rather than from the price
+            // being proposed right now, so the very first step of a ratchet is
+            // already measured against something the source did not choose. The
+            // window starts now, because the anchor's timestamp is rewritten on
+            // every accepted tick and says nothing about how long that level has
+            // stood.
+            //
+            // Only a FRESH anchor is used - $anchor is already null when the
+            // last-known-good rate is past the stale window. A rate too old to
+            // gate a jump is too old to bound cumulative drift either, and
+            // seeding from it would hold checkout to yesterday's market.
+            $refPrice = (float) $anchor;
+        }
+
+        if ($refPrice === null || ($now - $refTime) >= $window) {
+            $state['reference'] = array('price' => (float) $state['price'], 'time' => (int) $now);
+
             return $state;
         }
 
-        $move = abs($state['price'] - $anchor) / $anchor;
+        $drift = abs($state['price'] - $refPrice) / $refPrice;
 
-        if ($move <= $jump) {
+        if ($drift <= $limit) {
+            // Deliberately NOT re-timestamped: the reference has to keep its
+            // original clock or it would never age out, and a bound that never
+            // ages out is a bound that never re-bases.
+            $state['reference'] = array('price' => $refPrice, 'time' => $refTime);
+
             return $state;
         }
 
-        if (count($state['kept']) >= 2) {
+        if ($corroborated) {
             $state['warnings'][] = array(
-                'code'    => 'jump_corroborated',
-                'message' => 'Rate moved ' . round($move * 100, 2) . '% from the last known good value ('
-                    . $anchor . ' -> ' . $state['price'] . '); accepted, corroborated by '
-                    . count($state['kept']) . ' agreeing sources.',
+                'code'    => 'reference_drift_corroborated',
+                'message' => 'Rate has moved ' . round($drift * 100, 2) . '% from the ' . ($now - $refTime)
+                    . 's-old reference of ' . $refPrice . ' (now ' . $state['price'] . '); accepted, corroborated by '
+                    . count($state['kept']) . ' agreeing sources, and the reference is re-based on it.',
             );
+            $state['reference'] = array('price' => (float) $state['price'], 'time' => (int) $now);
 
             return $state;
         }
 
-        $heldLevel = is_array($pending) && isset($pending['price'], $pending['first_seen'])
-            && (float) $pending['price'] > 0
-            && abs($state['price'] - (float) $pending['price']) / (float) $pending['price'] <= $tolerance;
-
-        if ($heldLevel && ($now - (int) $pending['first_seen']) >= $corroboration) {
-            $state['warnings'][] = array(
-                'code'    => 'jump_confirmed_over_time',
-                'message' => 'Rate moved ' . round($move * 100, 2) . '% from the last known good value ('
-                    . $anchor . ' -> ' . $state['price'] . '); accepted after the only configured source held the new level for '
-                    . ($now - (int) $pending['first_seen']) . 's.',
-            );
-
-            return $state;
-        }
-
-        // Keep the ORIGINAL level while the clock runs, not the latest quote.
-        // Storing the newest price alongside the original first_seen let a
-        // single source ratchet: each tick only had to land within tolerance
-        // of the PREVIOUS pending price, so walking up ~4.9% a minute promoted
-        // a price four times the anchor after the corroboration window - while
-        // never once holding a level. Comparing against the original means a
-        // drifting source falls out of tolerance and restarts the clock.
-        $state['pending'] = array(
-            'price'      => $heldLevel ? (float) $pending['price'] : $state['price'],
-            'first_seen' => $heldLevel ? (int) $pending['first_seen'] : (int) $now,
-        );
+        $state['reference'] = array('price' => $refPrice, 'time' => $refTime);
+        $state['pending'] = is_array($pending) ? $pending : null;
+        $rejected = (float) $state['price'];
         $state['price'] = null;
-        $state['status'] = 'jump_rejected';
+        $state['status'] = 'drift_rejected';
         $state['warnings'][] = array(
-            'code'    => 'jump_rejected',
-            'message' => 'Rejected a ' . round($move * 100, 2) . '% rate move (' . $anchor . ' -> '
-                . $state['pending']['price'] . ') reported by a single source with nothing to corroborate it.',
+            'code'    => 'reference_drift_rejected',
+            'message' => 'Rejected ' . $rejected . ' as ' . round($drift * 100, 2) . '% away from the reference price of '
+                . $refPrice . ' set ' . ($now - $refTime) . 's ago; a single source cannot move the rate more than '
+                . round($limit * 100, 2) . '% per reference window, however small the individual steps are. '
+                . 'Select a second price API if this is a real move.',
         );
 
         return $state;
@@ -593,6 +829,20 @@ class NMM_Exchange {
         }
 
         return $value > 1.0 ? 1.0 : $value;
+    }
+
+    // Filtered USD price bound. Clamped at the top by RATE_PRICE_HARD_CAP so no
+    // filter can widen it back into the range where dividing an order total
+    // rounds the amount owed to zero, and at the bottom to a cent so a filter
+    // returning 0, a negative or NaN cannot reject every source in existence.
+    private static function filtered_price($filter, $default, $cryptoId) {
+        $value = (float) apply_filters($filter, $default, $cryptoId);
+
+        if (!is_finite($value) || $value < 0.01) {
+            return 0.01;
+        }
+
+        return $value > self::RATE_PRICE_HARD_CAP ? self::RATE_PRICE_HARD_CAP : $value;
     }
 
     private static function filtered_seconds($filter, $default, $cryptoId, $min, $max) {

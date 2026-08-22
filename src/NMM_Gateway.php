@@ -507,6 +507,17 @@ class NMM_Gateway extends WC_Payment_Gateway {
             //error_log('cryptoTotal post-dust: ' . $cryptoTotal);
             
             // format the crypto amount based on crypto
+            // An order must never be issued for nothing. Any route to a zero (or
+            // negative) total - an absurd exchange rate, a pathological markup,
+            // a dust filter gone wrong - would otherwise hand the customer an
+            // address to send 0 to, and the verifier would then read "received
+            // >= 0" as fully paid and complete it. Refuse here, where we still
+            // have a customer to tell, rather than shipping goods for free.
+            if (!is_finite($cryptoTotal) || $cryptoTotal <= 0) {
+                NMM_Util::log(__FILE__, __LINE__, 'Refusing to issue order ' . $order_id . ': computed ' . $cryptoId . ' total is ' . var_export($cryptoTotal, true) . ' (usd ' . var_export($usdTotal, true) . ', rate ' . var_export($cryptoPerUsd, true) . ').', 'error');
+                throw new \Exception(esc_html__('We could not work out a valid payment amount for this order. Please try again shortly, or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
+            }
+
             $formattedCryptoTotal = NMM_Cryptocurrencies::get_price_string($cryptoId, $cryptoTotal);
 
             $order->update_meta_data('crypto_amount', $formattedCryptoTotal);

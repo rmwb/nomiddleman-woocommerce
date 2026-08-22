@@ -256,6 +256,11 @@ price APIs selected under Pricing Options, not averaged: a mean lets one
 wrong-but-nonzero source (stale cache, wrong pair, hijacked endpoint) drag the
 total in proportion to how wrong it is.
 
+Before any of that, a quote has to be a plausible *price*: numeric, finite,
+above zero, and no higher than `nmm_rate_max_plausible_price`. Anything else is
+dropped exactly like a dead source — an absurd quote cannot become a consensus,
+and several sources agreeing on one cannot either.
+
 - **3 or more sources** — take the median, discard every source further than
   `nmm_rate_outlier_tolerance` from it, then take the median of the survivors.
   At least two sources must survive, or no rate is trusted.
@@ -268,12 +273,26 @@ total in proportion to how wrong it is.
   warning level: there is no cross-check of any kind.
 - **0 sources** — checkout fails. A rate is never assumed.
 
-An agreed rate is then checked against the last-known-good rate and stored as
-the new one. When nothing live can be trusted the last-known-good rate is served
-for a bounded window (see `nmm_rate_max_stale_seconds`) and checkout fails after
-that rather than charging a price nobody can vouch for. Every one of these
-events is logged at warning level (WooCommerce > Status > Logs, source
-`nomiddleman`).
+An agreed rate is then checked against **two** guards and stored as the new
+last-known-good rate:
+
+- a **per-tick** guard against the last-known-good rate itself
+  (`nmm_rate_jump_threshold`), which catches one large step; and
+- a **cumulative** guard against a slow-moving reference price
+  (`nmm_rate_reference_drift_limit`, re-based every
+  `nmm_rate_reference_window_seconds`), which catches many small ones. The
+  per-tick guard cannot see drift: ten successive 9.9% moves are each under a
+  10% threshold and together take the charged rate from 100 to 257.
+
+The net effect is that a **single** price source can move the rate a store
+charges by at most the drift limit per reference window, however small its
+individual steps are. Two or more agreeing sources are not subject to that
+ceiling, so multi-source stores are unaffected in practice.
+
+When nothing live can be trusted the last-known-good rate is served for a
+bounded window (see `nmm_rate_max_stale_seconds`) and checkout fails after that
+rather than charging a price nobody can vouch for. Every one of these events is
+logged at warning level (WooCommerce > Status > Logs, source `nomiddleman`).
 
 Note that Gate.io, Binance and Poloniex quote against **USDT**, not USD; the
 outlier rule is what contains that difference if Tether loses its peg.
@@ -331,6 +350,71 @@ window. Clamped to `60`–`21600`.
 
 ```php
 apply_filters( 'nmm_rate_jump_corroboration_seconds', $seconds, $cryptoId );
+```
+
+### `nmm_rate_max_plausible_price`
+
+Highest USD price for one unit of an asset that is still treated as a real quote
+(default `10000000`, i.e. $10,000,000). A quote above it is dropped like a zero
+or an `INF` one: it never reaches the median, it does not count as a source, and
+if nothing usable remains checkout fails rather than returning a price.
+
+The bound sits in the gap between two numbers. BTC is the most expensive
+supported asset and its all-time high is on the order of $10^5, so $10M is about
+a hundred times above anything that could conceivably be real. At the other end,
+the gateway charges `round( $usdTotal / $price, 8 )` (18 decimals for ETH-like
+coins), and a $1 order only rounds to **zero** crypto once the price passes
+$2×10⁸ — a zero total that Privacy Mode would read as "paid in full". Clamped to
+`0.01`–`100000000`; the hard cap is the highest price at which a $1 order still
+produces a non-zero amount, so no filter can reopen that hole.
+
+```php
+apply_filters( 'nmm_rate_max_plausible_price', $usdPerUnit, $cryptoId );
+```
+
+### `nmm_rate_reference_drift_limit`
+
+How far an accepted rate may sit from the slow-moving reference price before it
+must be corroborated, as a fraction (default `0.40`, i.e. 40%). This is the
+cumulative counterpart to `nmm_rate_jump_threshold`: it bounds the **total**
+movement one source can produce inside a reference window, not the size of each
+step, so a sequence of individually-innocent moves cannot ratchet the price.
+
+40% is sized from the honest side. No major asset has moved more than that
+inside a six-hour window: the worst days on record were roughly −30% to −37%
+spread across a whole day, which is under 10% per window and re-bases as it goes.
+A genuine 30% day is therefore charged in full, in either direction, even when
+the move is concentrated into a couple of hours.
+
+A larger move is charged only when at least two surviving sources agree on it —
+time corroboration deliberately does **not** unlock this guard, because waiting
+is exactly what a patient single source would do. When it trips, the rate is
+simply not trusted: the last-known-good rate is served for the rest of the stale
+window and checkout errors after that. It never results in a price being charged.
+Clamped to `0.001`–`1.0`.
+
+```php
+apply_filters( 'nmm_rate_reference_drift_limit', $fraction, $cryptoId );
+```
+
+### `nmm_rate_reference_window_seconds`
+
+How long the reference price stays pinned before it re-bases onto the current
+accepted rate (default `21600`, 6 hours). Long enough that the drift limit
+actually bites — the cache warmer ticks every few minutes, so hundreds of ticks
+fall inside one window — and short enough that a store is never held to an
+out-of-date view of the market for more than one window.
+
+The reference re-bases on **time**, not on price, on purpose: if it only moved
+when a price was accepted, a store whose market genuinely ran past the limit
+would refuse every later quote forever. Ageing out means the worst case is one
+window of "rate not trusted", after which the current market becomes the new
+reference and checkout recovers by itself. Lengthening the window makes the
+bound stricter and that recovery slower; shortening it lets a single source move
+the price by the drift limit more often. Clamped to `3600`–`604800`.
+
+```php
+apply_filters( 'nmm_rate_reference_window_seconds', $seconds, $cryptoId );
 ```
 
 Selecting a second price API is a better fix than loosening any of these.

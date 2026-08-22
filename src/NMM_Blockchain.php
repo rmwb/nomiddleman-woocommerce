@@ -2960,6 +2960,12 @@ class NMM_Blockchain {
 			CURLOPT_HTTPHEADER     => array('Content-Type: application/json'),
 			// Never follow a redirect: it could be steered at an internal target.
 			CURLOPT_FOLLOWLOCATION => false,
+			// Disable any ambient proxy. libcurl honours http_proxy/HTTPS_PROXY
+			// from the environment, and a proxied request resolves the origin
+			// hostname AT THE PROXY - so CURLOPT_RESOLVE pins nothing and the
+			// name can point somewhere private by the time the proxy dials it.
+			// An empty proxy string forces a direct connection to the pinned IP.
+			CURLOPT_PROXY          => '',
 		);
 
 		if (defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
@@ -3038,13 +3044,14 @@ class NMM_Blockchain {
 
 		// Only reachable for a target plan_request judged safe WITHOUT pinning -
 		// an IP literal, where there is no DNS to rebind and the connection goes
-		// to exactly the address that was vetted. Ask WordPress to re-validate
-		// too when the address is public; a merchant who deliberately opted into
-		// a private LAN validator must not have their own endpoint refused by
-		// wp_http_validate_url.
-		if (empty($target['is_private'])) {
-			$args['reject_unsafe_urls'] = true;
-		}
+		// to exactly the address that was vetted.
+		//
+		// Deliberately NOT reject_unsafe_urls here. It adds nothing for a literal
+		// (there is no name to re-resolve, and our own validator already vetted
+		// the address), while WordPress's safe-port list is 80/443/8080 only - so
+		// setting it refused every public validator on 8899, which is Solana's
+		// standard RPC port. That was a regression introduced while fixing the
+		// transport-fallback hole.
 
 		return self::api_post($target['url'], $args, false);
 	}

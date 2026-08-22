@@ -134,7 +134,13 @@ class NMM_Hd {
 			$isResuming = $record['status'] === 'completing';
 
 			$amountToVerify = ((float) $orderAmount) * $percentToVerify;
-			$paymentAmountVerified = $blockchainTotalReceived >= $amountToVerify;
+			// Last line of defence against a zero-amount order: >= would make a
+			// zero expected amount satisfied by zero received, completing an
+			// order that was never paid. Checkout refuses to create such an
+			// order, but a row could already exist from an older release or a
+			// hand-edited amount, so never treat a non-positive expectation as
+			// payable here either.
+			$paymentAmountVerified = $amountToVerify > 0 && $blockchainTotalReceived >= $amountToVerify;
 
 			// Nothing to act on: no new funds, no fully-funded order still awaiting
 			// completion, and no interrupted completion to resume.
