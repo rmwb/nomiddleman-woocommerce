@@ -13,8 +13,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Every request goes through validate_rpc_url() + plan_request(): when cURL is
  * available the connection is pinned to the validated IP (CURLOPT_RESOLVE) so a
  * hostname cannot be rebound to a private target between validation and connect.
- * monero-wallet-rpc uses HTTP digest auth when --rpc-login is set, which
- * WordPress's HTTP API does not speak, so digest is layered onto that cURL path.
+ * The request itself is made with WordPress's HTTP API; the pin, the protocol
+ * restriction, and the digest credentials monero-wallet-rpc needs when
+ * --rpc-login is set (which the HTTP API does not speak on its own) are
+ * installed on the handle from the http_api_curl action - see
+ * NMM_Util::post_with_curl_options(), which fails closed if WordPress would
+ * have sent the request over a transport that could not be pinned.
  */
 class NMM_Monero {
 
@@ -56,43 +60,51 @@ class NMM_Monero {
 		}
 
 		if ($plan['transport'] === 'curl') {
-			$ch = curl_init($url);
-			$curlOpts = array(
-				CURLOPT_RETURNTRANSFER => true,
-				CURLOPT_TIMEOUT => 20,
-				CURLOPT_CONNECTTIMEOUT => 10,
-				CURLOPT_POST => true,
-				CURLOPT_POSTFIELDS => $payload,
-				CURLOPT_HTTPHEADER => array('Content-Type: application/json'),
+			$curlOptions = array(
 				// Restrict to HTTP(S) and never follow a redirect (which could be
 				// steered to a file:// or internal target).
 				CURLOPT_FOLLOWLOCATION => false,
 			);
+
 			// Digest auth only when the merchant configured credentials; the RPC
-			// is otherwise open and WordPress's HTTP API cannot speak digest.
+			// is otherwise open and WordPress's HTTP API cannot speak digest, so
+			// it is layered onto the handle from the http_api_curl action.
 			if ($plan['digest']) {
-				$curlOpts[CURLOPT_HTTPAUTH] = CURLAUTH_DIGEST;
-				$curlOpts[CURLOPT_USERPWD] = $user . ':' . $pass;
+				$curlOptions[CURLOPT_HTTPAUTH] = CURLAUTH_DIGEST;
+				$curlOptions[CURLOPT_USERPWD] = $user . ':' . $pass;
 			}
+
 			if (defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
-				$curlOpts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
-				$curlOpts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+				$curlOptions[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+				$curlOptions[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
 			}
+
 			// Pin a hostname connection to the exact IP we validated, so a host
 			// that re-resolves to a private address between validation and connect
 			// (DNS rebinding) cannot redirect us there. IP literals are never
 			// pinned (plan_request sets pin=false): there is no DNS to rebind, and
 			// a RESOLVE entry for an IPv6 literal is malformed.
 			if ($plan['pin'] && defined('CURLOPT_RESOLVE') && $target['ip'] !== '') {
-				$curlOpts[CURLOPT_RESOLVE] = array(self::curl_resolve_entry($target['host'], $target['port'], $target['ip']));
+				$curlOptions[CURLOPT_RESOLVE] = array(self::curl_resolve_entry($target['host'], $target['port'], $target['ip']));
 			}
-			curl_setopt_array($ch, $curlOpts);
-			$body = curl_exec($ch);
-			$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-			if ($body === false || $code !== 200) {
-				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable (http ' . $code . ').');
+			$response = NMM_Util::post_with_curl_options($url, array(
+				'headers' => array('Content-Type' => 'application/json'),
+				'body' => $payload,
+				'timeout' => 20,
+			), $curlOptions);
+
+			// A pin that could not be installed is a refusal, not a retry: the
+			// helper reports that before any unpinned connection is made.
+			if (is_wp_error($response) && $response->get_error_code() === 'nmm_pin_unavailable') {
+				return new WP_Error('nmm_xmr', 'Monero wallet RPC request was not sent: WordPress did not use its cURL transport, so the connection could not be pinned to the address that was validated. Use an IP-literal RPC URL, or install a pinning-capable cURL.');
 			}
+
+			if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
+				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable (http ' . (is_wp_error($response) ? '0' : (int) wp_remote_retrieve_response_code($response)) . ').');
+			}
+
+			$body = wp_remote_retrieve_body($response);
 		}
 		else {
 			// No cURL: plan_request only reaches here for an IP-literal target,

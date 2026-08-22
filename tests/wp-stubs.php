@@ -55,6 +55,12 @@ if (!function_exists('esc_url')) {
 
 class WP_Error_Stub {}
 
+if (!function_exists('wp_parse_url')) {
+	function wp_parse_url($url, $component = -1) {
+		return parse_url($url, $component);
+	}
+}
+
 function is_wp_error($thing) {
 	return $thing instanceof WP_Error_Stub;
 }

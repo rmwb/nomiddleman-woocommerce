@@ -18,12 +18,23 @@ Contact attempts made **2026-07-11** (add links/screenshots below as records):
       (screenshot saved — Slack free-plan history expires)
 - [ ] Screenshot each attempt and keep copies outside Slack (Slack history
       can expire on the free plan)
-- [ ] Create/verify your wordpress.org account (needed to receive commit access)
+- [x] Create/verify your wordpress.org account (@rmwb — used for the
+      support-forum post above)
 
-**Waiting period:** if no reply, send adoption-email.md on or after
-**~2026-08-01** (2–4 weeks from contact). Before sending: tag v2.9.2 so the
-release zip includes the README "External services" section, and fill in the
-two placeholders in the email (wordpress.org username, contact links/dates).
+**Adoption request SENT 2026-08-21** to plugins@wordpress.org (text: see
+adoption-email.md). No reply to any of the three contact attempts by then —
+the upstream GitHub issue still had zero comments. The release cited in the
+request is v2.9.9.
+
+**Round 1 review received 2026-08-21**, same day as the request (review ID
+nomiddleman-crypto-payments-for-woocommerce/21Aug26/T1). Four issues: too many
+readme tags, undocumented external services, cURL instead of the HTTP API, and
+unprefixed transient/AJAX names. All four are fixed in 2.9.10 on branch
+fix/wporg-review-1; the draft reply is in review-reply-1.md. Nothing has been
+sent back to the team yet - the reply waits on the v2.9.10 release zip.
+
+Still to come: the team reviews the corrected code, then contacts rgostic and
+gives them time (typically 30 days) to object. Log each round below, with dates.
 
 ## Support-forum post
 

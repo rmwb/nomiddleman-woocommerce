@@ -100,7 +100,8 @@ function xreset() {
 
 function xseed($coin, $prices) {
 	foreach ($prices as $source => $value) {
-		set_transient($source . '_' . $coin . '_price', $value, 600);
+		// Prefixed cache keys (nmm_rate_<source>_<coin>) - see NMM_Exchange.
+		set_transient('nmm_rate_' . $source . '_' . $coin, $value, 600);
 	}
 }
 
@@ -598,7 +599,7 @@ $charged = 100.0;
 $quote = 100.0;
 for ($i = 0; $i < 10; $i++) {
 	$quote *= 1.099;
-	set_transient('coingecko_TO_price', $quote, 600);
+	set_transient('nmm_rate_coingecko_TO', $quote, 600);
 	try { $charged = NMM_Exchange::get_average_usd_price('TO', 600, array('0')); }
 	catch (\Exception $e) { $charged = -1.0; break; }
 }

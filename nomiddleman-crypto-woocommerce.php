@@ -157,7 +157,7 @@ function NMM_init_gateways(){
     add_action('woocommerce_order_status_changed', 'NMM_update_database_when_admin_changes_order_status', 10, 3);
     
     if (is_admin()) {
-        add_action('wp_ajax_firstmpkaddress', 'NMM_first_mpk_address_ajax');
+        add_action('wp_ajax_nmm_first_mpk_address', 'NMM_first_mpk_address_ajax');
         add_filter('site_status_tests', 'NMM_register_site_health_test');
         add_action('admin_init', 'NMM_verify_site_tables');
     }
@@ -226,7 +226,7 @@ function NMM_cleanup_legacy_qr_files() {
 
     if (is_array($files)) {
         foreach ($files as $file) {
-            @unlink($file);
+            wp_delete_file($file);
         }
     }
 
@@ -479,7 +479,7 @@ function NMM_create_sol_retry_table() {
             KEY `first_failed` (`first_failed_at`)
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_deactivate() {
@@ -527,7 +527,7 @@ function NMM_delete_scan_options() {
 function NMM_drop_sol_retry_table() {
     NMM_for_each_site(function () {
         global $wpdb;
-        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
         delete_option('nmm_sol_retry_schema');
         delete_option('nmm_sol_retry_table_created');
     });
@@ -536,7 +536,7 @@ function NMM_drop_sol_retry_table() {
 function NMM_drop_mpk_address_table() {
     NMM_for_each_site(function () {
         global $wpdb;
-        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_HD_TABLE . "`");
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_HD_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
         delete_option('nmm_hd_table_version');
     });
 }
@@ -544,7 +544,7 @@ function NMM_drop_mpk_address_table() {
 function NMM_drop_payment_table() {
     NMM_for_each_site(function () {
         global $wpdb;
-        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_PAYMENT_TABLE . "`");
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_PAYMENT_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
         delete_option('nmm_payment_index_version');
     });
 }
@@ -552,7 +552,7 @@ function NMM_drop_payment_table() {
 function NMM_drop_carousel_table() {
     NMM_for_each_site(function () {
         global $wpdb;
-        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_CAROUSEL_TABLE . "`");
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_CAROUSEL_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
         delete_transient('nmm_tables_verified');
     });
 }
@@ -587,7 +587,7 @@ function NMM_create_hd_mpk_address_table() {
                composite indexes that reference it are added there too (1.3->1.4). */
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 function NMM_update_hd_table() {
@@ -778,7 +778,7 @@ function NMM_create_payment_table() {
             KEY `unpaid_expiry` (`status`, `ordered_at`)
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 }
 
 // Add the composite indexes the Autopay hot paths need to existing payment
@@ -830,7 +830,7 @@ function NMM_create_carousel_table() {
             UNIQUE KEY `cryptocurrency` (`cryptocurrency`)
         );";
 
-    $wpdb->query($query);
+    $wpdb->query($query); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
 
     // This runs from activation, where WooCommerce may be absent and
     // NMM_init_gateways therefore never ran, so the classes below used to be

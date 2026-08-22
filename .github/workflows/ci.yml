@@ -152,6 +152,9 @@ jobs:
         run: php tests/test-sol-pagination.php
       - name: Monero RPC URL SSRF-guard tests
         run: php tests/test-monero-url.php
+
+      - name: Pinned-request transport (fail-closed) tests
+        run: php tests/test-pinned-request.php
       - name: Settings bounds (server-side clamping) tests
         run: php tests/test-settings-bounds.php
       - name: Exchange-rate consensus (median, outlier rejection, stale tier) tests

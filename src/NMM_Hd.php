@@ -305,7 +305,7 @@ class NMM_Hd {
 					__('Order payment of %1$s %2$s verified at %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
 					NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 					$cryptoId,
-					date('Y-m-d H:i:s', time())));
+					wp_date('Y-m-d H:i:s')));
 			}
 			// we received payment but it was not enough to meet store admin's processing requirement
 			else {
@@ -373,7 +373,7 @@ class NMM_Hd {
 							__('Payment of %1$s %2$s received at %3$s. This is under the amount required to process this order.<br>Remaining payment required: %4$s<br>Wallet Address: %5$s', 'nomiddleman-crypto-payments-for-woocommerce'),
 							NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 							$cryptoId,
-							date('m/d/Y g:i a', time() + (60 * 60 * get_option('gmt_offset'))),
+							wp_date('m/d/Y g:i a'),
 							NMM_Cryptocurrencies::get_price_string($cryptoId, $amountToVerify - $blockchainTotalReceived),
 							$address);
 						
@@ -500,13 +500,12 @@ class NMM_Hd {
 	}
 
 	private static function get_total_received_for_xmy_address($address) {
-		$result = NMM_Blockchain::get_blockbook_total_received_for_xmy_address($address);
-
-		if ($result['result'] === 'success') {
-			return $result['total_received'];
-		}		
-
-		throw new \Exception("Unable to get XMY HD address information from external sources.");
+		// Myriad's last public balance API (blockbook.myralicious.com) is gone and
+		// no replacement carries the chain, so there is nothing left to query.
+		// XMY is listed in NMM_Cryptocurrencies::$hdUnverifiable, which keeps
+		// Privacy Mode off the settings screen for it; this guard covers a site
+		// that had it enabled before the endpoint died.
+		throw new \Exception("Unable to get XMY HD address information: Myriad has no working balance API.");
 	}
 	
 	private static function get_total_received_for_bitcore_address($address) {

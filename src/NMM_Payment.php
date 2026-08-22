@@ -805,7 +805,7 @@ class NMM_Payment {
 						__('Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
 						NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $transactionAmount / (10**$crypto->get_round_precision())),
 						$cryptoId,
-						date('Y-m-d H:i:s', time()),
+						wp_date('Y-m-d H:i:s'),
 						apply_filters('nmm_order_txhash', $txHash, $cryptoId));
 
 				$order->update_meta_data('transaction_hash', $txHash);
@@ -1140,7 +1140,7 @@ class NMM_Payment {
 				NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $contrib['sum'] / (10**$crypto->get_round_precision())),
 				$cryptoId,
 				count($contributingHashes),
-				date('Y-m-d H:i:s', time()),
+				wp_date('Y-m-d H:i:s'),
 				implode(', ', $displayHashes));
 
 		$order->update_meta_data('transaction_hash', $storedHashList);
@@ -1181,9 +1181,6 @@ class NMM_Payment {
 		}
 		if ($cryptoId === 'TRX') {
 			$result = NMM_Blockchain::get_trx_address_transactions($address);
-		}
-		if ($cryptoId === 'ONION') {
-			$result = NMM_Blockchain::get_onion_address_transactions($address);
 		}
 		if ($cryptoId === 'BLK') {
 			$result = NMM_Blockchain::get_blk_address_transactions($address);
@@ -1235,18 +1232,6 @@ class NMM_Payment {
 		}
 		if ($cryptoId === 'DCR') {
 			$result = NMM_Blockchain::get_dcr_address_transactions($address);	
-		}
-		if ($cryptoId === 'LSK') {
-			$result = NMM_Blockchain::get_lsk_address_transactions($address);	
-		}
-		if ($cryptoId === 'XEM') {
-			$result = NMM_Blockchain::get_xem_address_transactions($address);	
-		}
-		if ($cryptoId === 'XMY') {
-			$result = NMM_Blockchain::get_xmy_address_transactions($address);	
-		}
-		if ($cryptoId === 'BTX') {
-			$result = NMM_Blockchain::get_btx_address_transactions($address);	
 		}
 		if ($cryptoId === 'GRS') {
 			$result = NMM_Blockchain::get_grs_address_transactions($address);	
