@@ -316,7 +316,10 @@ class NMM_Exchange {
             return $clean[$middle];
         }
 
-        return ($clean[$middle - 1] + $clean[$middle]) / 2;
+        // Halve BEFORE adding: two finite quotes near PHP_FLOAT_MAX would
+        // overflow to INF through (a + b) / 2, manufacturing the same
+        // zero-priced order out of inputs that were each individually sane.
+        return ($clean[$middle - 1] / 2) + ($clean[$middle] / 2);
     }
 
     /**
@@ -357,7 +360,13 @@ class NMM_Exchange {
         $clean = array();
 
         foreach ($candidates as $label => $price) {
-            if (is_numeric($price) && (float) $price > 0) {
+            // is_finite is load-bearing, not belt and braces: a source that
+            // answers 1e309 decodes to INF, and INF is both is_numeric() and
+            // > 0. An INF rate is stored as last-known-good and then divides
+            // the order total to ZERO crypto - which Privacy Mode reads as
+            // fully paid (received >= 0), completing an order that received
+            // no funds at all.
+            if (is_numeric($price) && is_finite((float) $price) && (float) $price > 0) {
                 $clean[$label] = (float) $price;
             }
         }
@@ -530,8 +539,15 @@ class NMM_Exchange {
             return $state;
         }
 
+        // Keep the ORIGINAL level while the clock runs, not the latest quote.
+        // Storing the newest price alongside the original first_seen let a
+        // single source ratchet: each tick only had to land within tolerance
+        // of the PREVIOUS pending price, so walking up ~4.9% a minute promoted
+        // a price four times the anchor after the corroboration window - while
+        // never once holding a level. Comparing against the original means a
+        // drifting source falls out of tolerance and restarts the clock.
         $state['pending'] = array(
-            'price'      => $state['price'],
+            'price'      => $heldLevel ? (float) $pending['price'] : $state['price'],
             'first_seen' => $heldLevel ? (int) $pending['first_seen'] : (int) $now,
         );
         $state['price'] = null;

@@ -2817,7 +2817,7 @@ class NMM_Blockchain {
 	 * AAAA), classifies the result with FILTER_FLAG_NO_PRIV_RANGE |
 	 * FILTER_FLAG_NO_RES_RANGE, treats an unresolvable host as private, and
 	 * returns the exact IP so the connection can later be pinned to it
-	 * (see sol_post/sol_install_pin for the DNS-rebinding half).
+	 * (see sol_post/sol_post_pinned for the DNS-rebinding half).
 	 *
 	 * The private/loopback POLICY is decided here rather than there, because the
 	 * two coins need opposite defaults: monero-wallet-rpc normally IS on
@@ -2931,10 +2931,67 @@ class NMM_Blockchain {
 	 * either way, since a 302 is the simplest way to walk a vetted public
 	 * endpoint over to an internal one.
 	 */
+	/**
+	 * POST to a Solana RPC over cURL we drive ourselves, pinned to the exact IP
+	 * that was vetted. Mirrors NMM_Monero's curl transport rather than handing
+	 * the choice to WordPress: a pin installed as an http_api_curl callback only
+	 * takes effect if WP actually selects its cURL transport, and when it falls
+	 * back to fsockopen the hostname is resolved again at connect time - the
+	 * rebinding window the pin exists to close.
+	 *
+	 * Returns a wp_remote-shaped array so every caller is unchanged, and keeps
+	 * api_post's per-host backoff bookkeeping, which Solana needs more than most
+	 * (the public endpoint rate-limits hard).
+	 */
+	private static function sol_post_pinned($target, $args, $pin) {
+		$host = (string) $target['host'];
+
+		if (self::host_unavailable($host)) {
+			return array('body' => 'nmm-rate-limit-backoff', 'response' => array('code' => 429));
+		}
+
+		$ch = curl_init($target['url']);
+		$opts = array(
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_TIMEOUT        => isset($args['timeout']) ? (int) $args['timeout'] : 8,
+			CURLOPT_CONNECTTIMEOUT => 10,
+			CURLOPT_POST           => true,
+			CURLOPT_POSTFIELDS     => isset($args['body']) ? $args['body'] : '',
+			CURLOPT_HTTPHEADER     => array('Content-Type: application/json'),
+			// Never follow a redirect: it could be steered at an internal target.
+			CURLOPT_FOLLOWLOCATION => false,
+		);
+
+		if (defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
+			$opts[CURLOPT_PROTOCOLS]       = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+			$opts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+		}
+
+		if ($pin && defined('CURLOPT_RESOLVE') && !empty($target['ip']) && class_exists('NMM_Monero')) {
+			$opts[CURLOPT_RESOLVE] = array(NMM_Monero::curl_resolve_entry($host, $target['port'], $target['ip']));
+		}
+
+		curl_setopt_array($ch, $opts);
+		$body = curl_exec($ch);
+		$code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		$err  = curl_error($ch);
+		curl_close($ch);
+
+		if ($body === false) {
+			$response = new WP_Error('nmm_sol_http', 'Solana RPC request failed: ' . $err);
+		}
+		else {
+			$response = array('body' => $body, 'response' => array('code' => $code));
+		}
+
+		self::record_api_result($host, $response);
+
+		return $response;
+	}
+
 	private static function sol_post($target, $args) {
 		$args['redirection'] = 0;
 
-		$pin = null;
 		$isPublicHostname = empty($target['is_default'])
 							&& empty($target['is_literal'])
 							&& empty($target['is_private'])
@@ -2964,68 +3021,38 @@ class NMM_Blockchain {
 				return new WP_Error('nmm_sol_unpinnable', __('Solana RPC endpoint cannot be safely reached on this host.', 'nomiddleman-crypto-payments-for-woocommerce'));
 			}
 
-			if ($plan['transport'] === 'curl' && !empty($plan['pin'])) {
-				$pin = self::sol_install_pin($target);
+			// transport => curl means DO THE REQUEST WITH cURL OURSELVES, which
+			// is what NMM_Monero does for the same plan. Installing an
+			// http_api_curl callback and calling wp_remote_post instead only
+			// pins IF WordPress happens to choose its cURL transport - and it
+			// will not when, say, libcurl has no SSL support for an https URL,
+			// silently falling back to fsockopen with the callback never firing
+			// and the hostname re-resolved at connect time. Drive cURL directly
+			// so the pin cannot be bypassed by a transport decision we do not
+			// control.
+			if ($plan['transport'] === 'curl') {
+				return self::sol_post_pinned($target, $args, !empty($plan['pin']));
 			}
 
-			if ($pin === null) {
-				$args['reject_unsafe_urls'] = true;
-			}
-			elseif (filter_var($target['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
-					&& in_array((int) $target['port'], array(80, 443, 8080), true)) {
-				// Belt and braces: the pin only takes effect if WordPress actually
-				// uses its cURL transport. Where WordPress's own validator cannot
-				// break a legitimate endpoint (IPv4, standard port) let it re-check
-				// the host too, so a streams-transport install is still covered.
-				$args['reject_unsafe_urls'] = true;
-			}
 		}
 
-		try {
-			return self::api_post($target['url'], $args, false);
+		// Only reachable for a target plan_request judged safe WITHOUT pinning -
+		// an IP literal, where there is no DNS to rebind and the connection goes
+		// to exactly the address that was vetted. Ask WordPress to re-validate
+		// too when the address is public; a merchant who deliberately opted into
+		// a private LAN validator must not have their own endpoint refused by
+		// wp_http_validate_url.
+		if (empty($target['is_private'])) {
+			$args['reject_unsafe_urls'] = true;
 		}
-		finally {
-			// Must run even if the HTTP stack throws: a pin left installed would
-			// keep rewriting DNS for every later request in this process.
-			if ($pin !== null) {
-				self::sol_remove_pin($pin);
-			}
-		}
+
+		return self::api_post($target['url'], $args, false);
 	}
 
 	// Pin the next cURL request to this host to the validated IP. Returns the
 	// registered callback (so it can be removed again) or null when the install
 	// cannot pin.
-	private static function sol_install_pin($target) {
-		if (!function_exists('add_filter') || !defined('CURLOPT_RESOLVE')
-			|| !class_exists('NMM_Monero') || !method_exists('NMM_Monero', 'curl_resolve_entry')) {
-			return null;
-		}
 
-		$entry = NMM_Monero::curl_resolve_entry($target['host'], $target['port'], $target['ip']);
-		$host = strtolower($target['host']);
-
-		$callback = function ($handle, $args, $url) use ($entry, $host) {
-			if (strtolower((string) parse_url($url, PHP_URL_HOST)) !== $host) {
-				return; // some other request happening to run inside this window
-			}
-			curl_setopt($handle, CURLOPT_RESOLVE, array($entry));
-			curl_setopt($handle, CURLOPT_FOLLOWLOCATION, false);
-		};
-
-		// http_api_curl is an ACTION (WordPress fires it with do_action_ref_array
-		// and passes the cURL handle by reference); nothing consumes a return
-		// value, so it is registered and removed as one.
-		add_action('http_api_curl', $callback, 10, 3);
-
-		return $callback;
-	}
-
-	private static function sol_remove_pin($callback) {
-		if (function_exists('remove_action')) {
-			remove_action('http_api_curl', $callback, 10);
-		}
-	}
 
 	public static function get_sol_address_transactions($address, $transactionLifetime = null) {
 
