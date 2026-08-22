@@ -31,9 +31,10 @@ nomiddleman-crypto-payments-for-woocommerce/21Aug26/T1). Four issues: too many
 readme tags, undocumented external services, cURL instead of the HTTP API, and
 unprefixed transient/AJAX names. All four are fixed on branch
 fix/wporg-review-1, which was merged into fix/2.11.0-architecture-v2 on
-2026-08-22 - so they ship as part of 2.10.0, not a separate 2.9.10. The draft
-reply is in review-reply-1.md. Nothing has been sent back to the team yet -
-the reply waits on the v2.10.0 release zip.
+2026-08-22 and ships as 2.11.0 (v2.10.0 was tagged and released from master
+earlier that day and does not contain them). The draft reply is in
+review-reply-1.md. Nothing has been sent back to the team yet - the reply
+waits on the v2.11.0 release zip.
 
 Still to come: the team reviews the corrected code, then contacts rgostic and
 gives them time (typically 30 days) to object. Log each round below, with dates.

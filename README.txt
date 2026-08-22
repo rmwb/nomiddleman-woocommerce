@@ -5,7 +5,7 @@ Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.10.0
+Stable Tag: 2.11.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -200,18 +200,19 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 
 == Changelog ==
 
+= 2.11.0 =
+* Readme: the External Services section now documents every third-party explorer and price API the plugin contacts - what each one is used for, what is sent to it and when, and a link to that operator's terms of service and privacy policy, or a plain statement where an operator publishes neither
+* Removed the payment-verification code for the five coins whose public APIs no longer exist anywhere: Lisk (its layer-1 service is gone), NEM, DeepOnion, Myriad, and Bitcore Autopay. Autopay was already unavailable for these coins on the settings screen, so no working configuration changes; Classic Mode is unaffected, and Bitcore Privacy Mode balance checks continue to work through chainz.cryptoid.info
+* Monero wallet RPC requests now go through WordPress's HTTP API instead of a hand-rolled cURL call. The connection pin to the validated IP address, the protocol restriction, and the digest credentials monero-wallet-rpc needs are applied to the cURL handle through the standard http_api_curl action; if WordPress would have sent the request over a transport that cannot be pinned, the request is refused rather than made unpinned
+* Exchange-rate cache entries are now stored under prefixed names (nmm_rate_*, nmm_fx_*) and the admin address-preview AJAX action is now nmm_first_mpk_address, so none of the plugin's stored names can collide with another plugin's
+* Readme tags reduced to the five the plugin directory uses
+
 = 2.10.0 =
 * Fund safety: wallet addresses are now fully validated when you save them - real checksum verification (base58check, bech32/bech32m including taproot, and Bitcoin Cash CashAddr) instead of loose pattern matching. A mistyped or truncated address can no longer be saved, shown to customers and silently swallow their payments. Addresses already stored that fail the new checks are flagged with an admin notice (never deleted) so you can review them
 * Fund safety: the payment address is now allocated when the customer places the order, not when the order-received page renders. A customer who closes the browser right after paying no longer ends up with an order that has no payment address, no monitoring and no email; automated visits to the order-received link no longer trigger any allocation; and the WooCommerce "Pay" link on a pending order now shows the payment details
 * Monero Autopay: payments split across several transactions (exchange withdrawal limits, wallets that split coins, topping up after a fee shortfall) are now added together and credited once the total covers the order - previously both halves landed on-chain and the order was still cancelled as unpaid. This applies to Monero, where every order gets its own fresh subaddress. On a shared address (a single static address, or a carousel address handed out again later) there is no reliable way to tell whose partial payment is whose, so those are deliberately left for you to reconcile by hand, exactly as before - the plugin will not guess with your customers' money. Privacy Mode already credited split payments correctly and is unchanged
 * Multisite: network uninstall now removes the plugin's tables on every subsite, subsites created after network activation get their tables automatically, broken subsites self-repair, and a new Site Health check reports missing tables
 * Developer/CI: WordPress security sniffs and PHPStan static analysis now run on every push; a new address-validation suite (400+ vectors) and a direct payment-matcher unit suite (split payments, collisions, concurrent verifiers, database-error retries) gate releases; explorer outages from the weekly smoke run now file a tracked issue
-
-* Readme: the External Services section now documents every third-party explorer and price API the plugin contacts - what each one is used for, what is sent to it and when, and a link to that operator's terms of service and privacy policy, or a plain statement where an operator publishes neither
-* Removed the payment-verification code for the five coins whose public APIs no longer exist anywhere: Lisk (its layer-1 service is gone), NEM, DeepOnion, Myriad, and Bitcore Autopay. Autopay was already unavailable for these coins on the settings screen, so no working configuration changes; Classic Mode is unaffected, and Bitcore Privacy Mode balance checks continue to work through chainz.cryptoid.info
-* Monero wallet RPC requests now go through WordPress's HTTP API instead of a hand-rolled cURL call. The connection pin to the validated IP address, the protocol restriction, and the digest credentials monero-wallet-rpc needs are applied to the cURL handle through the standard http_api_curl action; if WordPress would have sent the request over a transport that cannot be pinned, the request is refused rather than made unpinned
-* Exchange-rate cache entries are now stored under prefixed names (nmm_rate_*, nmm_fx_*) and the admin address-preview AJAX action is now nmm_first_mpk_address, so none of the plugin's stored names can collide with another plugin's
-* Readme tags reduced to the five the plugin directory uses
 
 Upgrade notes: stricter address validation may reject a previously accepted address in your settings. Your saved settings are never changed or deleted, but the plugin will not hand a failing address to a customer - a failing address is skipped and the next valid address for that cryptocurrency is used instead, so checkout stops only for a cryptocurrency that has no valid address left at all. An admin notice lists exactly which addresses to check. This is deliberate: an address that fails a checksum is almost always mistyped or truncated, and payments sent to it would be unrecoverable. If you accept crypto on a single coin, check for that notice immediately after upgrading. Zcash merchants: shielded (zs1... or z...), Unified (u1...) and TEX (tex1...) addresses are now accepted, but only in Classic mode - Autopay confirms payments by looking the address up on a public block explorer and cannot see them, so Autopay requires a transparent t-address and will tell you if a saved address is not usable. Orders now also receive their payment address at checkout rather than on the order-received page.
 

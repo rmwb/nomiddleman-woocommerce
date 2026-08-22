@@ -3,17 +3,22 @@
 Send as a reply on the existing thread (keep the review ID in the subject so
 it threads): **Review ID: D nomiddleman-crypto-payments-for-woocommerce/21Aug26/T1 21Aug26/4.3A1**
 
-These fixes shipped as part of **2.10.0**, not a separate 2.9.10 - the review
-branch was merged into the 2.11.0 line on 2026-08-22. Attach or link the
-2.10.0 zip. Do not send until the tag is pushed and the release zip exists.
+These fixes ship in **2.11.0**. The review branch was merged into the 2.11.0
+line on 2026-08-22; v2.10.0 had already been tagged and released hours earlier
+(from master, without these fixes), so the corrected code is the next version
+up. Attach or link the 2.11.0 zip. Do not send until the tag is pushed and the
+release zip exists.
+
+Note that the 2.11.0 zip also carries the unreleased architecture work on that
+branch, not just the review fixes.
 
 ---
 
 Hi,
 
-Thanks for the review. All four issues are fixed in 2.10.0:
+Thanks for the review. All four issues are fixed in 2.11.0:
 
-https://github.com/rmwb/nomiddleman-woocommerce/releases/tag/v2.10.0
+https://github.com/rmwb/nomiddleman-woocommerce/releases/tag/v2.11.0
 
 Two things are worth flagging, since both touch judgement calls rather than
 straight corrections.
