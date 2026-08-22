@@ -235,7 +235,12 @@ class NMM_Payment {
 					continue;
 				}
 				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
-				self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime);
+				if (self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime) === false) {
+					// Another verifier holds this subaddress; we did not examine
+					// it, so it must not be certified as covered.
+					$newFailed[] = self::scan_key($record);
+					continue;
+				}
 			}
 			else {
 				$fetched = self::check_address_transactions_for_matching_payments($crypto, $address, $cryptoLifetime);
@@ -506,7 +511,12 @@ class NMM_Payment {
 
 		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
 
-		self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime);
+		if (self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime) === false) {
+			// Another verifier holds this address; we did not examine it. Treat
+			// it exactly like a failed fetch so it is retried and never
+			// certified as covered.
+			return false;
+		}
 
 		return array(
 			'transactions' => is_array($transactions) ? $transactions : array(),
@@ -594,6 +604,43 @@ class NMM_Payment {
 		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
 		$cryptoId = $crypto->get_id();
+
+		// Serialize matching per address. Claiming an order and durably
+		// recording the transactions that paid it are two separate writes, so
+		// between them the order has left the unpaid set while its
+		// transactions still look available. A second verifier working the
+		// same address in that window can credit one transaction to a sibling
+		// order - two units on chain settling three units of orders. The cron
+		// normally guarantees one verifier per site, but it degrades to
+		// running unlocked when GET_LOCK is unavailable (see NMM_Cron), which
+		// is exactly when this matters. Serializing per address also removes
+		// the lost-update risk in the read-modify-write consumed-tx option,
+		// since every writer for an address is now single-file.
+		$matchLock = NMM_Util::acquire_address_match_lock($cryptoId, $address);
+
+		if ($matchLock === '0') {
+			// Another worker is mid-flight on this exact address. Nothing to
+			// wait for; the sweep revisits it next tick. Returning false marks
+			// the visit INCOMPLETE: certifying an address we never examined
+			// would let the coverage stamp advance past it, and expiry could
+			// then cancel an order whose payment we simply never looked at.
+			NMM_Util::log(__FILE__, __LINE__, 'Address match lock busy for ' . $cryptoId . ' ' . $address . '; another verifier is processing it. Skipping this tick.');
+			return false;
+		}
+
+		// null: advisory locks unavailable on this host. Single-transaction
+		// matching still runs - that path predates this release and its
+		// (much narrower) exposure needs two same-amount orders on one
+		// address - but split-payment AGGREGATION is withheld, because it can
+		// combine arbitrary subsets of transactions and so turns that narrow
+		// race into a broad one. Payments still settle here; only split
+		// payments wait for a host that can serialize.
+		$aggregationSafe = ($matchLock === '1');
+		if (!$aggregationSafe) {
+			NMM_Util::log(__FILE__, __LINE__, 'Advisory locks unavailable on this host; split-payment aggregation is disabled for ' . $cryptoId . ' ' . $address . ' (single-transaction matching continues).', 'warning');
+		}
+
+		try {
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
@@ -732,14 +779,25 @@ class NMM_Payment {
 
 				// CLAIM_CLAIMED: we won the row - complete the order.
 
+				// Consume the hash NOW, before payment_complete(). The claim has
+				// already taken this order out of the unpaid set, so a verifier
+				// running concurrently (possible when GET_LOCK is unavailable and
+				// the cron degrades to running unlocked, see NMM_Cron) would see
+				// only the remaining sibling on this shared address. If the hash
+				// were still unconsumed it could be pooled into that sibling's
+				// aggregate and credited twice - one 1 BTC transaction settling
+				// both a 1 BTC and a 2 BTC order. payment_complete() fires order
+				// hooks, emails and third-party integrations, so leaving the
+				// window open across it is a real exposure, not a theoretical one.
+				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
+
 				$paymentRepo->set_hash($orderId, $orderAmount, $txHash);
 
 				$order = wc_get_order($orderId);
 				if (!$order) {
 					// Row is claimed 'paid' (so it stops matching), but the order is
-					// gone - nothing to complete. Record the tx as consumed and move on.
+					// gone - nothing to complete. The tx is already consumed above.
 					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hash: ' . $txHash, 'warning');
-					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 					continue;
 				}
 				$orderNote = sprintf(
@@ -753,10 +811,341 @@ class NMM_Payment {
 				$order->update_meta_data('transaction_hash', $txHash);
 				$order->payment_complete();
 				$order->add_order_note($orderNote);
+			}
+		}
 
-				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
-			}		
-		}		
+		if (!$aggregationSafe) {
+			// Single-tx matching did run, so the address WAS examined; only the
+			// aggregate pass is withheld. That is a complete visit as far as
+			// coverage is concerned.
+			return true;
+		}
+
+		// Second pass: a customer who pays in SEVERAL transactions (exchange
+		// withdrawal limits, wallet UTXO splitting, topping up after a fee
+		// miscalculation) sends no single tx that clears the order amount, so
+		// the per-transaction loop above matches nothing - the funds land
+		// on-chain but the order would sit unpaid until expiry cancelled it.
+		// Privacy Mode already credits the cumulative total_received; this pass
+		// gives Autopay the same semantics. It runs AFTER the single-tx loop on
+		// purpose: an order completed above is no longer unpaid, and a hash
+		// consumed above no longer contributes to any sum.
+		self::aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings);
+
+		return true;
+
+		}
+		finally {
+			// Release only a lock we actually acquired ('1'); on '0' we returned
+			// above without holding it, and on null we never had one. The lock is
+			// also released automatically if this process dies, so a crash mid-
+			// match cannot wedge the address.
+			if ($matchLock === '1') {
+				NMM_Util::release_address_match_lock($cryptoId, $address);
+			}
+		}
+	}
+
+	/**
+	 * The transactions among $transactions that may contribute to paying
+	 * $record: sufficiently confirmed, inside the matching window, not already
+	 * consumed, not flagged as part of an ambiguous multi-order pool,
+	 * positive-amount, and - critically - no older than the order itself (the
+	 * same TX_ORDER_SKEW_GRACE_SEC lower bound the single-tx pass applies, so
+	 * on a reused static/carousel address an old stray transaction can never
+	 * help pay a NEWER order). Consumed state is re-read here because the
+	 * single-tx pass may have consumed hashes earlier in this same tick.
+	 *
+	 * Several UTXO adapters emit one NMM_Transaction per matching OUTPUT, so a
+	 * single on-chain transaction paying the address across two outputs shows
+	 * up as two entries sharing one hash. Their amounts are SUMMED - all
+	 * outputs pay the order - while the hash appears once in 'hashes' so it is
+	 * consumed exactly once. Eligibility is judged per entry; outputs of one
+	 * transaction share its confirmations and timestamp, so they always agree.
+	 * 'entries' counts eligible NMM_Transaction OBJECTS (not distinct hashes)
+	 * for the caller's split gate.
+	 *
+	 * @return array ['sum' => float (smallest units), 'hashes' => string[],
+	 *                'entries' => int]
+	 */
+	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now) {
+		$sum = 0;
+		$entries = 0;
+		$hashTs = array();
+		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
+
+
+		foreach ($transactions as $transaction) {
+			$txHash = $transaction->get_hash();
+			$txTimeStamp = $transaction->get_time_stamp();
+			if (($now - $txTimeStamp) > $transactionLifetime) {
+				continue;
+			}
+			if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
+				continue;
+			}
+			$transactionAmount = $transaction->get_amount();
+			if ($transactionAmount <= 0) {
+				// Adds nothing to the sum; consuming its hash would only lose
+				// information. The single-tx pass never matches it either.
+				continue;
+			}
+			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
+				continue;
+			}
+
+			if ($transaction->get_confirmations() < $requiredConfirmations) {
+				// Not spendable-certain yet: it may contribute on a later tick,
+				// but it must never help clear an order now.
+				continue;
+			}
+
+			$sum += $transactionAmount;
+			$entries++;
+			if (!isset($hashTs[$txHash])) {
+				$hashTs[$txHash] = $txTimeStamp;
+			}
+		}
+
+		return array('sum' => $sum, 'hashes' => array_keys($hashTs), 'entries' => $entries);
+	}
+
+	/**
+	 * Whether this address belongs to exactly ONE order, which is what makes
+	 * split-payment aggregation safe.
+	 *
+	 * Aggregation pools several transactions towards one order total. On an
+	 * address that serves several orders - a static address, or a carousel
+	 * seat handed out again - that pooling cannot be attributed safely:
+	 * whether two orders overlap in time or merely follow one another on the
+	 * same address, there is no way to tell whose partial payment is whose.
+	 * Timestamps cannot decide it either, because a block header time comes
+	 * from the miner (constrained only against the previous blocks median),
+	 * not from the store clock. So aggregation is confined to addresses that
+	 * are minted per order and never re-issued.
+	 *
+	 * In the Autopay payments table that means Monero: NMM_Gateway mints a
+	 * fresh subaddress per order for XMR, while static and carousel addresses
+	 * are reused by design. Privacy Mode (HD) never reaches this code - it
+	 * verifies through NMM_Hd against a cumulative balance, which already
+	 * credits split payments correctly, and retires any address that receives
+	 * funds instead of recycling it.
+	 *
+	 * Merchants on a reused address are not worse off than before this
+	 * release: their split payments simply remain a manual reconciliation, as
+	 * they have always been. Crediting them automatically needs a durable
+	 * transaction-to-order binding (the 2.11.0 consumed-tx table), not a
+	 * timestamp heuristic.
+	 */
+	/**
+	 * Can Autopay actually verify a payment to this address?
+	 *
+	 * Used as a brake on auto-cancellation, not on allocation. Returns true
+	 * when we cannot tell (unknown coin, validator unavailable): this gates an
+	 * irreversible action, so an indeterminate answer must not silently stop
+	 * ordinary expiry from working.
+	 */
+	private static function address_verifiable_for_expiry($cryptoId, $address) {
+		if (!class_exists('NMM_Address')) {
+			return true;
+		}
+
+		// Only a WELL-FORMED address that the explorer still cannot report on
+		// earns the reprieve - the Zcash shielded/Unified case, where the
+		// customer can pay successfully and the merchant really does receive
+		// the funds, so cancelling would kill a paid order.
+		//
+		// A MALFORMED address does not qualify and expires as it always has.
+		// It is unverifiable for a different reason: no wallet will send to a
+		// failed checksum, so there is no payment to protect - and treating
+		// those as unverifiable too would quietly stop expiry for every order
+		// a store issued under the older, looser address rules, leaving unpaid
+		// orders to accumulate forever.
+		if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
+			return true;
+		}
+
+		return NMM_Address::is_autopay_verifiable_form($cryptoId, $address);
+	}
+
+	private static function address_is_per_order($cryptoId) {
+		return $cryptoId === "XMR";
+	}
+
+	/**
+	 * Whether $sumSmallestUnit clears $record's total under the SAME tolerance
+	 * the single-tx pass applies: any overpayment matches; the configured
+	 * shortfall tolerance (default 0.1%) applies to under-payment only; and a
+	 * zero/unparseable expected amount never matches (and never divides).
+	 */
+	private static function split_payment_sum_clears($record, $sumSmallestUnit, $crypto, $cryptoId, $address, $nmmSettings) {
+		$paymentAmount = $record['order_amount'];
+		$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());
+
+		if ($paymentAmountSmallestUnit <= 0) {
+			return false;
+		}
+
+		if ($sumSmallestUnit >= $paymentAmountSmallestUnit) {
+			return true;
+		}
+
+		$autoPaymentPercent = apply_filters('nmm_autopay_percent', $nmmSettings->get_autopay_processing_percent($cryptoId), $paymentAmount, $cryptoId, $address);
+		$percentShortfall = ($paymentAmountSmallestUnit - $sumSmallestUnit) / $paymentAmountSmallestUnit;
+
+		return $percentShortfall <= (1 - $autoPaymentPercent);
+	}
+
+	/**
+	 * Aggregate (split-payment) matching for one address, run after the
+	 * single-tx pass of process_address_transactions. When the sum of the
+	 * eligible unconsumed transactions clears the order total, the order is
+	 * completed through the same claim/complete sequence the single-tx path
+	 * uses and ALL contributing hashes are consumed together.
+	 */
+	private static function aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings) {
+		$cryptoId = $crypto->get_id();
+
+		// Only ever aggregate on an address minted for a single order. See
+		// address_is_per_order(): pooling transactions towards one total is
+		// unattributable the moment an address can serve more than one order,
+		// and no timestamp comparison can rescue it.
+		if (!self::address_is_per_order($cryptoId)) {
+			return;
+		}
+
+		// Belt and braces for the rule above. address_is_per_order() infers the
+		// property from the coin, but the fact that makes it true lives in
+		// NMM_Gateway, in another class: if anyone ever adds a fallback there
+		// ("wallet RPC down, use the static address"), aggregation would
+		// silently become unsafe with no test failing. This asks the data
+		// instead - an address that has EVER carried more than one order,
+		// whatever their statuses, is by definition reused.
+		$rowsForAddress = $paymentRepo->count_rows_for_address($cryptoId, $address);
+		if ($rowsForAddress === null || $rowsForAddress > 1) {
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ($rowsForAddress === null ? ' could not be confirmed as per-order (count query failed)' : ' has served more than one order, so it is not per-order after all') . '; not aggregating.', 'warning');
+			return;
+		}
+
+		// Re-read the unpaid rows AFTER the single-tx pass ran: an order it
+		// completed (or a collision it consumed) must not be double-processed.
+		$paymentRecords = $paymentRepo->get_unpaid_for_address($cryptoId, $address);
+		if (count($paymentRecords) == 0) {
+			return;
+		}
+
+		$requiredConfirmations = $nmmSettings->get_autopay_required_confirmations($cryptoId);
+		$now = time();
+
+		// Defensive: a per-order address should never carry two unpaid orders
+		// (a Monero subaddress is minted for one order and never re-issued).
+		// If one somehow does, attribution is ambiguous - surface it for a
+		// human and leave every transaction unconsumed for a later clean tick.
+		if (count($paymentRecords) > 1) {
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' unexpectedly has ' . count($paymentRecords) . ' unpaid orders; not aggregating - please reconcile manually.', 'warning');
+			return;
+		}
+
+		$record = $paymentRecords[0];
+		$contrib = self::split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now);
+		$contributingHashes = $contrib['hashes'];
+
+		// The split gate counts transaction ENTRIES, not distinct hashes:
+		// several UTXO adapters emit one NMM_Transaction per matching output,
+		// and a single transaction paying the order across two outputs is
+		// exactly the split-funds case this pass exists for - the single-tx
+		// loop compares each output individually and can never match it. A
+		// lone single-output entry stays gated out: it is the single-tx
+		// pass's case (it either matched above, or fails the identical
+		// threshold here), and gating it keeps a claim that pass left for
+		// retry (CLAIM_DB_ERROR) from being re-attempted within the same tick.
+		if ($contrib['entries'] < 2) {
+			return;
+		}
+
+		if (!self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
+			NMM_Util::log(__FILE__, __LINE__, '---split-payment sum below threshold: ' . $cryptoId . ',' . $address . ',' . $contrib['sum']);
+			return;
+		}
+
+		$orderId = $record['order_id'];
+		$orderAmount = $record['order_amount'];
+
+		// One combined string where a single hash would go. The tx_hash column
+		// is char(255), so a long list (3+ Solana signatures) is truncated for
+		// STORAGE only - the order note below always carries the full list, so
+		// nothing a human needs for reconciliation is lost.
+		$hashList = implode(',', $contributingHashes);
+		$storedHashList = (strlen($hashList) > 255) ? substr($hashList, 0, 255) : $hashList;
+
+		// Same pre-claim hook, same claim, same tri-state handling as the
+		// single-tx path - see the comments there. Integrations receive the
+		// combined comma-separated hash list where a single hash would go.
+		do_action('nmm_before_autopay_complete', $orderId, $cryptoId, $address, $hashList);
+
+		$claim = $paymentRepo->claim_for_payment($orderId, $orderAmount);
+
+		if ($claim === NMM_Payment_Repo::CLAIM_DB_ERROR) {
+			// Row state unknown - consume NOTHING and touch nothing, so every
+			// contributing transaction is still eligible when a later tick
+			// retries the whole aggregate.
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving all transactions unconsumed for retry. Transaction Hashes: ' . $hashList, 'error');
+			return;
+		}
+
+		if ($claim === NMM_Payment_Repo::CLAIM_ALREADY) {
+			// Conclusively transitioned elsewhere (expired and cancelled, or
+			// paid by another worker). Do NOT complete the order - but DO
+			// consume EVERY contributing tx and persist the hashes on the
+			// cancelled row: the address will be reused, and any unconsumed
+			// in-window transaction could otherwise be matched (singly or in a
+			// new aggregate) against a NEW order of the same amount and
+			// misattribute the payment.
+			foreach ($contributingHashes as $consumedHash) {
+				$nmmSettings->add_consumed_tx($cryptoId, $address, $consumedHash);
+			}
+			$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $storedHashList);
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded all transactions as consumed to prevent reuse on a recycled address. Transaction Hashes: ' . $hashList . '. Please reconcile manually.', 'warning');
+			return;
+		}
+
+		// CLAIM_CLAIMED: we won the row - complete the order exactly as the
+		// single-tx path does.
+
+		// Consume every contributor NOW, before payment_complete(), for the same
+		// reason the single-tx path does: the claim has already removed this
+		// order from the unpaid set, so any hash still unconsumed could be
+		// pooled into a sibling order by a verifier running concurrently.
+		foreach ($contributingHashes as $consumedHash) {
+			$nmmSettings->add_consumed_tx($cryptoId, $address, $consumedHash);
+		}
+
+		$paymentRepo->set_hash($orderId, $orderAmount, $storedHashList);
+
+		$order = wc_get_order($orderId);
+		if (!$order) {
+			// Row is claimed 'paid' (so it stops matching), but the order is
+			// gone - nothing to complete. The txs are already consumed above.
+			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hashes: ' . $hashList, 'warning');
+			return;
+		}
+
+		$displayHashes = array();
+		foreach ($contributingHashes as $noteHash) {
+			$displayHashes[] = apply_filters('nmm_order_txhash', $noteHash, $cryptoId);
+		}
+		$orderNote = sprintf(
+				/* translators: 1: amount, 2: cryptocurrency ticker, 3: number of transactions, 4: date/time, 5: transaction hashes */
+				__('Order payment of %1$s %2$s verified across %3$d transactions at %4$s. Transaction Hashes: %5$s', 'nomiddleman-crypto-payments-for-woocommerce'),
+				NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $contrib['sum'] / (10**$crypto->get_round_precision())),
+				$cryptoId,
+				count($contributingHashes),
+				date('Y-m-d H:i:s', time()),
+				implode(', ', $displayHashes));
+
+		$order->update_meta_data('transaction_hash', $storedHashList);
+		$order->payment_complete();
+		$order->add_order_note($orderNote);
 	}
 
 	private static function get_address_transactions($cryptoId, $address, $transactionLifetime = null) {
@@ -1016,6 +1405,22 @@ class NMM_Payment {
 					// Terminal non-paid or otherwise not awaiting payment - reconcile
 					// the record but leave the order alone.
 					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
+					continue;
+				}
+
+				// NEVER auto-cancel an order whose address Autopay cannot look up.
+				// A store upgrading from a release with looser address rules can
+				// still hold unpaid orders that were issued an address the
+				// explorer cannot report on - a Zcash shielded or Unified address
+				// is the known case. Those orders escaped the carousel long before
+				// this code runs, so refusing to hand such an address out at
+				// allocation time does not help them: the address is already on
+				// the order and the customer may already have paid it. Cancelling
+				// is the one irreversible thing we could do, and it would cancel a
+				// GENUINELY PAID order. Leave it for the merchant, who can see the
+				// payment in their own wallet.
+				if (!self::address_verifiable_for_expiry($cryptoId, $address)) {
+					NMM_Util::log(__FILE__, __LINE__, 'Autopay: not cancelling ' . $cryptoId . ' order ' . $orderId . ' - its payment address (' . $address . ') cannot be checked on a public explorer, so an actual payment would be invisible to us. Please confirm this order in your own wallet and complete or cancel it by hand.', 'warning');
 					continue;
 				}
 

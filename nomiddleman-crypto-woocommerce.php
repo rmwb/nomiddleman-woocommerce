@@ -7,7 +7,7 @@ Plugin URI:  https://wordpress.org/plugins/nomiddleman-crypto-payments-for-wooco
 Description: WooCommerce Bitcoin and Cryptocurrency Payment Gateway
 Author: nomiddleman
 Author URI: https://github.com/rmwb/nomiddleman-woocommerce
-Version: 2.9.9
+Version: 2.10.0
 Requires PHP: 7.4
 Text Domain: nomiddleman-crypto-payments-for-woocommerce
 Domain Path: /languages
@@ -71,7 +71,7 @@ function NMM_init_gateways(){
     define('NMM_PLUGIN_FILE', __FILE__);
     define('NMM_ABS_PATH', dirname(NMM_PLUGIN_FILE));
 
-    define('NMM_VERSION', '2.9.9');
+    define('NMM_VERSION', '2.10.0');
     
     define('NMM_REDUX_SLUG', 'nmmpro_options');
 
@@ -116,6 +116,7 @@ function NMM_init_gateways(){
     require_once(plugin_basename('src/NMM_Transaction.php'));
     
     // Business Logic
+    require_once(plugin_basename('src/NMM_Address.php'));
     require_once(plugin_basename('src/NMM_Cryptocurrencies.php'));
     require_once(plugin_basename('src/NMM_Carousel.php'));
     require_once(plugin_basename('src/NMM_Hd.php'));    
@@ -143,6 +144,7 @@ function NMM_init_gateways(){
     if (is_admin()) {
         add_action('wp_ajax_firstmpkaddress', 'NMM_first_mpk_address_ajax');
         add_filter('site_status_tests', 'NMM_register_site_health_test');
+        add_action('admin_init', 'NMM_verify_site_tables');
     }
 
     // thank-you page payment status poller (guests included)
@@ -156,6 +158,15 @@ function NMM_init_gateways(){
     // details. Prime the gateways singleton at priority 5; WordPress still
     // executes callbacks added to a later priority of the hook being run.
     add_action('woocommerce_email_order_details', 'NMM_load_gateways_for_email', 5);
+
+    // The order-pay endpoint (WooCommerce's "Pay" link on a pending order)
+    // never passes through the thank-you hook, so a customer returning to an
+    // unpaid order previously had no way to see their payment address again.
+    // Registered here rather than in the gateway constructor because the
+    // receipt template's do_action fires without anything instantiating the
+    // gateways first - the callback resolves (and thereby constructs) the
+    // gateway itself.
+    add_action('woocommerce_receipt_nmmpro_gateway', 'NMM_render_order_receipt');
 
     NMM_Register_Extensions();
     NMM_update_hd_table();
@@ -173,6 +184,18 @@ function NMM_init_gateways(){
 function NMM_load_gateways_for_email() {
     if (function_exists('WC') && WC() && is_callable(array(WC(), 'payment_gateways'))) {
         WC()->payment_gateways();
+    }
+}
+
+// Renders the payment details on the order-pay receipt page. See the
+// woocommerce_receipt_nmmpro_gateway registration in NMM_init_gateways.
+function NMM_render_order_receipt($order_id) {
+    if (!function_exists('WC') || !WC() || !is_callable(array(WC(), 'payment_gateways'))) {
+        return;
+    }
+    $gateways = WC()->payment_gateways()->payment_gateways();
+    if (isset($gateways['nmmpro_gateway'])) {
+        $gateways['nmmpro_gateway']->thank_you_page($order_id);
     }
 }
 
@@ -226,7 +249,24 @@ function NMM_add_interval ($schedules)
     return $schedules;
 }
 
-function NMM_activate() {
+// register_activation_hook passes whether the plugin was network activated.
+// On a network activation the tables are per site (each blog has its own
+// prefix), so create them on every existing site; a plain activation only
+// touches the current site, exactly as before.
+function NMM_activate($networkWide = false) {
+    if (is_multisite() && $networkWide) {
+        NMM_for_each_site('NMM_activate_site');
+        return;
+    }
+
+    NMM_activate_site();
+}
+
+// Everything activation needs for ONE site (the current blog). Also invoked
+// for sub-sites created after a network activation (NMM_initialize_new_site)
+// and by the self-heal check (NMM_verify_site_tables), so it must stay
+// idempotent: the CREATEs are IF NOT EXISTS and the migrations are versioned.
+function NMM_activate_site() {
     // scheduling happens on init via NMM_schedule_payment_checks
     NMM_create_hd_mpk_address_table();
     // remove leftovers from the retired flash-notice queue
@@ -236,6 +276,102 @@ function NMM_activate() {
     NMM_create_carousel_table();
     NMM_maybe_create_sol_retry_table();
     NMM_maybe_add_payment_indexes();
+}
+
+// Run a callable once per site. On multisite it visits every blog (the same
+// switch_to_blog loop NMM_drop_sol_retry_table and NMM_delete_scan_options
+// established); on single site it simply invokes the callable for the one site.
+function NMM_for_each_site($callback) {
+    if (is_multisite()) {
+        global $wpdb;
+        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
+        foreach ($blogIds as $blogId) {
+            switch_to_blog($blogId);
+            call_user_func($callback);
+            restore_current_blog();
+        }
+        return;
+    }
+
+    call_user_func($callback);
+}
+
+// A sub-site created AFTER the plugin was network activated never went through
+// NMM_activate, so build its tables here or its checkout would fail with raw
+// database errors. Only when the plugin is network active: a per-site
+// activation should not leak tables into unrelated new sites.
+function NMM_initialize_new_site($newSite) {
+    $sitewidePlugins = (array) get_site_option('active_sitewide_plugins', array());
+    if (!isset($sitewidePlugins[plugin_basename(__FILE__)])) {
+        return;
+    }
+
+    switch_to_blog($newSite->blog_id);
+    NMM_activate_site();
+    restore_current_blog();
+}
+// Priority 100: core populates the new site's tables/options at priority 10,
+// and ours must not run before the blog's options table exists.
+add_action('wp_initialize_site', 'NMM_initialize_new_site', 100);
+
+// Self-heal for sites that missed activation (e.g. a sub-site created after
+// network activation on a version without the wp_initialize_site hook above).
+// Admin-only and transient-gated, so the SHOW TABLES probes do not run on
+// every load. Repairs by re-running the idempotent per-site activation.
+function NMM_verify_site_tables() {
+    if (get_transient('nmm_tables_verified')) {
+        return;
+    }
+
+    global $wpdb;
+
+    // Each table's schema/version bookkeeping. Recreating a missing table from
+    // its BASE definition while a stale version option still says "current"
+    // would permanently skip the gated verify-then-record migrations that add
+    // later columns/indexes (the base HD table deliberately lacks hd_mode, for
+    // example), so clear the bookkeeping for any missing table first and let
+    // the shipped migrations rebuild it to the current schema.
+    $schemaOptions = array(
+        $wpdb->prefix . NMM_HD_TABLE        => array('nmm_hd_table_version'),
+        $wpdb->prefix . NMM_PAYMENT_TABLE   => array('nmm_payment_index_version'),
+        $wpdb->prefix . NMM_CAROUSEL_TABLE  => array(),
+        $wpdb->prefix . NMM_SOL_RETRY_TABLE => array('nmm_sol_retry_schema', 'nmm_sol_retry_table_created'),
+    );
+
+    $missing = array();
+    foreach (array_keys($schemaOptions) as $requiredTable) {
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $requiredTable)) !== $requiredTable) {
+            $missing[] = $requiredTable;
+        }
+    }
+
+    if (!empty($missing)) {
+        NMM_Util::log(__FILE__, __LINE__, 'Plugin tables missing for this site (' . implode(', ', $missing) . '); recreating them. This site likely never ran activation (e.g. created after a network activation).', 'warning');
+
+        foreach ($missing as $missingTable) {
+            foreach ($schemaOptions[$missingTable] as $schemaOption) {
+                delete_option($schemaOption);
+            }
+        }
+
+        NMM_activate_site();
+
+        // The HD migrations normally run from NMM_init_gateways on
+        // plugins_loaded, which already fired this request, so run them now:
+        // a recreated base HD table must gain hd_mode (and the composite
+        // indexes that reference it) immediately, not on the next load.
+        NMM_update_hd_table();
+
+        foreach ($missing as $missingTable) {
+            if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $missingTable)) !== $missingTable) {
+                // Leave the transient unset so the next admin load retries.
+                NMM_Util::log(__FILE__, __LINE__, 'Could not create table ' . $missingTable . ' (' . $wpdb->last_error . '); will retry on the next admin load.', 'error');
+                return;
+            }
+        }
+    }
+
+    set_transient('nmm_tables_verified', 1, DAY_IN_SECONDS);
 }
 
 // Create/repair the durable Solana retry-queue table (gated by a schema version
@@ -347,79 +483,59 @@ function NMM_uninstall() {
 // table), so on a network uninstall delete them per site alongside the per-site
 // tables; otherwise sub-sites would retain orphaned cursor/coverage state.
 function NMM_delete_scan_options() {
-    $scanOptions = array(
-        'nmm_autopay_scan_cursor',
-        'nmm_autopay_scan_retry',
-        'nmm_autopay_scan_last_run',
-        'nmm_autopay_scan_covered_at',
-        'nmm_autopay_scan_sweep_start',
-        'nmm_autopay_scan_dirty',
-        'nmm_autopay_scan_incomplete',
-        'nmm_autopay_scan_incomplete_next',
-    );
+    NMM_for_each_site(function () {
+        $scanOptions = array(
+            'nmm_autopay_scan_cursor',
+            'nmm_autopay_scan_retry',
+            'nmm_autopay_scan_last_run',
+            'nmm_autopay_scan_covered_at',
+            'nmm_autopay_scan_sweep_start',
+            'nmm_autopay_scan_dirty',
+            'nmm_autopay_scan_incomplete',
+            'nmm_autopay_scan_incomplete_next',
+        );
 
-    if (is_multisite()) {
-        global $wpdb;
-        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
-        foreach ($blogIds as $blogId) {
-            switch_to_blog($blogId);
-            foreach ($scanOptions as $scanOption) {
-                delete_option($scanOption);
-            }
-            restore_current_blog();
+        foreach ($scanOptions as $scanOption) {
+            delete_option($scanOption);
         }
-        return;
-    }
-
-    foreach ($scanOptions as $scanOption) {
-        delete_option($scanOption);
-    }
+    });
 }
 
-// The retry table is created per site (each blog has its own prefix), so drop it
-// per site on a network uninstall; otherwise sub-site tables would be orphaned.
+// All plugin tables are created per site (each blog has its own prefix), so
+// drop them per site on a network uninstall - along with each table's per-site
+// schema-version options, so a later reinstall re-runs its migrations instead
+// of trusting a stale version - otherwise sub-site tables would be orphaned.
 function NMM_drop_sol_retry_table() {
-    global $wpdb;
-
-    if (is_multisite()) {
-        $blogIds = $wpdb->get_col("SELECT blog_id FROM {$wpdb->blogs}");
-        foreach ($blogIds as $blogId) {
-            switch_to_blog($blogId);
-            $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
-            delete_option('nmm_sol_retry_schema');
-            delete_option('nmm_sol_retry_table_created');
-            restore_current_blog();
-        }
-        return;
-    }
-
-    $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
-    delete_option('nmm_sol_retry_schema');
-    delete_option('nmm_sol_retry_table_created');
+    NMM_for_each_site(function () {
+        global $wpdb;
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_SOL_RETRY_TABLE . "`");
+        delete_option('nmm_sol_retry_schema');
+        delete_option('nmm_sol_retry_table_created');
+    });
 }
 
 function NMM_drop_mpk_address_table() {
-    global $wpdb;
-    $tableName = $wpdb->prefix . NMM_HD_TABLE;
-    
-    $query = "DROP TABLE IF EXISTS `$tableName`";
-    $wpdb->query($query);
+    NMM_for_each_site(function () {
+        global $wpdb;
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_HD_TABLE . "`");
+        delete_option('nmm_hd_table_version');
+    });
 }
 
 function NMM_drop_payment_table() {
-    global $wpdb;    
-    $tableName = $wpdb->prefix . NMM_PAYMENT_TABLE;    
-    
-    $query = "DROP TABLE IF EXISTS `$tableName`";
-    $wpdb->query($query);
+    NMM_for_each_site(function () {
+        global $wpdb;
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_PAYMENT_TABLE . "`");
+        delete_option('nmm_payment_index_version');
+    });
 }
 
 function NMM_drop_carousel_table() {
-    global $wpdb;    
-    $tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;    
-    
-    $query = "DROP TABLE IF EXISTS `$tableName`";
-    $wpdb->query($query);
+    NMM_for_each_site(function () {
+        global $wpdb;
+        $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMM_CAROUSEL_TABLE . "`");
+        delete_transient('nmm_tables_verified');
+    });
 }
 
 function NMM_create_hd_mpk_address_table() {
@@ -700,6 +816,7 @@ function NMM_create_carousel_table() {
     require_once(plugin_basename('src/NMM_Cryptocurrency.php'));
     require_once(plugin_basename('src/NMM_Carousel_Repo.php'));
     require_once(plugin_basename('src/NMM_Util.php'));
+    require_once(plugin_basename('src/NMM_Address.php'));
     require_once(plugin_basename('src/NMM_Cryptocurrencies.php'));
     
     NMM_Carousel_Repo::init();
@@ -750,7 +867,57 @@ function NMM_register_site_health_test($tests) {
         'label' => __('Nomiddleman Privacy Mode math extension', 'nomiddleman-crypto-payments-for-woocommerce'),
         'test'  => 'NMM_site_health_hd_math',
     );
+    $tests['direct']['nmm_db_tables'] = array(
+        'label' => __('Nomiddleman database tables', 'nomiddleman-crypto-payments-for-woocommerce'),
+        'test'  => 'NMM_site_health_db_tables',
+    );
     return $tests;
+}
+
+// Site Health test: all plugin tables must exist for the current site. A site
+// can miss them if it was created after a network activation on an older
+// version - checkout then fails with raw database errors.
+function NMM_site_health_db_tables() {
+    global $wpdb;
+
+    $result = array(
+        'label'       => __('The Nomiddleman database tables are present', 'nomiddleman-crypto-payments-for-woocommerce'),
+        'status'      => 'good',
+        'badge'       => array(
+            'label' => __('Nomiddleman Crypto', 'nomiddleman-crypto-payments-for-woocommerce'),
+            'color' => 'blue',
+        ),
+        'description' => '<p>' . esc_html__('All database tables the plugin needs for this site exist, so address assignment and payment tracking can work.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>',
+        'test'        => 'nmm_db_tables',
+    );
+
+    $requiredTables = array(
+        $wpdb->prefix . NMM_HD_TABLE,
+        $wpdb->prefix . NMM_PAYMENT_TABLE,
+        $wpdb->prefix . NMM_CAROUSEL_TABLE,
+        $wpdb->prefix . NMM_SOL_RETRY_TABLE,
+    );
+
+    $missing = array();
+    foreach ($requiredTables as $requiredTable) {
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $requiredTable)) !== $requiredTable) {
+            $missing[] = $requiredTable;
+        }
+    }
+
+    if (empty($missing)) {
+        return $result;
+    }
+
+    $result['status']      = 'critical';
+    $result['label']       = __('Nomiddleman database tables are missing for this site', 'nomiddleman-crypto-payments-for-woocommerce');
+    $result['description'] = '<p>' . sprintf(
+        /* translators: %s: comma-separated list of missing database table names */
+        esc_html__('The following plugin tables do not exist for this site: %s. Checkout with the crypto gateway will fail until they are created. This usually means the site was created after the plugin was network activated on an older plugin version. Deactivating and reactivating the plugin recreates them; the plugin also attempts an automatic repair on admin page loads.', 'nomiddleman-crypto-payments-for-woocommerce'),
+        esc_html(implode(', ', $missing))
+    ) . '</p>';
+
+    return $result;
 }
 
 function NMM_site_health_hd_math() {

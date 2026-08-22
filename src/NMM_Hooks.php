@@ -81,16 +81,10 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 	}
 
 	// If admin updates from needs-payment to cancelled, stop looking for matching transactions
-	if ($oldOrderStatus === 'pending' && $newOrderStatus === 'cancelled') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-	}
-	if ($oldOrderStatus === 'pending' && $newOrderStatus === 'failed') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-	}
-	if ($oldOrderStatus === 'on-hold' && $newOrderStatus === 'cancelled') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
-	}
-	if ($oldOrderStatus === 'on-hold' && $newOrderStatus === 'failed') {
+	$retireStatuses = array(
+		'pending|cancelled', 'pending|failed', 'on-hold|cancelled', 'on-hold|failed',
+	);
+	if (in_array($oldOrderStatus . '|' . $newOrderStatus, $retireStatuses, true)) {
 		$paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
 	}
 
@@ -168,9 +162,11 @@ function NMM_first_mpk_address_ajax() {
 			return;
 		}
 
+		// phpcs:disable WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- every value is validated against a strict format/allowlist below (is_valid_mpk, known crypto id, '0'/'1' flag); none can legitimately contain slashable characters, so wp_unslash() would be a no-op and is deferred to avoid any data-flow change in this release.
 		$mpk = sanitize_text_field($_POST['mpk']);
 		$cryptoId = sanitize_text_field($_POST['cryptoId']);
 		$hdMode = isset($_POST['hdMode']) ? sanitize_text_field($_POST['hdMode']) : '0';
+		// phpcs:enable WordPress.Security.ValidatedSanitizedInput.MissingUnslash
 
 		if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
 			return;

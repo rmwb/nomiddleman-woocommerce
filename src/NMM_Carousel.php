@@ -7,9 +7,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 class NMM_Carousel {
 	private $buffer;
 	private $cryptoId;
+	private $autopayEnabled;
 
 	public function __construct($cryptoId) {
 		$this->cryptoId = $cryptoId;
+
+		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$this->autopayEnabled = $nmmSettings->autopay_enabled($cryptoId);
 
 		$carouselRepo = new NMM_Carousel_Repo();
 		$this->buffer = self::usable_seats($carouselRepo->get_buffer($cryptoId));
@@ -76,11 +80,26 @@ class NMM_Carousel {
 
 			$address = $this->buffer[$seat];
 
-			if (NMM_Cryptocurrencies::is_valid_wallet_address($this->cryptoId, $address)) {
-				return $address;
+			if (!NMM_Cryptocurrencies::is_valid_wallet_address($this->cryptoId, $address)) {
+				NMM_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an invalid address; skipping it.', 'warning');
+				continue;
 			}
 
-			NMM_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an invalid address; skipping it.', 'warning');
+			// The settings save filters addresses Autopay cannot verify out of
+			// the buffer, but the buffer is a durable cache: an upgrade writes
+			// no settings, and neither does a mode flipped by WP-CLI, an import
+			// or a migration. A merchant already running Zcash Autopay against
+			// a shielded address - which the previous release's looser rule
+			// accepted - would otherwise keep being handed it here, receive the
+			// funds, and have the order auto-cancelled because a public
+			// explorer cannot see the payment. Re-check at the moment of use,
+			// where nothing can bypass it.
+			if ($this->autopayEnabled && !NMM_Address::is_autopay_verifiable_form($this->cryptoId, $address)) {
+				NMM_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an address Autopay cannot verify (' . $address . '); skipping it. Re-save this cryptocurrency\'s settings, or use an address Autopay can look up.', 'warning');
+				continue;
+			}
+
+			return $address;
 		}
 
 		NMM_Util::log(__FILE__, __LINE__, 'No valid carousel address for ' . $this->cryptoId . ' among ' . $seatCount . ' seat(s).', 'error');

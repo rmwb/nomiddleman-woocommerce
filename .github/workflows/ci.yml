@@ -45,6 +45,60 @@ jobs:
       - name: Scan plugin code
         run: vendor/bin/phpcs -p
 
+  wpcs-security:
+    name: WordPress.Security (WPCS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Install WordPress Coding Standards
+        run: |
+          composer init --quiet --name nomiddleman/wpcs-scan
+          composer config minimum-stability dev
+          composer config prefer-stable true
+          composer config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer require --quiet --dev squizlabs/php_codesniffer:^3.13 wp-coding-standards/wpcs:^3.4
+      # WPCS 3.x requires PHPCS ^3.13 while PHPCompatibility 10.x-dev requires
+      # PHPCS ^4, so the two standards cannot share one install or one ruleset
+      # file: phpcs.xml.dist stays PHPCompatibility-only (the compat job above)
+      # and the security sniffs run here from a generated single-rule ruleset.
+      - name: Scan plugin code (WordPress.Security ruleset)
+        run: |
+          cat > "$RUNNER_TEMP/wpcs-security.xml" <<'EOF'
+          <?xml version="1.0"?>
+          <ruleset name="Nomiddleman WordPress Security">
+              <rule ref="WordPress.Security"/>
+          </ruleset>
+          EOF
+          vendor/bin/phpcs -p --standard="$RUNNER_TEMP/wpcs-security.xml" \
+            --extensions=php --ignore='*/src/vendor/*' \
+            nomiddleman-crypto-woocommerce.php src
+
+  phpstan:
+    name: PHPStan (level 5, WP + WooCommerce stubs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, gmp, gd
+          coverage: none
+      # exact pins keep results reproducible against phpstan-baseline.neon;
+      # bump them together with a baseline regeneration
+      - name: Install PHPStan and WordPress/WooCommerce stubs
+        run: |
+          composer init --quiet --name nomiddleman/phpstan-scan
+          composer require --quiet --dev phpstan/phpstan:2.2.5 \
+            szepeviktor/phpstan-wordpress:2.0.3 \
+            php-stubs/wordpress-stubs:6.9.4 \
+            php-stubs/woocommerce-stubs:10.9.4
+      - name: Analyse plugin code (new findings only, see phpstan-baseline.neon)
+        run: vendor/bin/phpstan analyse -c phpstan.neon.dist --no-progress --memory-limit=1G
+
   hd-derivation:
     name: HD address derivation (offline)
     runs-on: ubuntu-latest
@@ -72,6 +126,18 @@ jobs:
         run: sudo apt-get update -q && sudo apt-get install -y -q zbar-tools
       - name: Generate and decode payment QR codes
         run: php tests/test-qr.php
+
+  address-validation:
+    name: Wallet address validation (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Checksum/anchoring address validation tests
+        run: php tests/test-address-validation.php
 
   solana-sweep:
     name: Solana sweep/budget (offline)
@@ -139,6 +205,12 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "test-autopay-cancel: skipped" && { echo "::error::autopay test skipped"; exit 1; } || true
           echo "$OUT" | grep -q "AUTOPAY-CANCEL CHECKS PASSED" || { echo "::error::autopay test did not pass"; exit 1; }
+      - name: Autopay matcher (single + split payments) test (must run, not skip)
+        run: |
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-payment-matcher.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "test-payment-matcher: skipped" && { echo "::error::payment-matcher test skipped"; exit 1; } || true
+          echo "$OUT" | grep -q "PAYMENT-MATCHER CHECKS PASSED" || { echo "::error::payment-matcher test did not pass"; exit 1; }
       - name: Bounded Autopay scan (budget + fair cursor + Monero batch) test (must run, not skip)
         run: |
           OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-autopay-scan.php" --path=wp 2>&1)

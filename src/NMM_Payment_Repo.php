@@ -236,6 +236,32 @@ class NMM_Payment_Repo {
 		));
 	}
 
+	/**
+	 * How many payment rows this address has EVER carried, in any status.
+	 * More than one means the address has served more than one order, i.e. it
+	 * is reused - which is what makes split-payment aggregation unsafe on it.
+	 */
+	public function count_rows_for_address($cryptoId, $address) {
+		global $wpdb;
+
+		$count = $wpdb->get_var($wpdb->prepare(
+			"SELECT COUNT(*) FROM `$this->tableName` WHERE `cryptocurrency` = %s AND `address` = %s",
+			$cryptoId, $address
+		));
+
+		// NULL means the query FAILED, and COUNT(*) has no other way to return
+		// null. Casting it to 0 would turn this safety check inside out: a
+		// reused address whose count query hiccuped would look like a
+		// never-used one and aggregation would proceed on it. Return null so
+		// the caller can refuse rather than guess.
+		if ($count === null) {
+			NMM_Util::log(__FILE__, __LINE__, "Could not count payment rows for " . $cryptoId . " " . $address . ": " . $wpdb->last_error, "error");
+			return null;
+		}
+
+		return (int) $count;
+	}
+
 	public function get_unpaid_for_address($cryptoId, $address) {
 		global $wpdb;
 

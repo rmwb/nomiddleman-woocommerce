@@ -151,6 +151,44 @@ class NMM_Util {
 		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::order_init_lock_name($orderId)));
 	}
 
+	// Per-(currency, address) advisory lock name. The address is hashed rather
+	// than embedded: addresses vary in length and can be long (Monero
+	// subaddresses are 95-106 chars), which would blow past MySQL's 64-char
+	// lock-name limit and truncate DIFFERENT addresses into one lock. Site
+	// scoping matches the other lock names.
+	private static function address_match_lock_name($cryptoId, $address) {
+		global $wpdb;
+
+		return 'nmm_amatch_' . substr(md5(DB_NAME . '|' . $wpdb->prefix . '|' . $cryptoId . '|' . $address), 0, 24);
+	}
+
+	/**
+	 * Serialize payment matching for one address. Two verifiers working the
+	 * same address concurrently can otherwise credit one transaction to two
+	 * orders: the winner's claim removes its order from the unpaid set before
+	 * the transaction is durably recorded as consumed, so the other worker
+	 * still sees that transaction as available for a sibling order.
+	 *
+	 * Default timeout 0: if another worker holds this address there is nothing
+	 * to wait for - it is already doing this exact work, and the sweep revisits
+	 * the address on the next tick.
+	 *
+	 * Returns the raw GET_LOCK result: '1' acquired, '0' held by another
+	 * connection, null if advisory locks are unavailable on this host. Release
+	 * only when this returned '1'.
+	 */
+	public static function acquire_address_match_lock($cryptoId, $address, $timeoutSeconds = 0) {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', self::address_match_lock_name($cryptoId, $address), $timeoutSeconds));
+	}
+
+	public static function release_address_match_lock($cryptoId, $address) {
+		global $wpdb;
+
+		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::address_match_lock_name($cryptoId, $address)));
+	}
+
 }
 
 ?>

@@ -124,7 +124,7 @@ class NMM_Blockchain {
 
 	public static function get_blockchaininfo_total_received_for_btc_address($address, $requiredConfirmations) {
 		$userAgentString = self::get_user_agent_string();
-		$request = 'https://blockchain.info/q/getreceivedbyaddress/' . $address . '?confirmations=' . $requiredConfirmations;
+		$request = 'https://blockchain.info/q/getreceivedbyaddress/' . rawurlencode($address) . '?confirmations=' . $requiredConfirmations;
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -154,7 +154,7 @@ class NMM_Blockchain {
 	public static function get_mempoolspace_total_received_for_btc_address($address) {
 		$userAgentString = self::get_user_agent_string();
 
-		$request = 'https://mempool.space/api/address/' . $address;
+		$request = 'https://mempool.space/api/address/' . rawurlencode($address);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -195,7 +195,7 @@ class NMM_Blockchain {
 	public static function get_blockstream_total_received_for_btc_address($address) {
 		$userAgentString = self::get_user_agent_string();
 
-		$request = 'https://blockstream.info/api/address/' . $address;
+		$request = 'https://blockstream.info/api/address/' . rawurlencode($address);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -236,7 +236,7 @@ class NMM_Blockchain {
 	public static function get_blockcypher_total_received_for_ltc_address($address, $requiredConfirmations) {
 		$userAgentString = self::get_user_agent_string();
 		
-		$request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . $address . '?confirmations=' . $requiredConfirmations . self::blockcypher_token_query(true);
+		$request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . rawurlencode($address) . '?confirmations=' . $requiredConfirmations . self::blockcypher_token_query(true);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -267,7 +267,7 @@ class NMM_Blockchain {
 	public static function get_litecoinspace_total_received_for_ltc_address($address) {
 		$userAgentString = self::get_user_agent_string();
 
-		$request = 'https://litecoinspace.org/api/address/' . $address;
+		$request = 'https://litecoinspace.org/api/address/' . rawurlencode($address);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -309,7 +309,7 @@ class NMM_Blockchain {
 	public static function get_qtuminfo_total_received_for_qtum_address($address) {
 		$userAgentString = self::get_user_agent_string();
 		
-		$request = 'https://qtum.info/api/address/' . $address;
+		$request = 'https://qtum.info/api/address/' . rawurlencode($address);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -340,7 +340,7 @@ class NMM_Blockchain {
 	public static function get_dashblockexplorer_total_received_for_dash_address($address) {
 		$userAgentString = self::get_user_agent_string();
 		
-		$request = 'https://insight.dash.org/insight-api/addr/' . $address . '/totalReceived';
+		$request = 'https://insight.dash.org/insight-api/addr/' . rawurlencode($address) . '/totalReceived';
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -371,7 +371,7 @@ class NMM_Blockchain {
 	public static function get_blockcypher_total_received_for_doge_address($address) {
 		$userAgentString = self::get_user_agent_string();
 
-		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address . '/balance' . self::blockcypher_token_query(false);
+		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($address) . '/balance' . self::blockcypher_token_query(false);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -410,7 +410,7 @@ class NMM_Blockchain {
 	public static function get_blockbook_total_received_for_xmy_address($address) {		
 		$userAgentString = self::get_user_agent_string();
 		
-		$request = 'https://blockbook.myralicious.com/api/address/' . $address;
+		$request = 'https://blockbook.myralicious.com/api/address/' . rawurlencode($address);
 
 		$args = array(
 			'user-agent' => $userAgentString
@@ -717,7 +717,7 @@ class NMM_Blockchain {
 
 	public static function get_blk_address_transactions($address) {
 		
-		$request = 'https://explorer.blackcoin.nl/ext/getaddress/' . $address;
+		$request = 'https://explorer.blackcoin.nl/ext/getaddress/' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
@@ -985,7 +985,7 @@ class NMM_Blockchain {
 	public static function get_btc_address_transactions($address) {
 		$userAgentString = self::get_user_agent_string();
 
-        $request = 'https://mempool.space/api/address/' . $address . '/txs';
+        $request = 'https://mempool.space/api/address/' . rawurlencode($address) . '/txs';
 
         $args = array(
 			'user-agent' => $userAgentString
@@ -995,7 +995,7 @@ class NMM_Blockchain {
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
-            $request2 = 'https://api.blockcypher.com/v1/btc/main/addrs/' . $address . self::blockcypher_token_query(false);
+            $request2 = 'https://api.blockcypher.com/v1/btc/main/addrs/' . rawurlencode($address) . self::blockcypher_token_query(false);
             $response2 = self::api_get($request2, $args);
             if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
                 $result = array(
@@ -1108,7 +1108,7 @@ class NMM_Blockchain {
 
 	public static function get_btx_address_transactions($address) {
 		
-		$request = 'https://insight.bitcore.cc/api/addr/' . $address;
+		$request = 'https://insight.bitcore.cc/api/addr/' . rawurlencode($address);
 		
 		$response = self::api_get($request);
 
@@ -1212,7 +1212,7 @@ class NMM_Blockchain {
 
 	public static function get_dash_address_transactions($address) {		
 		
-		$request = 'https://insight.dash.org/insight-api/txs/?address=' . $address;
+		$request = 'https://insight.dash.org/insight-api/txs/?address=' . rawurlencode($address);
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
@@ -1274,7 +1274,7 @@ class NMM_Blockchain {
 
 	public static function get_dcr_address_transactions($address) {
 		
-		$request = 'https://explorer.dcrdata.org/insight/api/txs/?address=' . $address;
+		$request = 'https://explorer.dcrdata.org/insight/api/txs/?address=' . rawurlencode($address);
 		
 		$response = self::api_get($request);
 
@@ -1337,7 +1337,7 @@ class NMM_Blockchain {
 
 	public static function get_doge_address_transactions($address) {
 
-		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . $address . self::blockcypher_token_query(false);
+		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($address) . self::blockcypher_token_query(false);
 
 		$response = self::api_get($request);
 
@@ -1608,7 +1608,7 @@ class NMM_Blockchain {
 
 	public static function get_etc_address_transactions($address) {
 		
-		$request = 'https://blockscout.com/etc/mainnet/api?module=account&action=txlist&address=' . $address;
+		$request = 'https://blockscout.com/etc/mainnet/api?module=account&action=txlist&address=' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
@@ -1670,7 +1670,7 @@ class NMM_Blockchain {
 
 	public static function get_eth_address_transactions($address) {
 		
-		$request = 'https://eth.blockscout.com/api?module=account&action=txlist&address=' . $address . '&startblock=0&endblock=99999999&sort=desc';
+		$request = 'https://eth.blockscout.com/api?module=account&action=txlist&address=' . rawurlencode($address) . '&startblock=0&endblock=99999999&sort=desc';
 
 		$response = self::api_get($request);
 
@@ -1731,7 +1731,7 @@ class NMM_Blockchain {
 
 	public static function get_grs_address_transactions($address) {
 		
-		$request = 'https://groestlsight.groestlcoin.org/api/txs?address=' . $address;
+		$request = 'https://groestlsight.groestlcoin.org/api/txs?address=' . rawurlencode($address);
 		
 		$response = self::api_get($request);
 
@@ -1794,7 +1794,7 @@ class NMM_Blockchain {
 
 	public static function get_lsk_address_transactions($address) {
 		
-		$request = 'https://node08.lisk.io/api/transactions?recipientId=' . $address . '&limit=10&offset=0&sort=amount%3Aasc';
+		$request = 'https://node08.lisk.io/api/transactions?recipientId=' . rawurlencode($address) . '&limit=10&offset=0&sort=amount%3Aasc';
 
 		$response = self::api_get($request);
 
@@ -1847,7 +1847,7 @@ class NMM_Blockchain {
 	public static function get_ltc_address_transactions($address) {
 		$userAgentString = self::get_user_agent_string();
 
-        $request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . $address . self::blockcypher_token_query(false);
+        $request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . rawurlencode($address) . self::blockcypher_token_query(false);
 
         $args = array(
 			'user-agent' => $userAgentString
@@ -1907,7 +1907,7 @@ class NMM_Blockchain {
 	public static function get_onion_address_transactions($address) {
 		
 		//$request = 'https://explorer.deeponion.org/ext/getaddress/' . $address;
-		$request = 'http://onionexplorer.youngwebsolutions.com:3001/ext/getaddress/' . $address;
+		$request = 'http://onionexplorer.youngwebsolutions.com:3001/ext/getaddress/' . rawurlencode($address);
 		
 		$response = self::api_get($request);
 
@@ -2045,7 +2045,7 @@ class NMM_Blockchain {
 
 	public static function get_trx_address_transactions($address) {
 		
-		$request = 'https://apilist.tronscan.org/api/transaction?address=' . $address;
+		$request = 'https://apilist.tronscan.org/api/transaction?address=' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
@@ -2106,7 +2106,7 @@ class NMM_Blockchain {
 
 	public static function get_waves_address_transactions($address) {
 		
-		$request = 'https://nodes.wavesnodes.com/transactions/address/' . $address . '/limit/100';
+		$request = 'https://nodes.wavesnodes.com/transactions/address/' . rawurlencode($address) . '/limit/100';
 
 		$response = self::api_get($request);
 
@@ -2165,7 +2165,7 @@ class NMM_Blockchain {
 
 	public static function get_xem_address_transactions($address) {
 		
-		$request = 'http://108.61.168.86:7890/account/transfers/incoming?address=' . $address;
+		$request = 'http://108.61.168.86:7890/account/transfers/incoming?address=' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
@@ -2216,7 +2216,7 @@ class NMM_Blockchain {
 	}
 
 	public static function get_xlm_address_transactions($address) {
-		$request = 'https://horizon.stellar.org/accounts/' . $address . '/payments?order=desc';
+		$request = 'https://horizon.stellar.org/accounts/' . rawurlencode($address) . '/payments?order=desc';
 
 		$response = self::api_get($request);
 
@@ -2287,7 +2287,7 @@ class NMM_Blockchain {
 
 	public static function get_xmy_address_transactions($address) {
 		
-		$request = 'https://blockbook.myralicious.com/api/address/' . $address;
+		$request = 'https://blockbook.myralicious.com/api/address/' . rawurlencode($address);
 		
 		$response = self::api_get($request);
 
@@ -2391,7 +2391,7 @@ class NMM_Blockchain {
 
 	public static function get_xrp_address_transactions($address) {
 		
-		$request = 'https://api.xrpscan.com/api/v1/account/' . $address . '/transactions';
+		$request = 'https://api.xrpscan.com/api/v1/account/' . rawurlencode($address) . '/transactions';
 
 		$response = self::api_get($request);
 
@@ -2598,7 +2598,7 @@ class NMM_Blockchain {
 
 		$host = isset(self::$blockscoutHosts[$cryptoId]) ? self::$blockscoutHosts[$cryptoId] : 'eth.blockscout.com';
 
-		$request = 'https://' . $host . '/api?module=account&action=tokentx&address=' . $address . '&contractaddress=' . $contract . '&page=1&offset=100&sort=desc';
+		$request = 'https://' . $host . '/api?module=account&action=tokentx&address=' . rawurlencode($address) . '&contractaddress=' . $contract . '&page=1&offset=100&sort=desc';
 
 		$response = self::api_get($request);
 
