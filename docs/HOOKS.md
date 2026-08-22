@@ -286,8 +286,14 @@ last-known-good rate:
 
 The net effect is that a **single** price source can move the rate a store
 charges by at most the drift limit per reference window, however small its
-individual steps are. Two or more agreeing sources are not subject to that
-ceiling, so multi-source stores are unaffected in practice.
+individual steps are **and however long it waits**. An elapsed window does not
+excuse a price from the check - it only lets the reference FOLLOW the market by
+one limit-sized step, so a lone source demanding double the anchor needs
+several windows to get there rather than one. That following is what stops the
+bound deadlocking an honest store whose market genuinely ran past the limit:
+such a store is caught up over successive windows instead of having every later
+quote refused forever. Two or more agreeing sources are not subject to the
+ceiling at all, so multi-source stores are unaffected in practice.
 
 When nothing live can be trusted the last-known-good rate is served for a
 bounded window (see `nmm_rate_max_stale_seconds`) and checkout fails after that

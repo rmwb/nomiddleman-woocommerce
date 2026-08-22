@@ -399,13 +399,26 @@ xok('a >40% single-source move inside one window is not charged',
 xok('the drift guard bounds falls as well as rises', $crash['accepted'] >= 60.0,
 	'fell only to ' . $crash['accepted']);
 
-// The reference re-bases on TIME, so the bound can never deadlock an honest
-// store: once the window has passed, the current market becomes the reference.
+// An ELAPSED window does not excuse the price from the check - that was the
+// whole ratchet on a slower clock: hold a doubled price, wait out one window,
+// collect. What the window buys is that the REFERENCE may follow the market by
+// one limit-sized step, so an honest store whose market genuinely ran away is
+// caught up over successive windows instead of being refused forever.
 $aged = NMM_Exchange::evaluate_rate(array('CoinGecko' => 200.0), array('price' => 195.0, 'time' => $now),
 	null, $now, array(), array('price' => 100.0, 'time' => $now - 21600));
-xok('a reference older than the window re-bases and the price is accepted', xnear($aged['price'], 200));
-xok('the re-based reference is the price just accepted',
-	xnear($aged['reference']['price'], 200) && $aged['reference']['time'] === $now);
+xok('an elapsed window does NOT hand a lone source a 2x price',
+	$aged['price'] === null && $aged['status'] === 'drift_rejected', 'status=' . $aged['status']);
+xok('  but the reference follows by one limit-sized step',
+	xnear($aged['reference']['price'], 140) && $aged['reference']['time'] === $now,
+	'ref=' . $aged['reference']['price']);
+
+// A move INSIDE the limit is still accepted the moment the window turns over,
+// and re-bases onto the accepted price - the honest case must stay cheap.
+$agedOk = NMM_Exchange::evaluate_rate(array('CoinGecko' => 130.0), array('price' => 128.0, 'time' => $now),
+	null, $now, array(), array('price' => 100.0, 'time' => $now - 21600));
+xok('an in-limit move after the window is accepted', xnear($agedOk['price'], 130));
+xok('  and re-bases onto the price just accepted',
+	xnear($agedOk['reference']['price'], 130) && $agedOk['reference']['time'] === $now);
 
 $notAged = NMM_Exchange::evaluate_rate(array('CoinGecko' => 200.0), array('price' => 195.0, 'time' => $now),
 	null, $now, array(), array('price' => 100.0, 'time' => $now - 21599));
@@ -448,10 +461,15 @@ $looseDrift = NMM_Exchange::evaluate_rate(array('CoinGecko' => 190.0), array('pr
 	null, $now, array('drift' => 0.95), array('price' => 100.0, 'time' => $now));
 xok('the drift limit is configurable', xnear($looseDrift['price'], 190));
 
+// A shorter window makes the reference follow SOONER, but each step is still
+// capped by the drift limit - the window controls the clock, not the size.
 $shortWindow = NMM_Exchange::evaluate_rate(array('CoinGecko' => 190.0), array('price' => 180.0, 'time' => $now),
 	null, $now, array('reference_window' => 60), array('price' => 100.0, 'time' => $now - 61));
-xok('the reference window is configurable', xnear($shortWindow['price'], 190)
-	&& xnear($shortWindow['reference']['price'], 190));
+xok('a short window still refuses an over-limit move',
+	$shortWindow['price'] === null && $shortWindow['status'] === 'drift_rejected');
+xok('the reference window is configurable (it follows at once)',
+	xnear($shortWindow['reference']['price'], 140) && $shortWindow['reference']['time'] === $now,
+	'ref=' . $shortWindow['reference']['price']);
 
 echo "\n--- shared entry point: get_average_usd_price (checkout + cache warmer) ---\n";
 
@@ -639,12 +657,16 @@ xok('nmm_rate_reference_drift_limit can loosen the bound', xnear($ts, 142), 'got
 xreset();
 set_transient('nmm_rate_good_TU', array('price' => 130.0, 'time' => time()), 86400);
 set_transient('nmm_rate_reference_TU', array('price' => 100.0, 'time' => time() - 7200), 86400);
-xseed('TU', array('coingecko' => 142.0));
+// 135 is +35%: inside the 40% limit, so the shortened window lets it through
+// and re-bases. (142 would be +42% and is refused however old the reference is
+// - an elapsed window changes WHEN the reference may follow, never whether the
+// price itself has to pass the limit.)
+xseed('TU', array('coingecko' => 135.0));
 $GLOBALS['xr_filters']['nmm_rate_reference_window_seconds'] = function ($seconds) { return 3600; };
 $tu = NMM_Exchange::get_average_usd_price('TU', 600, array('0'));
-xok('nmm_rate_reference_window_seconds can shorten the window', xnear($tu, 142), 'got=' . $tu);
+xok('nmm_rate_reference_window_seconds can shorten the window', xnear($tu, 135), 'got=' . $tu);
 xok('a shortened window re-bases the reference onto the accepted price',
-	xnear(get_transient('nmm_rate_reference_TU')['price'], 142));
+	xnear(get_transient('nmm_rate_reference_TU')['price'], 135));
 
 echo "\n--- public API other callers depend on ---\n";
 

@@ -752,19 +752,32 @@ class NMM_Exchange {
             $refPrice = (float) $anchor;
         }
 
-        if ($refPrice === null || ($now - $refTime) >= $window) {
+        if ($refPrice === null) {
+            // Nothing to measure against yet - seed and start the clock.
             $state['reference'] = array('price' => (float) $state['price'], 'time' => (int) $now);
 
             return $state;
         }
 
+        // An ELAPSED window does not excuse the incoming price from the check.
+        // Re-basing straight onto whatever is being proposed handed a patient
+        // source the entire guard: hold a doubled price, wait out one window,
+        // and it was accepted - which is exactly the ratchet this exists to
+        // stop, just on a slower clock. The window instead governs how far the
+        // reference may FOLLOW the market when a move is refused (below).
+        $expired = ($now - $refTime) >= $window;
+
         $drift = abs($state['price'] - $refPrice) / $refPrice;
 
         if ($drift <= $limit) {
-            // Deliberately NOT re-timestamped: the reference has to keep its
-            // original clock or it would never age out, and a bound that never
-            // ages out is a bound that never re-bases.
-            $state['reference'] = array('price' => $refPrice, 'time' => $refTime);
+            // Within the band. While the window is still running the reference
+            // keeps BOTH its price and its original clock - re-timestamping it
+            // would mean it never ages out, and a bound that never ages out is
+            // a bound that never re-bases. Once the window HAS elapsed the
+            // reference follows the accepted price and the clock restarts.
+            $state['reference'] = $expired
+                ? array('price' => (float) $state['price'], 'time' => (int) $now)
+                : array('price' => $refPrice, 'time' => $refTime);
 
             return $state;
         }
@@ -781,7 +794,23 @@ class NMM_Exchange {
             return $state;
         }
 
-        $state['reference'] = array('price' => $refPrice, 'time' => $refTime);
+        // The move is refused - but if the window has elapsed the reference is
+        // allowed to FOLLOW the market by one limit-sized step, and the clock
+        // restarts. Without that, an honest store whose market genuinely ran
+        // past the limit would have every later quote refused forever: the
+        // bound would deadlock the very store it protects. With it, a real move
+        // is caught up over successive windows, while a hostile source is still
+        // held to one limit-sized step per window however patient it is.
+        if ($expired) {
+            $followed = ($state['price'] > $refPrice)
+                ? $refPrice * (1 + $limit)
+                : $refPrice * (1 - $limit);
+            $state['reference'] = array('price' => $followed, 'time' => (int) $now);
+        }
+        else {
+            $state['reference'] = array('price' => $refPrice, 'time' => $refTime);
+        }
+
         $state['pending'] = is_array($pending) ? $pending : null;
         $rejected = (float) $state['price'];
         $state['price'] = null;
