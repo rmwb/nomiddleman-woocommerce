@@ -194,6 +194,8 @@ class NMM_Util {
 	 * URL it was issued for, the cURL options to install, and whether the cURL
 	 * transport actually installed them. Static because http_api_curl is a
 	 * global action - the callback has no other route back to this request.
+	 *
+	 * @var array{token: string, url: string, options: array<int, mixed>, applied: bool}|null
 	 */
 	private static $pinnedRequest = null;
 
@@ -233,7 +235,7 @@ class NMM_Util {
 		remove_filter('use_streams_transport', '__return_false', 99);
 		remove_action('http_api_curl', array(__CLASS__, 'apply_pinned_curl_options'), 10);
 
-		$applied = !empty(self::$pinnedRequest['applied']);
+		$applied = self::pinned_request_applied();
 		self::$pinnedRequest = null;
 
 		if (!$applied) {
@@ -244,6 +246,18 @@ class NMM_Util {
 		}
 
 		return $response;
+	}
+
+	/**
+	 * Did the http_api_curl callback install this request's options?
+	 *
+	 * Read through a method rather than inline: the callback flips the flag
+	 * while wp_remote_post() is running, which static analysis cannot see from
+	 * the assignment in post_with_curl_options(), and an inline check there is
+	 * reported as always-false.
+	 */
+	private static function pinned_request_applied() {
+		return self::$pinnedRequest !== null && !empty(self::$pinnedRequest['applied']);
 	}
 
 	/**
