@@ -4,12 +4,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Settings {
+class NMMPRO_Settings {
 
 	/**
 	 * Bounds for every numeric setting, keyed by option-name suffix (the stored
 	 * key is the crypto id plus this suffix). Single source of truth: the
-	 * getters below clamp against it and NMM_Admin renders its min/max/step
+	 * getters below clamp against it and NMMPRO_Admin renders its min/max/step
 	 * from it, so the constraint the browser shows and the one the server
 	 * enforces cannot drift apart.
 	 *
@@ -60,19 +60,19 @@ class NMM_Settings {
 		$candidate = is_string($value) ? trim($value) : $value;
 
 		if (!is_scalar($candidate) || !is_numeric($candidate)) {
-			NMM_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is not numeric; falling back to ' . $fallback . '.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is not numeric; falling back to ' . $fallback . '.', 'warning');
 			return $fallback;
 		}
 
 		$number = (float) $candidate;
 
 		if ($number < $bounds['min']) {
-			NMM_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is below its minimum; clamping ' . $number . ' to ' . $bounds['min'] . '.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is below its minimum; clamping ' . $number . ' to ' . $bounds['min'] . '.', 'warning');
 			return (string) $bounds['min'];
 		}
 
 		if ($number > $bounds['max']) {
-			NMM_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is above its maximum; clamping ' . $number . ' to ' . $bounds['max'] . '.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is above its maximum; clamping ' . $number . ' to ' . $bounds['max'] . '.', 'warning');
 			return (string) $bounds['max'];
 		}
 
@@ -81,15 +81,15 @@ class NMM_Settings {
 		return (string) $candidate;
 	}
 
-	public function get_selected_cryptos() {		
+	public function get_selected_cryptos() {
 		if (is_array($this->settings)) {
 			if (array_key_exists('crypto_select', $this->settings)) {
 				if (is_array($this->settings['crypto_select'])) {
 					return $this->settings['crypto_select'];
-				}			
+				}
 			}
 		}
-		
+
 		return [];
 	}
 
@@ -99,13 +99,13 @@ class NMM_Settings {
 				return true;
 			}
 		}
-		
+
 		return false;
 	}
 
 	public function crypto_selected_and_valid($cryptoId) {
 		$modeEnabled = $this->basic_enabled($cryptoId) || $this->autopay_enabled($cryptoId) || $this->hd_enabled($cryptoId);
-		$cryptos = NMM_Cryptocurrencies::get();
+		$cryptos = NMMPRO_Cryptocurrencies::get();
 		$validHd = $cryptos[$cryptoId]->has_hd();
 		if ($this->hd_enabled($cryptoId) && !$validHd) {
 			return false;
@@ -118,7 +118,7 @@ class NMM_Settings {
 	public function get_valid_selected_cryptos() {
 		$validSelectedCryptos = [];
 
-		foreach (NMM_Cryptocurrencies::get_alpha() as $crypto) {
+		foreach (NMMPRO_Cryptocurrencies::get_alpha() as $crypto) {
 			if ($this->crypto_selected_and_valid($crypto->get_id())) {
 				$validSelectedCryptos[] = $crypto;
 			}
@@ -145,8 +145,8 @@ class NMM_Settings {
 				}
 			}
 		}
-		
-		return [];		
+
+		return [];
 	}
 
 	public function get_customer_gateway_message() {
@@ -161,7 +161,7 @@ class NMM_Settings {
 	}
 
 	public function get_customer_payment_message($crypto) {
-		$paymentMessageKey = 'payment_message_html';		
+		$paymentMessageKey = 'payment_message_html';
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($paymentMessageKey, $this->settings)) {
@@ -173,7 +173,7 @@ class NMM_Settings {
 	}
 
 	public function get_next_carousel_address($cryptoId) {
-		$carousel = new NMM_Carousel($cryptoId);
+		$carousel = new NMMPRO_Carousel($cryptoId);
 
 		return $carousel->get_next_address();
 	}
@@ -185,12 +185,12 @@ class NMM_Settings {
 				return trim($this->settings[$mpkKey]);
 			}
 		}
-		
-		return '';		
+
+		return '';
 	}
 
 	public function get_hd_mode($cryptoId) {
-		return apply_filters('nmm_hd_mode', '0', $cryptoId);
+		return NMMPRO_Compat::filter('nmmpro_hd_mode', '0', $cryptoId);
 	}
 
 	public function get_markup($cryptoId) {
@@ -275,7 +275,7 @@ class NMM_Settings {
 
 		return '24';
 	}
-	
+
 	public function get_xmr_rpc_url() {
 		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_url', $this->settings)) {
 			return trim((string) $this->settings['XMR_wallet_rpc_url']);
@@ -295,9 +295,9 @@ class NMM_Settings {
 	public function get_xmr_rpc_password() {
 		// A wp-config.php constant takes precedence so the secret can live
 		// outside the database entirely; this getter is the single read path
-		// (NMM_Monero and the validator both come through here).
-		if (defined('NMM_XMR_RPC_PASSWORD')) {
-			return (string) NMM_XMR_RPC_PASSWORD;
+		// (NMMPRO_Monero and the validator both come through here).
+		if ((NMMPRO_Compat::config('NMMPRO_XMR_RPC_PASSWORD') !== null)) {
+			return (string) NMMPRO_Compat::config('NMMPRO_XMR_RPC_PASSWORD');
 		}
 
 		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_password', $this->settings)) {
@@ -310,10 +310,10 @@ class NMM_Settings {
 	/**
 	 * Merchant-configured Solana JSON-RPC endpoint (Helius, QuickNode, own
 	 * validator...). Empty means "use the built-in default", which
-	 * NMM_Blockchain::SOL_DEFAULT_RPC_URL supplies - existing installs that
+	 * NMMPRO_Blockchain::SOL_DEFAULT_RPC_URL supplies - existing installs that
 	 * never touch this field keep the public mainnet RPC they had before.
 	 * Whatever is stored here is SSRF-vetted by
-	 * NMM_Blockchain::validate_sol_rpc_url() before any request is made.
+	 * NMMPRO_Blockchain::validate_sol_rpc_url() before any request is made.
 	 */
 	public function get_sol_rpc_url() {
 		if (is_array($this->settings) && array_key_exists('SOL_rpc_url', $this->settings)) {
@@ -347,7 +347,7 @@ class NMM_Settings {
 
 	public function price_api_selected() {
 		$priceApiKey = 'selected_price_apis';
-		
+
 		if (is_array($this->settings)) {
 			if (array_key_exists($priceApiKey, $this->settings)) {
 				if (is_array($this->settings[$priceApiKey])) {
@@ -357,7 +357,7 @@ class NMM_Settings {
 				}
 			}
 		}
-		
+
 		return false;
 	}
 
@@ -369,36 +369,14 @@ class NMM_Settings {
 				return $this->settings[$modeKey];
 			}
 		}
-		
+
 		return '';
 	}
 
 	public function add_consumed_tx($cryptoId, $address, $txHash) {
-		$settingsKey = 'nmmpro_' . $cryptoId . '_transactions_consumed_for_' . $address;
-
-		$consumedTxs = get_option($settingsKey, array());
-		$consumedTxs[] = $txHash;
-
-		// the matcher ignores transactions older than the 3-hour lifetime, so
-		// hashes beyond the most recent ones can never be re-matched; cap the
-		// list so these options don't grow forever on busy stores
-		if (count($consumedTxs) > 200) {
-			$consumedTxs = array_slice($consumedTxs, -200);
-		}
-
-		update_option($settingsKey, $consumedTxs, false);
-	}
-
-	public function tx_already_consumed($cryptoId, $address, $txHash) {
-		$settingsKey = 'nmmpro_' . $cryptoId . '_transactions_consumed_for_' . $address;
-		$consumedTxs = get_option($settingsKey, array());
-		
-		if (in_array($txHash, $consumedTxs)) {
-			return true;
-		}
-
-		return false;
-	}
+        return NMMPRO_Consumed_Repo::add($cryptoId, $address, $txHash);
+    }
+    public function tx_already_consumed($cryptoId, $address, $txHash) {
+        return NMMPRO_Consumed_Repo::contains($cryptoId, $address, $txHash);
+    }
 }
-
-?>

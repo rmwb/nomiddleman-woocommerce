@@ -1,7 +1,7 @@
 parameters:
 	ignoreErrors:
 		-
-			message: '#^Constant NMM_ABS_PATH not found\.$#'
+			message: '#^Constant NMMPRO_ABS_PATH not found\.$#'
 			identifier: constant.notFound
 			count: 1
 			path: nomiddleman-crypto-woocommerce.php
@@ -19,175 +19,157 @@ parameters:
 			path: nomiddleman-crypto-woocommerce.php
 
 		-
-			message: '#^Constant NMM_PLUGIN_DIR not found\.$#'
+			message: '#^Constant NMMPRO_PLUGIN_DIR not found\.$#'
 			identifier: constant.notFound
 			count: 3
-			path: src/NMM_Admin.php
+			path: src/NMMPRO_Admin.php
 
 		-
-			message: '#^Constant NMM_REDUX_SLUG not found\.$#'
+			message: '#^Constant NMMPRO_REDUX_SLUG not found\.$#'
 			identifier: constant.notFound
 			count: 2
-			path: src/NMM_Admin.php
-
-		-
-			message: '#^Constant NMM_VERSION not found\.$#'
-			identifier: constant.notFound
-			count: 3
-			path: src/NMM_Admin.php
+			path: src/NMMPRO_Admin.php
 
 		-
 			message: '#^Parameter \#1 \$text of function esc_attr expects string, float\|int given\.$#'
 			identifier: argument.type
 			count: 2
-			path: src/NMM_Admin.php
+			path: src/NMMPRO_Admin.php
 
 		-
 			message: '#^Parameter \#1 \$text of function esc_attr expects string, int given\.$#'
 			identifier: argument.type
 			count: 1
-			path: src/NMM_Admin.php
+			path: src/NMMPRO_Admin.php
 
 		-
-			message: '#^Call to function method_exists\(\) with ''NMM_Monero'' and ''plan_request'' will always evaluate to true\.$#'
+			message: '#^Call to function method_exists\(\) with ''NMMPRO_Monero'' and ''plan_request'' will always evaluate to true\.$#'
 			identifier: function.alreadyNarrowedType
 			count: 1
-			path: src/NMM_Blockchain.php
+			path: src/NMMPRO_Blockchain.php
 
 		-
-			message: '#^Call to function method_exists\(\) with ''NMM_Monero'' and ''validate_rpc_url'' will always evaluate to true\.$#'
+			message: '#^Call to function method_exists\(\) with ''NMMPRO_Monero'' and ''validate_rpc_url'' will always evaluate to true\.$#'
 			identifier: function.alreadyNarrowedType
 			count: 1
-			path: src/NMM_Blockchain.php
+			path: src/NMMPRO_Blockchain.php
 
 		-
 			message: '#^Strict comparison using \!\=\= between mixed and null will always evaluate to true\.$#'
 			identifier: notIdentical.alwaysTrue
 			count: 2
-			path: src/NMM_Blockchain.php
+			path: src/NMMPRO_Blockchain.php
 
 		-
 			message: '#^Strict comparison using \=\=\= between mixed and null will always evaluate to false\.$#'
 			identifier: identical.alwaysFalse
 			count: 1
-			path: src/NMM_Blockchain.php
+			path: src/NMMPRO_Blockchain.php
 
 		-
-			message: '#^Constant NMM_PLUGIN_FILE not found\.$#'
+			message: '#^Constant NMMPRO_PLUGIN_FILE not found\.$#'
 			identifier: constant.notFound
 			count: 1
-			path: src/NMM_Blocks_Support.php
+			path: src/NMMPRO_Blocks_Support.php
 
 		-
-			message: '#^Constant NMM_VERSION not found\.$#'
+			message: '#^Constant NMMPRO_PLUGIN_DIR not found\.$#'
 			identifier: constant.notFound
 			count: 1
-			path: src/NMM_Blocks_Support.php
-
-		-
-			message: '#^Constant NMM_PLUGIN_DIR not found\.$#'
-			identifier: constant.notFound
-			count: 1
-			path: src/NMM_Cryptocurrency.php
+			path: src/NMMPRO_Cryptocurrency.php
 
 		-
 			message: '#^Action callback returns bool but should not return anything\.$#'
 			identifier: return.void
 			count: 1
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
-			message: '#^Constant NMM_PLUGIN_DIR not found\.$#'
+			message: '#^Constant NMMPRO_PLUGIN_DIR not found\.$#'
 			identifier: constant.notFound
 			count: 3
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
-			message: '#^Constant NMM_REDUX_SLUG not found\.$#'
+			message: '#^Constant NMMPRO_REDUX_SLUG not found\.$#'
 			identifier: constant.notFound
 			count: 1
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
-			message: '#^Constant NMM_VERSION not found\.$#'
-			identifier: constant.notFound
-			count: 1
-			path: src/NMM_Gateway.php
-
-		-
-			message: '#^Method NMM_Gateway\:\:validate_fields\(\) should return bool but empty return statement found\.$#'
+			message: '#^Method NMMPRO_Gateway\:\:validate_fields\(\) should return bool but empty return statement found\.$#'
 			identifier: return.empty
 			count: 2
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
-			message: '#^Method NMM_Gateway\:\:validate_fields\(\) should return bool but return statement is missing\.$#'
+			message: '#^Method NMMPRO_Gateway\:\:validate_fields\(\) should return bool but return statement is missing\.$#'
 			identifier: return.missing
 			count: 2
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
-			message: '#^Property NMM_Gateway\:\:\$gapLimit is never read, only written\.$#'
+			message: '#^Property NMMPRO_Gateway\:\:\$gapLimit is never read, only written\.$#'
 			identifier: property.onlyWritten
 			count: 1
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
 			message: '#^Right side of && is always true\.$#'
 			identifier: booleanAnd.rightAlwaysTrue
 			count: 3
-			path: src/NMM_Gateway.php
+			path: src/NMMPRO_Gateway.php
 
 		-
 			message: '#^Negated boolean expression is always true\.$#'
 			identifier: booleanNot.alwaysTrue
 			count: 1
-			path: src/NMM_Hd.php
+			path: src/NMMPRO_Hd.php
 
 		-
 			message: '#^Parameter \#2 \$is_customer_note of method WC_Order\:\:add_order_note\(\) expects int, true given\.$#'
 			identifier: argument.type
 			count: 3
-			path: src/NMM_Hd.php
+			path: src/NMMPRO_Hd.php
 
 		-
 			message: '#^Call to function is_array\(\) with array\<mixed\> will always evaluate to true\.$#'
 			identifier: function.alreadyNarrowedType
 			count: 1
-			path: src/NMM_Hooks.php
+			path: src/NMMPRO_Hooks.php
 
 		-
 			message: '#^Result of \|\| is always false\.$#'
 			identifier: booleanOr.alwaysFalse
 			count: 1
-			path: src/NMM_Hooks.php
+			path: src/NMMPRO_Hooks.php
 
 		-
 			message: '#^Variable \$_POST in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
-			path: src/NMM_Hooks.php
+			path: src/NMMPRO_Hooks.php
 
 		-
 			message: '#^Comparison operation "\>" between int\<1, max\> and 0 is always true\.$#'
 			identifier: greater.alwaysTrue
 			count: 1
-			path: src/NMM_Payment.php
+			path: src/NMMPRO_Payment.php
 
 		-
 			message: '#^Parameter \#2 \$is_customer_note of method WC_Order\:\:add_order_note\(\) expects int, true given\.$#'
 			identifier: argument.type
 			count: 1
-			path: src/NMM_Payment.php
+			path: src/NMMPRO_Payment.php
 
 		-
 			message: '#^Parameter \#1 \$number of function round expects float, string given\.$#'
 			identifier: argument.type
 			count: 2
-			path: src/NMM_Settings.php
+			path: src/NMMPRO_Settings.php
 
 		-
 			message: '#^Constant DB_NAME not found\.$#'
 			identifier: constant.notFound
 			count: 3
-			path: src/NMM_Util.php
+			path: src/NMMPRO_Util.php

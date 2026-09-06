@@ -4,26 +4,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Carousel_Repo {
+class NMMPRO_Carousel_Repo {
 	private $tableName;
 	public function __construct() {
 		global $wpdb;
-		$this->tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;
+		$this->tableName = $wpdb->prefix . NMMPRO_CAROUSEL_TABLE;
 
 		// re-seed only when the coin registry has grown since the last init;
 		// the autoloaded option check avoids a COUNT query on every construct
-		$countCryptos = count(NMM_Cryptocurrencies::get());
+		$countCryptos = count(NMMPRO_Cryptocurrencies::get());
 
-		if ((int) get_option('nmm_carousel_seeded_count', 0) !== $countCryptos) {
+		if ((int) NMMPRO_Compat::get_option('nmmpro_carousel_seeded_count', 0) !== $countCryptos) {
 			self::init();
 		}
 	}
 
 	public static function init() {
 		global $wpdb;
-		$tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;
+		$tableName = $wpdb->prefix . NMMPRO_CAROUSEL_TABLE;
 
-		$cryptos = NMM_Cryptocurrencies::get();
+		$cryptos = NMMPRO_Cryptocurrencies::get();
 
 		$placeholders = array();
 		$values = array();
@@ -44,12 +44,12 @@ class NMM_Carousel_Repo {
 			));
 		}
 
-		update_option('nmm_carousel_seeded_count', count($cryptos));
+		NMMPRO_Compat::update_option('nmmpro_carousel_seeded_count', count($cryptos));
 	}
 
 	public static function record_exists($cryptoId) {
 		global $wpdb;
-		$tableName = $wpdb->prefix . NMM_CAROUSEL_TABLE;
+		$tableName = $wpdb->prefix . NMMPRO_CAROUSEL_TABLE;
 
 		$result = $wpdb->get_var($wpdb->prepare(
 			"SELECT count(*) FROM `$tableName` WHERE `cryptocurrency` = %s",
@@ -62,7 +62,7 @@ class NMM_Carousel_Repo {
 	/**
 	 * Atomically claim the next carousel seat and advance the counter.
 	 *
-	 * Compare-and-swap, the same idiom NMM_Hd_Repo::claim_oldest_ready uses: read
+	 * Compare-and-swap, the same idiom NMMPRO_Hd_Repo::claim_oldest_ready uses: read
 	 * the stored index, then conditionally advance it ONLY if it has not changed
 	 * since the read. The seat returned is the value that was read. Two concurrent
 	 * checkouts can no longer share a seat: whichever writes second finds the
@@ -113,10 +113,10 @@ class NMM_Carousel_Repo {
 				// No counter row for this coin: added to the registry after the
 				// table was seeded, or removed by hand. Seed once and retry.
 				if ($seeded) {
-					NMM_Util::log(__FILE__, __LINE__, 'Carousel counter row for ' . $cryptoId . ' still missing after seeding.', 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Carousel counter row for ' . $cryptoId . ' still missing after seeding.', 'error');
 					return null;
 				}
-				NMM_Util::log(__FILE__, __LINE__, 'No carousel counter row for ' . $cryptoId . '; seeding it.', 'warning');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'No carousel counter row for ' . $cryptoId . '; seeding it.', 'warning');
 				self::init();
 				$seeded = true;
 				continue;
@@ -141,7 +141,7 @@ class NMM_Carousel_Repo {
 			));
 
 			if ($affected === false) {
-				NMM_Util::log(__FILE__, __LINE__, 'Failed to claim a carousel seat for ' . $cryptoId . ': ' . $wpdb->last_error, 'error');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Failed to claim a carousel seat for ' . $cryptoId . ': ' . $wpdb->last_error, 'error');
 				return null;
 			}
 
@@ -152,13 +152,13 @@ class NMM_Carousel_Repo {
 			// stored value differed (stale replica read). Re-read and retry.
 		}
 
-		NMM_Util::log(__FILE__, __LINE__, 'Carousel seat claim exhausted retries for ' . $cryptoId, 'warning');
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Carousel seat claim exhausted retries for ' . $cryptoId, 'warning');
 		return null;
 	}
 
 	public function set_index($cryptoId, $index) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'Updating index for ' . $cryptoId . ' to ' . $index);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Updating index for ' . $cryptoId . ' to ' . $index);
 
 		$wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName` SET `current_index` = %d WHERE `cryptocurrency` = %s",
@@ -173,7 +173,7 @@ class NMM_Carousel_Repo {
 			"SELECT `current_index` FROM `$this->tableName` WHERE `cryptocurrency` = %s",
 			$cryptoId
 		));
-		NMM_Util::log(__FILE__, __LINE__, 'Getting index: ' . $currentIndex);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Getting index: ' . $currentIndex);
 		return $currentIndex;
 	}
 
@@ -204,7 +204,7 @@ class NMM_Carousel_Repo {
 		// buffers only ever hold arrays of address strings; never revive objects
 		$result = unserialize($serializedResult[0]['buffer'], array('allowed_classes' => false));
 
-		NMM_Util::log(__FILE__, __LINE__, 'Getting buffer: ' . print_r($result, true));
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Carousel buffer entries: ' . count((array) $result));
 
 		return $result;
 	}

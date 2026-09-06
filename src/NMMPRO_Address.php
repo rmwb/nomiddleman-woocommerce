@@ -7,7 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Real wallet-address validation.
  *
- * The old per-coin checks in NMM_Cryptocurrencies were bare preg_match calls
+ * The old per-coin checks in NMMPRO_Cryptocurrencies were bare preg_match calls
  * with no '$' anchor and no checksum, so a truncated address, 'addr?x=1', or
  * 'hello bc1q...' all saved cleanly - and a merchant who pasted a mistyped
  * Classic/Autopay address would silently collect customer payments into an
@@ -43,7 +43,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  *     address (BTC '1...') would checksum over the wrong bytes.
  * hash('sha256', ...) is core PHP and always available.
  */
-class NMM_Address {
+class NMMPRO_Address {
 
 	const B58_CHARSET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 	const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
@@ -52,12 +52,12 @@ class NMM_Address {
 	// One-shot re-validation of already-stored addresses (see
 	// flag_invalid_stored_addresses): option flag guarding the pass, and the
 	// option holding whatever it found for the admin notice.
-	const REVALIDATED_FLAG = 'nmm_addresses_revalidated';
-	const INVALID_STORED_OPTION = 'nmm_invalid_stored_addresses';
+	const REVALIDATED_FLAG = 'nmmpro_addresses_revalidated';
+	const INVALID_STORED_OPTION = 'nmmpro_invalid_stored_addresses';
 
 	/**
 	 * Main entry point: is $address a well-formed mainnet address for
-	 * $cryptoId? Unknown coin ids return false - NMM_Cryptocurrencies keeps
+	 * $cryptoId? Unknown coin ids return false - NMMPRO_Cryptocurrencies keeps
 	 * its historical throw for those, see is_known().
 	 */
 	public static function validate($cryptoId, $address) {
@@ -316,7 +316,7 @@ class NMM_Address {
 		return false;
 	}
 
-	// Every id validate() has a rule for. NMM_Cryptocurrencies uses this to
+	// Every id validate() has a rule for. NMMPRO_Cryptocurrencies uses this to
 	// keep its historical "unknown cryptoId" exception for anything else.
 	public static function is_known($cryptoId) {
 		static $known = array(
@@ -347,7 +347,7 @@ class NMM_Address {
 	 *
 	 * Why it exists: Autopay verifies an order by asking a public block
 	 * explorer which transactions paid a literal address string
-	 * (NMM_Blockchain::get_zec_address_transactions queries Blockchair's
+	 * (NMMPRO_Blockchain::get_zec_address_transactions queries Blockchair's
 	 * outputs endpoint with q=recipient(<address>)). That works for any
 	 * transparent output. It does NOT work for Zcash shielded funds: shielded
 	 * recipients and amounts are simply not public data, so a payment into a
@@ -370,14 +370,14 @@ class NMM_Address {
 	 * is verifiable, so this returns true whenever validate() does.
 	 */
 	/**
-	 * Format check that mirrors NMM_Cryptocurrencies::is_valid_wallet_address
+	 * Format check that mirrors NMMPRO_Cryptocurrencies::is_valid_wallet_address
 	 * routing (tokens as EVM, everything else through validate()) without its
 	 * throw for an unknown id - callers here must get a boolean, never an
 	 * exception, because they run at checkout and at settings-save time.
 	 */
 	private static function format_valid_for($cryptoId, $address) {
-		if (class_exists("NMM_Cryptocurrencies")) {
-			$cryptos = NMM_Cryptocurrencies::get();
+		if (class_exists("NMMPRO_Cryptocurrencies")) {
+			$cryptos = NMMPRO_Cryptocurrencies::get();
 			if (array_key_exists($cryptoId, $cryptos) && $cryptos[$cryptoId]->is_erc20_token()) {
 				return self::is_evm($address);
 			}
@@ -387,7 +387,7 @@ class NMM_Address {
 	}
 
 	public static function is_autopay_verifiable_form($cryptoId, $address) {
-		// Route the FORMAT check exactly as NMM_Cryptocurrencies does, not
+		// Route the FORMAT check exactly as NMMPRO_Cryptocurrencies does, not
 		// through self::validate() directly: the ERC-20 tokens (USDT, USDC,
 		// DAI, LINK and every multi-network stablecoin - 19 of the 58 coins)
 		// have no case in validate(), they are checked as EVM addresses one
@@ -596,7 +596,7 @@ class NMM_Address {
 	 * NOTE FOR A FUTURE RELEASE: the 20 bytes here are the SAME key hash a
 	 * t1 address encodes, so a TEX address can be converted to its equivalent
 	 * transparent address by re-encoding these bytes as base58check with ZEC's
-	 * 0x1CB8 prefix. Doing that in NMM_Blockchain::get_zec_address_transactions
+	 * 0x1CB8 prefix. Doing that in NMMPRO_Blockchain::get_zec_address_transactions
 	 * before the Blockchair lookup would make TEX fully Autopay-capable. Until
 	 * that conversion exists the explorer is queried by the literal string,
 	 * which finds nothing, so is_autopay_verifiable_form() excludes TEX.
@@ -869,23 +869,23 @@ class NMM_Address {
 	 * deleted or rejected at runtime - a merchant may be depending on one
 	 * mid-flight, and yanking it would change payment behaviour behind
 	 * their back. Instead this one-shot pass (guarded by an option flag,
-	 * same pattern as nmm_legacy_qr_files_cleaned) re-validates everything
-	 * stored and records the failures; NMM_Admin surfaces them in a
+	 * same pattern as nmmpro_legacy_qr_files_cleaned) re-validates everything
+	 * stored and records the failures; NMMPRO_Admin surfaces them in a
 	 * dismissible notice telling the merchant exactly which coin/address
 	 * to re-check.
 	 */
 	public static function flag_invalid_stored_addresses() {
-		if (get_option(self::REVALIDATED_FLAG)) {
+		if (NMMPRO_Compat::get_option(self::REVALIDATED_FLAG)) {
 			return;
 		}
 
-		$values = get_option(NMM_REDUX_ID, array());
+		$values = NMMPRO_Compat::get_option(NMMPRO_REDUX_ID, array());
 		$invalid = array();
 
 		if (is_array($values) && count($values) > 0) {
-			$settings = new NMM_Settings($values);
+			$settings = new NMMPRO_Settings($values);
 
-			foreach (NMM_Cryptocurrencies::get() as $crypto) {
+			foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
 				$cryptoId = $crypto->get_id();
 
 				foreach ($settings->get_addresses($cryptoId) as $address) {
@@ -895,7 +895,7 @@ class NMM_Address {
 						continue;
 					}
 
-					if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
+					if (!NMMPRO_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
 						$invalid[] = array(
 							'crypto' => $crypto->get_name() . ' (' . $cryptoId . ')',
 							'address' => $address,
@@ -906,11 +906,11 @@ class NMM_Address {
 		}
 
 		if (count($invalid) > 0) {
-			update_option(self::INVALID_STORED_OPTION, $invalid);
-			NMM_Util::log(__FILE__, __LINE__, count($invalid) . ' stored wallet address(es) failed the new checksum validation; flagged for the merchant.', 'warning');
+			NMMPRO_Compat::update_option(self::INVALID_STORED_OPTION, $invalid);
+			NMMPRO_Util::log(__FILE__, __LINE__, count($invalid) . ' stored wallet address(es) failed the new checksum validation; flagged for the merchant.', 'warning');
 		}
 
-		update_option(self::REVALIDATED_FLAG, 1);
+		NMMPRO_Compat::update_option(self::REVALIDATED_FLAG, 1);
 	}
 }
 

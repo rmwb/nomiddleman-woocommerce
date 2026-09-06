@@ -12,7 +12,7 @@
  *     paying it would lose the funds. Unknown pairs must now throw.
  *
  *  2. Known bytes stay known. For every coin the registry
- *     (NMM_Cryptocurrencies) reports as HD-capable, encoding a fixed hash160
+ *     (NMMPRO_Cryptocurrencies) reports as HD-capable, encoding a fixed hash160
  *     (20 zero bytes) must still produce the exact address it always has -
  *     which pins the version byte itself, since the address embeds it. The
  *     expected strings were independently verified (base58check-decoded, the
@@ -31,7 +31,7 @@
 // order (pubkey_to_bc_address); p2sh is reachable only through the p
 // extension, hence the p_enabled() stub below returns true so those branches
 // are exercised too.
-const NMM_ADDRTYPE_EXPECTED_P2PKH = array(
+const NMMPRO_ADDRTYPE_EXPECTED_P2PKH = array(
 	'BTC'  => '1111111111111111111114oLvT2',
 	'LTC'  => 'LKDxGDJq5fF4FohAB8zJH24mDDNHDNtqsE',
 	'QTUM' => 'QLbz7JHiBTspS962RLKV8GndWFwiJNvEPz',
@@ -41,7 +41,7 @@ const NMM_ADDRTYPE_EXPECTED_P2PKH = array(
 	'BTX'  => '2D1oxKts8YPdTJRG5FzxTNpMtWmqBnjrht',
 );
 
-const NMM_ADDRTYPE_EXPECTED_P2SH = array(
+const NMMPRO_ADDRTYPE_EXPECTED_P2SH = array(
 	'BTC'  => '31h1vYVSYuKP6AhS86fbRdMw9XHieotbST',
 	'LTC'  => 'M7uAERuQW2AotfyLDyewFGcLUDtAYu9v5V',
 	'QTUM' => 'M7uAERuQW2AotfyLDyewFGcLUDtAYu9v5V',
@@ -64,7 +64,7 @@ require __DIR__ . '/wp-stubs.php';
 // p_enabled() true so the p2sh branches (gated on the extension) are reachable
 // and their version bytes pinned; with it false they throw by design, which
 // would make the p2sh expectations untestable.
-class NMM_Util {
+class NMMPRO_Util {
 	public static function p_enabled() { return true; }
 	public static function log($f, $l, $m) {}
 }
@@ -76,8 +76,8 @@ require $root . '/src/vendor/CurveFp.php';
 require $root . '/src/vendor/Point.php';
 require $root . '/src/vendor/NumberTheory.php';
 require $root . '/src/vendor/HdHelper.php';
-require $root . '/src/NMM_Cryptocurrency.php';
-require $root . '/src/NMM_Cryptocurrencies.php';
+require $root . '/src/NMMPRO_Cryptocurrency.php';
+require $root . '/src/NMMPRO_Cryptocurrencies.php';
 
 $failed = false;
 
@@ -95,14 +95,14 @@ $h160 = str_repeat("\x00", 20);
 // them must have a pinned p2pkh expectation, or a merchant could enable a coin
 // whose derivation cannot finish.
 $hdCoins = array();
-foreach (NMM_Cryptocurrencies::get() as $crypto) {
+foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
 	if ($crypto->has_hd()) {
 		$hdCoins[] = $crypto->get_id();
 	}
 }
 // Compare as sets: registry declaration order is presentation, not contract.
 $registrySet = $hdCoins;
-$pinnedSet = array_keys(NMM_ADDRTYPE_EXPECTED_P2PKH);
+$pinnedSet = array_keys(NMMPRO_ADDRTYPE_EXPECTED_P2PKH);
 sort($registrySet);
 sort($pinnedSet);
 aok('registry HD coins all have pinned version bytes',
@@ -110,19 +110,19 @@ aok('registry HD coins all have pinned version bytes',
 	'registry: ' . implode(',', $hdCoins));
 
 foreach ($hdCoins as $cryptoId) {
-	if (!array_key_exists($cryptoId, NMM_ADDRTYPE_EXPECTED_P2PKH)) {
+	if (!array_key_exists($cryptoId, NMMPRO_ADDRTYPE_EXPECTED_P2PKH)) {
 		continue; // already reported above; nothing to compare against
 	}
 	try {
 		$actual = HdHelper::hash_160_to_bc_address($h160, $cryptoId, 'p2pkh');
-		aok($cryptoId . ' p2pkh version byte unchanged', $actual === NMM_ADDRTYPE_EXPECTED_P2PKH[$cryptoId], $actual);
+		aok($cryptoId . ' p2pkh version byte unchanged', $actual === NMMPRO_ADDRTYPE_EXPECTED_P2PKH[$cryptoId], $actual);
 	}
 	catch (\Exception $e) {
 		aok($cryptoId . ' p2pkh version byte unchanged', false, 'threw: ' . $e->getMessage());
 	}
 }
 
-foreach (NMM_ADDRTYPE_EXPECTED_P2SH as $cryptoId => $expected) {
+foreach (NMMPRO_ADDRTYPE_EXPECTED_P2SH as $cryptoId => $expected) {
 	try {
 		$actual = HdHelper::hash_160_to_bc_address($h160, $cryptoId, 'p2sh');
 		aok($cryptoId . ' p2sh version byte unchanged', $actual === $expected, $actual);

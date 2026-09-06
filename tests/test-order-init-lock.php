@@ -1,6 +1,6 @@
 <?php
 /**
- * Live-DB test: the per-order initialization lock (NMM_Util::acquire/release_
+ * Live-DB test: the per-order initialization lock (NMMPRO_Util::acquire/release_
  * order_init_lock) serializes two concurrent first loads of the thank-you page
  * so they cannot both allocate a payment address for the same order, and is
  * scoped per order so distinct orders never block each other. Also checks that
@@ -17,7 +17,7 @@ if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb'])) {
 }
 
 $wpdb = $GLOBALS['wpdb'];
-$pt = $wpdb->prefix . NMM_PAYMENT_TABLE;
+$pt = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
 
 $GLOBALS['ol_ok'] = true;
 function lok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['ol_ok'] = false; } }
@@ -38,71 +38,71 @@ $wpdb2->prefix = $main->prefix;
 
 // Worker A (connection 2) acquires the init lock for order A.
 $GLOBALS['wpdb'] = $wpdb2;
-$aHeld = NMM_Util::acquire_order_init_lock($orderA, 0);
+$aHeld = NMMPRO_Util::acquire_order_init_lock($orderA, 0);
 $GLOBALS['wpdb'] = $main;
 lok('worker A acquires order-init lock',        $aHeld === '1', 'got=' . var_export($aHeld, true));
 
 // Worker B (main connection) must NOT get the same order's lock (0s timeout).
-$bSameOrder = NMM_Util::acquire_order_init_lock($orderA, 0);
+$bSameOrder = NMMPRO_Util::acquire_order_init_lock($orderA, 0);
 lok('worker B blocked on the SAME order',       $bSameOrder === '0', 'got=' . var_export($bSameOrder, true));
 
 // A different order is independently lockable - scoping works, no false sharing.
-$bOtherOrder = NMM_Util::acquire_order_init_lock($orderB, 0);
+$bOtherOrder = NMMPRO_Util::acquire_order_init_lock($orderB, 0);
 lok('a DIFFERENT order is not blocked',         $bOtherOrder === '1', 'got=' . var_export($bOtherOrder, true));
-if ($bOtherOrder === '1') { NMM_Util::release_order_init_lock($orderB); }
+if ($bOtherOrder === '1') { NMMPRO_Util::release_order_init_lock($orderB); }
 
 // A releases; the same order becomes lockable again.
 $GLOBALS['wpdb'] = $wpdb2;
-NMM_Util::release_order_init_lock($orderA);
+NMMPRO_Util::release_order_init_lock($orderA);
 $GLOBALS['wpdb'] = $main;
-$bAfterRelease = NMM_Util::acquire_order_init_lock($orderA, 0);
+$bAfterRelease = NMMPRO_Util::acquire_order_init_lock($orderA, 0);
 lok('same order lockable after A releases',     $bAfterRelease === '1', 'got=' . var_export($bAfterRelease, true));
-if ($bAfterRelease === '1') { NMM_Util::release_order_init_lock($orderA); }
+if ($bAfterRelease === '1') { NMMPRO_Util::release_order_init_lock($orderA); }
 
 // Multisite scoping: the SAME order id on a DIFFERENT site (different table
 // prefix) must NOT contend - those are unrelated orders that merely share
 // DB_NAME and an id. The main site holds order A; a second site's request for
 // "order A" should acquire freely.
-$mainHold = NMM_Util::acquire_order_init_lock($orderA, 0);
+$mainHold = NMMPRO_Util::acquire_order_init_lock($orderA, 0);
 $wpdb2->prefix = $main->prefix . 's2_'; // pretend a second network site
 $GLOBALS['wpdb'] = $wpdb2;
-$site2 = NMM_Util::acquire_order_init_lock($orderA, 0);
-if ($site2 === '1') { NMM_Util::release_order_init_lock($orderA); }
+$site2 = NMMPRO_Util::acquire_order_init_lock($orderA, 0);
+if ($site2 === '1') { NMMPRO_Util::release_order_init_lock($orderA); }
 $GLOBALS['wpdb'] = $main;
 $wpdb2->prefix = $main->prefix; // restore for the remaining checks
 lok('same order id on a DIFFERENT site is free', $mainHold === '1' && $site2 === '1', "$mainHold,$site2");
-if ($mainHold === '1') { NMM_Util::release_order_init_lock($orderA); }
+if ($mainHold === '1') { NMMPRO_Util::release_order_init_lock($orderA); }
 
 // Cron lock: scoped per site the same way - a second subsite's cron must not
 // contend with the main site's (each subsite has its own tables and backlog),
 // and the hashed name can never truncate into a collision.
-$mainCron = NMM_Util::cron_lock_name();
+$mainCron = NMMPRO_Util::cron_lock_name();
 $wpdb2->prefix = $main->prefix . 's2_';
 $GLOBALS['wpdb'] = $wpdb2;
-$site2Cron = NMM_Util::cron_lock_name();
+$site2Cron = NMMPRO_Util::cron_lock_name();
 $GLOBALS['wpdb'] = $main;
 $wpdb2->prefix = $main->prefix;
 lok('cron lock differs across subsites',        $mainCron !== $site2Cron, "$mainCron vs $site2Cron");
-lok('cron lock stable for the same site',       $mainCron === NMM_Util::cron_lock_name());
+lok('cron lock stable for the same site',       $mainCron === NMMPRO_Util::cron_lock_name());
 lok('cron lock stays under 64 chars',           strlen($mainCron) < 64, 'len=' . strlen($mainCron));
 
 // The lock name must be order-specific even if DB_NAME is long: two different
 // orders must never collide on one truncated 64-char lock name. Prove it by
 // holding both at once on connection 2.
 $GLOBALS['wpdb'] = $wpdb2;
-$h1 = NMM_Util::acquire_order_init_lock($orderA, 0);
-$h2 = NMM_Util::acquire_order_init_lock($orderB, 0);
+$h1 = NMMPRO_Util::acquire_order_init_lock($orderA, 0);
+$h2 = NMMPRO_Util::acquire_order_init_lock($orderB, 0);
 lok('two distinct orders hold locks at once',   $h1 === '1' && $h2 === '1', "$h1,$h2");
-NMM_Util::release_order_init_lock($orderA);
-NMM_Util::release_order_init_lock($orderB);
+NMMPRO_Util::release_order_init_lock($orderA);
+NMMPRO_Util::release_order_init_lock($orderB);
 $GLOBALS['wpdb'] = $main;
 
 // Even if two workers both reached the insert, UNIQUE(order_id, order_amount)
 // permits only one payment record for the order - so there can never be two
 // competing monitored rows for one order+amount.
-if (defined('NMM_PAYMENT_TABLE')) {
+if (defined('NMMPRO_PAYMENT_TABLE')) {
 	$wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $orderA));
-	$repo = new NMM_Payment_Repo();
+	$repo = new NMMPRO_Payment_Repo();
 	$repo->insert('addr_worker_A', 'BTC', $orderA, '0.00100000', 'unpaid');
 	$wpdb->suppress_errors(true);
 	$repo->insert('addr_worker_B', 'BTC', $orderA, '0.00100000', 'unpaid'); // duplicate order+amount
@@ -151,15 +151,15 @@ if (defined('NMM_PAYMENT_TABLE')) {
 // allocating for A's coin - the customer then gets instructions and a QR for a
 // currency the order was never priced in. Must run while connection 2 is still
 // open (it is closed just below), since that is what makes the lock contend.
-if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
-	$gwRace = new NMM_Gateway();
+if (class_exists('NMMPRO_Gateway') && function_exists('wc_create_order')) {
+	$gwRace = new NMMPRO_Gateway();
 	$contended = wc_create_order();
-	$contended->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+	$contended->update_meta_data('nmmpro_chosen_crypto_id', 'BTC');
 	$contended->save();
 	$contendedId = $contended->get_id();
 
 	$GLOBALS['wpdb'] = $wpdb2;                                   // stand-in worker A
-	$holderLock = NMM_Util::acquire_order_init_lock($contendedId, 0);
+	$holderLock = NMMPRO_Util::acquire_order_init_lock($contendedId, 0);
 	$GLOBALS['wpdb'] = $main;
 
 	$busyResult = $gwRace->initialize_order_payment($contendedId, 'ETH');
@@ -167,13 +167,13 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
 	$afterBusy->read_meta_data(true);
 	lok('contended duplicate bails busy', $holderLock === '1' && isset($busyResult['outcome']) && $busyResult['outcome'] === 'busy',
 		'lock=' . var_export($holderLock, true) . ' outcome=' . (isset($busyResult['outcome']) ? $busyResult['outcome'] : '?'));
-	lok('contended duplicate wrote no coin meta', $afterBusy->get_meta('nmm_chosen_crypto_id') === 'BTC',
-		'got=' . $afterBusy->get_meta('nmm_chosen_crypto_id'));
+	lok('contended duplicate wrote no coin meta', $afterBusy->get_meta('nmmpro_chosen_crypto_id') === 'BTC',
+		'got=' . $afterBusy->get_meta('nmmpro_chosen_crypto_id'));
 	lok('contended duplicate allocated no address', empty($afterBusy->get_meta('wallet_address')),
 		'got=' . var_export($afterBusy->get_meta('wallet_address'), true));
 
 	$GLOBALS['wpdb'] = $wpdb2;
-	if ($holderLock === '1') { NMM_Util::release_order_init_lock($contendedId); }
+	if ($holderLock === '1') { NMMPRO_Util::release_order_init_lock($contendedId); }
 	$GLOBALS['wpdb'] = $main;
 	$contended->delete(true);
 }
@@ -205,16 +205,16 @@ if (function_exists('wc_create_order')) {
 
 // The chosen coin must be committed UNDER the init lock, not before it. Two
 // submissions of the same order carrying different coins used to race: B could
-// overwrite nmm_chosen_crypto_id after A had already read it, leaving the order
+// overwrite nmmpro_chosen_crypto_id after A had already read it, leaving the order
 // labelled with B's coin while the address, amount and monitoring row were all
 // allocated for A's. Emails and the QR then advertise the wrong currency.
-if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
-	$gw = new NMM_Gateway();
+if (class_exists('NMMPRO_Gateway') && function_exists('wc_create_order')) {
+	$gw = new NMMPRO_Gateway();
 
 	// (1) An order already initialized: a late duplicate submission naming a
 	// different coin must return 'already' and leave the winner's coin alone.
 	$won = wc_create_order();
-	$won->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+	$won->update_meta_data('nmmpro_chosen_crypto_id', 'BTC');
 	$won->update_meta_data('wallet_address', 'ADDR_ALREADY_COMMITTED');
 	$won->save();
 	$wonId = $won->get_id();
@@ -224,8 +224,8 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
 	$reread->read_meta_data(true);
 	lok('late duplicate with another coin: outcome already', isset($lateResult['outcome']) && $lateResult['outcome'] === 'already',
 		'got=' . (isset($lateResult['outcome']) ? $lateResult['outcome'] : '?'));
-	lok('late duplicate does not relabel the coin', $reread->get_meta('nmm_chosen_crypto_id') === 'BTC',
-		'got=' . $reread->get_meta('nmm_chosen_crypto_id'));
+	lok('late duplicate does not relabel the coin', $reread->get_meta('nmmpro_chosen_crypto_id') === 'BTC',
+		'got=' . $reread->get_meta('nmmpro_chosen_crypto_id'));
 	$won->delete(true);
 
 }
@@ -246,21 +246,21 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order')) {
 // another order, and re-displaying it would credit a stranger's payment.
 // Cancelled and refunded are refused outright - they are not retry states.
 // ---------------------------------------------------------------------
-if (class_exists('NMM_Gateway') && function_exists('wc_create_order') && class_exists('NMM_Carousel_Repo')) {
-	$gwFailed = new NMM_Gateway();
+if (class_exists('NMMPRO_Gateway') && function_exists('wc_create_order') && class_exists('NMMPRO_Carousel_Repo')) {
+	$gwFailed = new NMMPRO_Gateway();
 
 	// Give the configured coin a usable carousel seat so a permitted retry can
 	// actually run to completion; the harness DB persists between runs, so the
 	// merchant's real buffer and index are captured and put back below.
-	$carRepo      = new NMM_Carousel_Repo();
+	$carRepo      = new NMMPRO_Carousel_Repo();
 	$btcBufOrig   = $carRepo->get_buffer('BTC');
 	$btcIndexOrig = (int) $wpdb->get_var($wpdb->prepare(
-		"SELECT `current_index` FROM `{$wpdb->prefix}" . NMM_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s", 'BTC'));
+		"SELECT `current_index` FROM `{$wpdb->prefix}" . NMMPRO_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s", 'BTC'));
 	$carRepo->set_buffer('BTC', array('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'));
 
 	// (1) failed + NO address: the retry must be let through.
 	$retryOrder = wc_create_order();
-	$retryOrder->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+	$retryOrder->update_meta_data('nmmpro_chosen_crypto_id', 'BTC');
 	$retryOrder->set_total('10.00');
 	$retryOrder->save();
 	$retryOrder->update_status('wc-failed');
@@ -318,7 +318,7 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order') && class_e
 	// initialized fast path ('already') may answer - what must never happen is
 	// a NEW address being allocated.
 	$staleAddrOrder = wc_create_order();
-	$staleAddrOrder->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+	$staleAddrOrder->update_meta_data('nmmpro_chosen_crypto_id', 'BTC');
 	$staleAddrOrder->update_meta_data('wallet_address', 'ADDR_MAY_BE_RECYCLED');
 	$staleAddrOrder->set_total('10.00');
 	$staleAddrOrder->save();
@@ -340,7 +340,7 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order') && class_e
 	// (3) cancelled and refunded are dead, not retryable - no address, ever.
 	foreach (array('wc-cancelled' => 'cancelled', 'wc-refunded' => 'refunded') as $wcStatus => $label) {
 		$deadOrder = wc_create_order();
-		$deadOrder->update_meta_data('nmm_chosen_crypto_id', 'BTC');
+		$deadOrder->update_meta_data('nmmpro_chosen_crypto_id', 'BTC');
 		$deadOrder->set_total('10.00');
 		$deadOrder->save();
 		$deadOrder->update_status($wcStatus);
@@ -359,7 +359,7 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order') && class_e
 	// Put the merchant's carousel state back exactly as found.
 	$carRepo->set_buffer('BTC', is_array($btcBufOrig) ? $btcBufOrig : array());
 	$wpdb->query($wpdb->prepare(
-		"UPDATE `{$wpdb->prefix}" . NMM_CAROUSEL_TABLE . "` SET `current_index` = %d WHERE `cryptocurrency` = %s",
+		"UPDATE `{$wpdb->prefix}" . NMMPRO_CAROUSEL_TABLE . "` SET `current_index` = %d WHERE `cryptocurrency` = %s",
 		$btcIndexOrig, 'BTC'));
 	lok('carousel buffer restored', $carRepo->get_buffer('BTC') === (is_array($btcBufOrig) ? $btcBufOrig : array()));
 }
@@ -369,8 +369,8 @@ if (class_exists('NMM_Gateway') && function_exists('wc_create_order') && class_e
 // Error that the page's \Exception handlers do not catch (a 500 for the
 // customer). The gateway must return silently, rendering nothing - matching
 // how WooCommerce's own templates behave when an order is missing.
-if (class_exists('NMM_Gateway') && function_exists('WC')) {
-	$gw = new NMM_Gateway();
+if (class_exists('NMMPRO_Gateway') && function_exists('WC')) {
+	$gw = new NMMPRO_Gateway();
 	ob_start();
 	$ghostThrew = false;
 	try {

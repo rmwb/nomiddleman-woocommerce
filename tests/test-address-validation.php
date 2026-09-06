@@ -1,7 +1,7 @@
 <?php
 /**
- * Offline regression test for wallet-address validation (NMM_Address via
- * NMM_Cryptocurrencies::is_valid_wallet_address).
+ * Offline regression test for wallet-address validation (NMMPRO_Address via
+ * NMMPRO_Cryptocurrencies::is_valid_wallet_address).
  *
  * What this pins (the P0 finding it guards against): the old per-coin checks
  * were unanchored, checksum-free preg_matches, so all of the following were
@@ -39,16 +39,16 @@
 
 require __DIR__ . '/wp-stubs.php';
 
-class NMM_Util {
+class NMMPRO_Util {
 	public static function p_enabled() { return false; }
 	public static function log($f, $l, $m, $level = 'info') {}
 }
 
 $root = dirname(__DIR__);
 require $root . '/src/vendor/CashAddress.php'; // used to cross-generate a CashAddr vector
-require $root . '/src/NMM_Cryptocurrency.php';
-require $root . '/src/NMM_Cryptocurrencies.php';
-require $root . '/src/NMM_Address.php';
+require $root . '/src/NMMPRO_Cryptocurrency.php';
+require $root . '/src/NMMPRO_Cryptocurrencies.php';
+require $root . '/src/NMMPRO_Address.php';
 
 $failed = false;
 $nChecks = 0;
@@ -63,7 +63,7 @@ function aok($label, $cond, $extra = '') {
 }
 
 function check($cryptoId, $address, $expected, $note) {
-	$got = (bool) NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address);
+	$got = (bool) NMMPRO_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address);
 	aok($cryptoId . ' ' . $note . ': ' . substr($address, 0, 44), $got === $expected,
 		'want ' . ($expected ? 'valid' : 'invalid') . ', got ' . ($got ? 'valid' : 'invalid'));
 }
@@ -267,7 +267,7 @@ $xonly = hex2bin('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817
 // all-zero one below is a published test vector from librustzcash
 // (components/zcash_address/src/encoding.rs), so regenerating it from 43 zero
 // bytes proves the raw encoder AND pins the 78-character encoded length that
-// NMM_Address::is_sapling depends on.
+// NMMPRO_Address::is_sapling depends on.
 $saplingZeroVector = 'zs1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpq6d8g';
 aok('test encoder: bech32(zs, 43 zero bytes) matches published all-zero Sapling address',
 	t_bech32_raw_encode('zs', str_repeat("\x00", 43), false) === $saplingZeroVector);
@@ -300,18 +300,18 @@ aok('KT1 vector is 36 chars and starts KT1',
 // (a coin falling through to "return false" could never be configured)
 // ---------------------------------------------------------------------
 
-foreach (NMM_Cryptocurrencies::get() as $crypto) {
+foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
 	if ($crypto->is_erc20_token()) {
 		continue;
 	}
 	aok('registry coverage: ' . $crypto->get_id() . ' has a validation rule',
-		NMM_Address::is_known($crypto->get_id()));
+		NMMPRO_Address::is_known($crypto->get_id()));
 }
 
 // unknown coin ids must keep throwing (historical contract)
 $threw = false;
 try {
-	NMM_Cryptocurrencies::is_valid_wallet_address('NOPE', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa');
+	NMMPRO_Cryptocurrencies::is_valid_wallet_address('NOPE', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa');
 }
 catch (\Exception $e) {
 	$threw = true;
@@ -458,7 +458,7 @@ $valid = array(
 	// rejected every Shelley address)
 	array('ADA', 'addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x', 'bech32', 'CIP-19 Shelley base address'),
 
-	// pattern-only schemes (no verifiable SHA256d checksum - see NMM_Address)
+	// pattern-only schemes (no verifiable SHA256d checksum - see NMMPRO_Address)
 	array('ETH', '0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe', 'hex', 'Ethereum Foundation'),
 	array('XRP', 'rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH', 'pattern', 'classic address'),
 	array('XMR', '44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A', 'pattern', 'donation address (95 chars)'),
@@ -586,19 +586,19 @@ check('XTZ', t_b58check_encode("\x02\x5a\x7a", $zeros20), false, 'adjacent prefi
 // AUTOPAY VERIFIABILITY (fund safety, distinct from format validity)
 //
 // Autopay confirms a ZEC order by asking Blockchair which outputs paid a
-// literal address (NMM_Blockchain::get_zec_address_transactions). Shielded
+// literal address (NMMPRO_Blockchain::get_zec_address_transactions). Shielded
 // recipients are not public, a Unified Address is not itself an on-chain
 // receiver, and TEX is not converted to its equivalent t-address before the
 // query. Handing any of those out under Autopay means the merchant RECEIVES
 // the money while the order stays unpaid and is auto-cancelled - so they are
 // valid formats (Classic mode) but must never be Autopay-usable.
 //
-// NMM_Validation consults this helper and filters the carousel buffer with
+// NMMPRO_Validation consults this helper and filters the carousel buffer with
 // it, which is what keeps such an address from ever reaching checkout.
 // ---------------------------------------------------------------------
 
 function autopay_check($cryptoId, $address, $expected, $note) {
-	$got = (bool) NMM_Address::is_autopay_verifiable_form($cryptoId, $address);
+	$got = (bool) NMMPRO_Address::is_autopay_verifiable_form($cryptoId, $address);
 	aok('autopay-verifiable ' . $cryptoId . ' ' . $note . ': ' . substr($address, 0, 30), $got === $expected,
 		'want ' . ($expected ? 'verifiable' : 'NOT verifiable') . ', got ' . ($got ? 'verifiable' : 'NOT verifiable'));
 }

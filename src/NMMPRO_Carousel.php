@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Carousel {
+class NMMPRO_Carousel {
 	private $buffer;
 	private $cryptoId;
 	private $autopayEnabled;
@@ -12,10 +12,10 @@ class NMM_Carousel {
 	public function __construct($cryptoId) {
 		$this->cryptoId = $cryptoId;
 
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 		$this->autopayEnabled = $nmmSettings->autopay_enabled($cryptoId);
 
-		$carouselRepo = new NMM_Carousel_Repo();
+		$carouselRepo = new NMMPRO_Carousel_Repo();
 		$this->buffer = self::usable_seats($carouselRepo->get_buffer($cryptoId));
 	}
 
@@ -49,7 +49,7 @@ class NMM_Carousel {
 	 * Claim the next usable carousel address.
 	 *
 	 * @throws \Exception When no usable address exists. The caller is checkout
-	 *                    (see NMM_Gateway::thank_you_page), which fails the
+	 *                    (see NMMPRO_Gateway::thank_you_page), which fails the
 	 *                    order and shows the message - far better than handing
 	 *                    the customer a junk address, and better than the old
 	 *                    behaviour of looping forever on a buffer with no valid
@@ -59,11 +59,11 @@ class NMM_Carousel {
 		$seatCount = count($this->buffer);
 
 		if ($seatCount < 1) {
-			NMM_Util::log(__FILE__, __LINE__, 'No carousel addresses configured for ' . $this->cryptoId . '.', 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'No carousel addresses configured for ' . $this->cryptoId . '.', 'error');
 			throw new \Exception(esc_html__('No payment address is available for the cryptocurrency you selected. Please choose another, or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
-		$carouselRepo = new NMM_Carousel_Repo();
+		$carouselRepo = new NMMPRO_Carousel_Repo();
 
 		// Bounded by the seat count: every seat gets at most one look, so a
 		// buffer in which nothing validates ends in an exception rather than an
@@ -80,8 +80,8 @@ class NMM_Carousel {
 
 			$address = $this->buffer[$seat];
 
-			if (!NMM_Cryptocurrencies::is_valid_wallet_address($this->cryptoId, $address)) {
-				NMM_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an invalid address; skipping it.', 'warning');
+			if (!NMMPRO_Cryptocurrencies::is_valid_wallet_address($this->cryptoId, $address)) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an invalid address; skipping it.', 'warning');
 				continue;
 			}
 
@@ -94,15 +94,15 @@ class NMM_Carousel {
 			// funds, and have the order auto-cancelled because a public
 			// explorer cannot see the payment. Re-check at the moment of use,
 			// where nothing can bypass it.
-			if ($this->autopayEnabled && !NMM_Address::is_autopay_verifiable_form($this->cryptoId, $address)) {
-				NMM_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an address Autopay cannot verify (' . $address . '); skipping it. Re-save this cryptocurrency\'s settings, or use an address Autopay can look up.', 'warning');
+			if ($this->autopayEnabled && !NMMPRO_Address::is_autopay_verifiable_form($this->cryptoId, $address)) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Carousel seat ' . $seat . ' for ' . $this->cryptoId . ' holds an address Autopay cannot verify (' . $address . '); skipping it. Re-save this cryptocurrency\'s settings, or use an address Autopay can look up.', 'warning');
 				continue;
 			}
 
 			return $address;
 		}
 
-		NMM_Util::log(__FILE__, __LINE__, 'No valid carousel address for ' . $this->cryptoId . ' among ' . $seatCount . ' seat(s).', 'error');
+		NMMPRO_Util::log(__FILE__, __LINE__, 'No valid carousel address for ' . $this->cryptoId . ' among ' . $seatCount . ' seat(s).', 'error');
 		throw new \Exception(esc_html__('No valid payment address is configured for the cryptocurrency you selected. Please choose another, or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
 	}
 }

@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Util {
+class NMMPRO_Util {
 
 	/**
 	 * Operational log. Routes to WooCommerce's logger (WooCommerce > Status >
@@ -14,8 +14,8 @@ class NMM_Util {
 	 * operator sees events that may need intervention (enqueue/migration
 	 * failures, cron-lock degradation, address-claim exhaustion, payment
 	 * collisions, ...). Verbose debug/info tracing is emitted only when debug
-	 * logging is enabled (WP_DEBUG, the NMM_DEBUG_LOG constant, or the
-	 * nmm_debug_logging filter), so production is not flooded. Identical
+	 * logging is enabled (WP_DEBUG, the NMMPRO_DEBUG_LOG constant, or the
+	 * nmmpro_debug_logging filter), so production is not flooded. Identical
 	 * messages are de-duplicated for a short window so a per-tick failure can
 	 * be visible without spamming, and messages are length-capped so a full
 	 * third-party response is never dumped wholesale.
@@ -35,7 +35,7 @@ class NMM_Util {
 
 		// De-duplicate: skip an identical entry seen within the throttle window.
 		if (function_exists('get_transient') && function_exists('set_transient')) {
-			$throttleKey = 'nmm_log_' . md5($level . '|' . $entry);
+			$throttleKey = 'nmmpro_log_' . md5($level . '|' . $entry);
 			if (get_transient($throttleKey) !== false) {
 				return;
 			}
@@ -82,11 +82,11 @@ class NMM_Util {
 	}
 
 	private static function debug_logging_enabled() {
-		if (defined('NMM_DEBUG_LOG')) {
-			return (bool) NMM_DEBUG_LOG;
+		if ((NMMPRO_Compat::config('NMMPRO_DEBUG_LOG') !== null)) {
+			return (bool) NMMPRO_Compat::config('NMMPRO_DEBUG_LOG');
 		}
 		$default = defined('WP_DEBUG') && WP_DEBUG;
-		return function_exists('apply_filters') ? (bool) apply_filters('nmm_debug_logging', $default) : $default;
+		return function_exists('apply_filters') ? (bool) NMMPRO_Compat::filter('nmmpro_debug_logging', $default) : $default;
 	}
 
 	public static function p_enabled() {
@@ -215,7 +215,7 @@ class NMM_Util {
 	 * Returns a wp_remote-shaped response array, or WP_Error.
 	 */
 	public static function post_with_curl_options($url, $args, $curlOptions) {
-		$token = 'nmm_' . md5(uniqid('', true));
+		$token = 'nmmpro_' . md5(uniqid('', true));
 
 		self::$pinnedRequest = array(
 			'token'   => $token,
@@ -224,7 +224,7 @@ class NMM_Util {
 			'applied' => false,
 		);
 
-		$args['nmm_pinned_token'] = $token;
+		$args['nmmpro_pinned_token'] = $token;
 		$args['redirection'] = 0; // never follow a redirect to another target
 
 		add_action('http_api_curl', array(__CLASS__, 'apply_pinned_curl_options'), 10, 3);
@@ -240,7 +240,7 @@ class NMM_Util {
 
 		if (!$applied) {
 			return new WP_Error(
-				'nmm_pin_unavailable',
+				'nmmpro_pin_unavailable',
 				'The request was not sent over a connection that could be pinned to the validated address.'
 			);
 		}
@@ -272,7 +272,7 @@ class NMM_Util {
 			return;
 		}
 
-		$token = isset($parsedArgs['nmm_pinned_token']) ? $parsedArgs['nmm_pinned_token'] : '';
+		$token = isset($parsedArgs['nmmpro_pinned_token']) ? $parsedArgs['nmmpro_pinned_token'] : '';
 
 		if ($token !== self::$pinnedRequest['token'] || $requestUrl !== self::$pinnedRequest['url']) {
 			return;

@@ -1,7 +1,7 @@
 <?php
 /**
- * Live smoke test: probes every explorer and exchange-rate API the plugin
- * relies on, using real addresses. Fails (exit 1) if any coin that should
+ * Live smoke test: probes the configured explorer and exchange-rate fixtures
+ * using public addresses. This is not exhaustive coverage of every provider. Fails (exit 1) if any coin that should
  * have working verification returns an error or an empty transaction list.
  *
  * Hits live third-party APIs - run on a schedule / manually, not per-push.
@@ -11,21 +11,21 @@
 
 require __DIR__ . '/wp-stubs.php';
 
-nmm_test_require_plugin(array(
+nmmpro_test_require_plugin(array(
 	'src/vendor/bcmath_Utils.php',
 	'src/vendor/CashAddress.php',
-	'src/NMM_Util.php',
-	'src/NMM_Settings.php',
-	'src/NMM_Transaction.php',
-	'src/NMM_Cryptocurrency.php',
-	'src/NMM_Cryptocurrencies.php',
-	'src/NMM_Sol_Retry_Repo.php',
-	'src/NMM_Blockchain.php',
-	'src/NMM_Exchange.php',
+	'src/NMMPRO_Util.php',
+	'src/NMMPRO_Settings.php',
+	'src/NMMPRO_Transaction.php',
+	'src/NMMPRO_Cryptocurrency.php',
+	'src/NMMPRO_Cryptocurrencies.php',
+	'src/NMMPRO_Sol_Retry_Repo.php',
+	'src/NMMPRO_Blockchain.php',
+	'src/NMMPRO_Exchange.php',
 ));
 
 // SOL verification touches the durable retry store; offline it no-ops (no $wpdb).
-if (!defined('NMM_SOL_RETRY_TABLE')) { define('NMM_SOL_RETRY_TABLE', 'nmmpro_sol_retry'); }
+if (!defined('NMMPRO_SOL_RETRY_TABLE')) { define('NMMPRO_SOL_RETRY_TABLE', 'nmmpro_sol_retry'); }
 
 $failures = array();
 
@@ -95,26 +95,28 @@ function harvest_zec_address() {
 }
 
 $only = array_slice($argv, 1);
-$run = function($coin) use ($only) { return count($only) === 0 || in_array($coin, $only, true); };
+$unmatched = array_fill_keys($only, true);
+$run = function($coin) use ($only, &$unmatched) { unset($unmatched[$coin]); return count($only) === 0 || in_array($coin, $only, true); };
 
 // --- payment verification (autopay tx listings) ---
-if ($run('BTC')) check('BTC mempool.space', NMM_Blockchain::get_btc_address_transactions('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'));
-if ($run('ETH')) check('ETH blockscout', NMM_Blockchain::get_eth_address_transactions('0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae'));
-if ($run('DOGE')) check('DOGE blockcypher', NMM_Blockchain::get_doge_address_transactions('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'));
+if ($run('BTC')) check('BTC mempool.space', NMMPRO_Blockchain::get_btc_address_transactions('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'));
+if ($run('ETH')) check('ETH blockscout', NMMPRO_Blockchain::get_eth_address_transactions('0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae'));
+if ($run('DOGE')) check('DOGE blockcypher', NMMPRO_Blockchain::get_doge_address_transactions('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'));
 // High-traffic exchange wallet: keeps incoming XRP Payments on page 1 (the
 // endpoint returns only the newest 25 txns), so the probe stays meaningful.
-if ($run('XRP')) check('XRP xrpscan', NMM_Blockchain::get_xrp_address_transactions('rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh'));
-if ($run('BCH')) check('BCH haskoin', NMM_Blockchain::get_bch_address_transactions('qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy'));
-if ($run('DASH')) check('DASH insight', NMM_Blockchain::get_dash_address_transactions('XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw'));
-if ($run('EOS')) check('EOS hyperion', NMM_Blockchain::get_eos_address_transactions('binancecleos'));
-if ($run('ADA')) { $adaAddr = harvest_ada_address(); if ($adaAddr === '') { printf("%-22s %-5s %s\n", 'ADA koios', 'FAIL', 'no address harvested'); $failures[] = 'ADA'; } else { check('ADA koios', NMM_Blockchain::get_ada_address_transactions($adaAddr)); } }
-if ($run('BSV')) { sleep(2); check('BSV whatsonchain', NMM_Blockchain::get_bsv_address_transactions('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')); }
-if ($run('DGB')) check('DGB digiexplorer', NMM_Blockchain::get_dgb_address_transactions('DQ6pae47DenMJqoPxgNSRJaefRxQU4ZJUb'));
-if ($run('XTZ')) check('XTZ tzkt', NMM_Blockchain::get_xtz_address_transactions('tz3RDC3Jdn4j15J7bBHZd29EUee9gVB1CxD9'));
-if ($run('ZEC')) { sleep(2); check('ZEC blockchair', NMM_Blockchain::get_zec_address_transactions(harvest_zec_address())); }
-if ($run('BLK')) check('BLK iquidus', NMM_Blockchain::get_blk_address_transactions('tblk1pxfzy6gvcajtuqrn4ax9mjpv9kywalwe40nd84xyy7tc2sugjx8ms85w7t8'));
-if ($run('USDT')) check('USDT erc20 blockscout', NMM_Blockchain::get_erc20_address_transactions('USDT', '0x28C6c06298d514Db089934071355E5743bf21d60'));
-if ($run('USDTTRX')) check('USDTTRX tronscan', NMM_Blockchain::get_trc20_usdt_address_transactions('TV6MuMXfmLbBqPZvBHdwFsDnQeVfnmiuSi'));
+if ($run('XRP')) check('XRP xrpscan', NMMPRO_Blockchain::get_xrp_address_transactions('rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh'));
+if ($run('BCH')) check('BCH haskoin', NMMPRO_Blockchain::get_bch_address_transactions('qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy'));
+if ($run('DASH')) check('DASH insight', NMMPRO_Blockchain::get_dash_address_transactions('XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw'));
+if ($run('EOS')) check('EOS hyperion', NMMPRO_Blockchain::get_eos_address_transactions('binancecleos'));
+if ($run('ADA')) { $adaAddr = harvest_ada_address(); if ($adaAddr === '') { printf("%-22s %-5s %s\n", 'ADA koios', 'FAIL', 'no address harvested'); $failures[] = 'ADA'; } else { check('ADA koios', NMMPRO_Blockchain::get_ada_address_transactions($adaAddr)); } }
+if ($run('BSV')) { sleep(2); check('BSV whatsonchain', NMMPRO_Blockchain::get_bsv_address_transactions('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')); }
+if ($run('DGB')) check('DGB digiexplorer', NMMPRO_Blockchain::get_dgb_address_transactions('DQ6pae47DenMJqoPxgNSRJaefRxQU4ZJUb'));
+if ($run('XTZ')) check('XTZ tzkt', NMMPRO_Blockchain::get_xtz_address_transactions('tz3RDC3Jdn4j15J7bBHZd29EUee9gVB1CxD9'));
+if ($run('ZEC')) { sleep(2); check('ZEC blockchair', NMMPRO_Blockchain::get_zec_address_transactions(harvest_zec_address())); }
+if ($run('BLK')) check('BLK iquidus', NMMPRO_Blockchain::get_blk_address_transactions('tblk1pxfzy6gvcajtuqrn4ax9mjpv9kywalwe40nd84xyy7tc2sugjx8ms85w7t8'));
+if ($run('USDT')) check('USDT erc20 blockscout', NMMPRO_Blockchain::get_erc20_address_transactions('USDT', '0x28C6c06298d514Db089934071355E5743bf21d60'));
+if ($run('TRX')) check('TRX tronscan', NMMPRO_Blockchain::get_trx_address_transactions('TV6MuMXfmLbBqPZvBHdwFsDnQeVfnmiuSi'));
+if ($run('USDTTRX')) check('USDTTRX tronscan', NMMPRO_Blockchain::get_trc20_usdt_address_transactions('TV6MuMXfmLbBqPZvBHdwFsDnQeVfnmiuSi'));
 // find an address that RECEIVED lamports in a busy wallet's recent activity
 // (a hot wallet itself mostly sends, so its own deltas are usually negative)
 function harvest_sol_recipient() {
@@ -148,7 +150,7 @@ if ($run('SOL')) {
 	sleep(5);
 	$solAddr = harvest_sol_recipient();
 	if ($solAddr === '') { printf("%-22s %-5s %s\n", 'SOL mainnet rpc', 'FAIL', 'no recipient harvested'); $failures[] = 'SOL'; }
-	else { sleep(5); check('SOL mainnet rpc', NMM_Blockchain::get_sol_address_transactions($solAddr)); }
+	else { sleep(5); check('SOL mainnet rpc', NMMPRO_Blockchain::get_sol_address_transactions($solAddr)); }
 }
 
 // multi-network tokens: harvest a recent recipient from each chain's blockscout
@@ -180,30 +182,32 @@ foreach ($multinet as $mnId => $mnInfo) {
 	$mnAddr = harvest_erc20_recipient($mnInfo[0], $mnInfo[1]);
 	if ($mnAddr === '') { printf("%-22s %-5s %s\n", $mnId, 'FAIL', 'no recipient harvested'); $failures[] = $mnId; continue; }
 	sleep(5);
-	check($mnId . ' ' . $mnInfo[0], NMM_Blockchain::get_erc20_address_transactions($mnId, $mnAddr));
+	check($mnId . ' ' . $mnInfo[0], NMMPRO_Blockchain::get_erc20_address_transactions($mnId, $mnAddr));
 }
 
 // --- HD (privacy mode) balance checks ---
-if ($run('BTC')) check('BTC hd blockchain.info', NMM_Blockchain::get_blockchaininfo_total_received_for_btc_address('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', 2));
-if ($run('LTC')) check('LTC hd litecoinspace', NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address('LVg2kJoFNg45Nbpy53h7Fe1wKyeXVRhMH9'));
-if ($run('DOGE')) check('DOGE hd blockcypher', NMM_Blockchain::get_blockcypher_total_received_for_doge_address('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'));
-if ($run('DASH')) check('DASH hd insight', NMM_Blockchain::get_dashblockexplorer_total_received_for_dash_address('XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw'));
-if ($run('BTX')) { sleep(10); /* chainz etiquette */ check('BTX hd chainz', NMM_Blockchain::get_chainz_total_received_for_btx_address('2LSuLfHTLdxYUCVjLDBvcmL5A9Umnvpcnv')); }
+if ($run('BTC')) check('BTC hd blockchain.info', NMMPRO_Blockchain::get_blockchaininfo_total_received_for_btc_address('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', 2));
+if ($run('LTC')) check('LTC hd litecoinspace', NMMPRO_Blockchain::get_litecoinspace_total_received_for_ltc_address('LVg2kJoFNg45Nbpy53h7Fe1wKyeXVRhMH9'));
+if ($run('DOGE')) check('DOGE hd blockcypher', NMMPRO_Blockchain::get_blockcypher_total_received_for_doge_address('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'));
+if ($run('DASH')) check('DASH hd insight', NMMPRO_Blockchain::get_dashblockexplorer_total_received_for_dash_address('XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw'));
+if ($run('BTX')) { sleep(10); /* chainz etiquette */ check('BTX hd chainz', NMMPRO_Blockchain::get_chainz_total_received_for_btx_address('2LSuLfHTLdxYUCVjLDBvcmL5A9Umnvpcnv')); }
 
 // --- exchange rates ---
 if ($run('RATES')) {
-	check_price('CoinGecko BTC/USD', function() { return NMM_Exchange::get_coingecko_price('BTC', 60); });
+	check_price('CoinGecko BTC/USD', function() { return NMMPRO_Exchange::get_coingecko_price('BTC', 60); });
 	// Binance geo-blocks US IPs (HTTP 451) - GitHub-hosted runners live there.
 	// Skip when blocked; still fail on real outages.
 	$binanceProbe = wp_remote_get('https://api.binance.com/api/v3/ping');
 	if (!is_wp_error($binanceProbe) && (int) $binanceProbe['response']['code'] === 451) {
 		printf("%-22s %-5s %s\n", 'Binance BTC/USDT', 'skip', 'geo-blocked from this runner (451)');
 	} else {
-		check_price('Binance BTC/USDT', function() { return NMM_Exchange::get_binance_price('BTC', 60); });
+		check_price('Binance BTC/USDT', function() { return NMMPRO_Exchange::get_binance_price('BTC', 60); });
 	}
-	check_price('EUR->USD frankfurter', function() { return NMM_Exchange::get_order_total_in_usd(100, 'EUR'); });
-	check_price('AUD->USD frankfurter', function() { return NMM_Exchange::get_order_total_in_usd(100, 'AUD'); });
+	check_price('EUR->USD frankfurter', function() { return NMMPRO_Exchange::get_order_total_in_usd(100, 'EUR'); });
+	check_price('AUD->USD frankfurter', function() { return NMMPRO_Exchange::get_order_total_in_usd(100, 'AUD'); });
 }
+
+foreach (array_keys($unmatched) as $unknown) { $failures[] = 'No smoke fixture for requested selector: ' . $unknown; }
 
 echo "\n";
 if (count($failures) > 0) {

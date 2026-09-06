@@ -4,10 +4,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Validation {
+class NMMPRO_Validation {
 
 	/**
-	 * Sanitize callback for register_setting on the NMM_REDUX_ID option.
+	 * Sanitize callback for register_setting on the NMMPRO_REDUX_ID option.
 	 * Ports the old Redux before_validation filter: strips invalid wallet
 	 * addresses, validates MPKs, disables misconfigured cryptos, refreshes
 	 * the carousel buffer, and surfaces errors as admin notices.
@@ -20,7 +20,7 @@ class NMM_Validation {
 		}
 		$alreadyRan = true;
 
-		$oldValues = get_option(NMM_REDUX_ID, array());
+		$oldValues = NMMPRO_Compat::get_option(NMMPRO_REDUX_ID, array());
 
 		if (!is_array($newValues)) {
 			return $oldValues;
@@ -46,8 +46,8 @@ class NMM_Validation {
 		// saved options or every future save would silently re-clear the password.
 		unset($newValues['XMR_wallet_rpc_password_clear']);
 
-		if (defined('NMM_XMR_RPC_PASSWORD')) {
-			// Constant wins at read time (NMM_Settings::get_xmr_rpc_password); the
+		if ((NMMPRO_Compat::config('NMMPRO_XMR_RPC_PASSWORD') !== null)) {
+			// Constant wins at read time (NMMPRO_Settings::get_xmr_rpc_password); the
 			// admin field is disabled, so leave the stored option untouched and
 			// removing the constant restores the previous behaviour.
 			if (array_key_exists('XMR_wallet_rpc_password', (array) $oldValues)) {
@@ -84,7 +84,7 @@ class NMM_Validation {
 		// an invisible trailing space would fail the save; whitespace can
 		// never be part of any supported address format, so trimming here is
 		// always safe and must happen BEFORE validate() reads the values.
-		foreach (array_keys(NMM_Cryptocurrencies::get()) as $cryptoId) {
+		foreach (array_keys(NMMPRO_Cryptocurrencies::get()) as $cryptoId) {
 			$addressesKey = $cryptoId . '_addresses';
 			if (isset($newValues[$addressesKey]) && is_array($newValues[$addressesKey])) {
 				$newValues[$addressesKey] = array_map(function($address) {
@@ -97,8 +97,8 @@ class NMM_Validation {
 	}
 
 	private static function validate($newValues, $oldValues) {
-		$oldSettings = new NMM_Settings($oldValues);
-		$newSettings = new NMM_Settings($newValues);
+		$oldSettings = new NMMPRO_Settings($oldValues);
+		$newSettings = new NMMPRO_Settings($newValues);
 
 		$atLeastOneInvalidCrypto = false;
 		$errorMessages = [];
@@ -112,8 +112,8 @@ class NMM_Validation {
 		// working against the previous endpoint while the merchant fixes it.
 		$solRpcUrl = $newSettings->get_sol_rpc_url();
 
-		if ($solRpcUrl !== '' && class_exists('NMM_Blockchain')) {
-			$solTarget = NMM_Blockchain::validate_sol_rpc_url($solRpcUrl);
+		if ($solRpcUrl !== '' && class_exists('NMMPRO_Blockchain')) {
+			$solTarget = NMMPRO_Blockchain::validate_sol_rpc_url($solRpcUrl);
 
 			if (is_wp_error($solTarget)) {
 				$oldSolRpcUrl = $oldSettings->get_sol_rpc_url();
@@ -127,12 +127,12 @@ class NMM_Validation {
 				if ($oldSolRpcUrl === '') {
 					/* translators: %s: the default public Solana RPC endpoint URL */
 					$errorMessages[] = sprintf(__('Solana verification is using the default public endpoint %s until a valid one is saved.', 'nomiddleman-crypto-payments-for-woocommerce'),
-											   esc_html(NMM_Blockchain::sol_default_rpc_url()));
+											   esc_html(NMMPRO_Blockchain::sol_default_rpc_url()));
 				}
 			}
 		}
 
-		foreach (NMM_Cryptocurrencies::get() as $crypto) {
+		foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
 			$invalidCryptoSettings = false;
 			$cryptoId = $crypto->get_id();
 			$cryptoName = $crypto->get_name();
@@ -158,12 +158,12 @@ class NMM_Validation {
 				// well-formed address is not enough - it also has to be a form
 				// the explorer can report on. Zcash shielded/Unified/TEX
 				// addresses are not (see
-				// NMM_Address::is_autopay_verifiable_form): the merchant would
+				// NMMPRO_Address::is_autopay_verifiable_form): the merchant would
 				// RECEIVE the money while the order sat unpaid and was then
 				// auto-cancelled. This is the layer that must enforce it,
 				// because it is the only place that knows the coin's mode AND
 				// the only writer of the carousel buffer - filtering here means
-				// an unverifiable address is never stocked, so NMM_Carousel
+				// an unverifiable address is never stocked, so NMMPRO_Carousel
 				// physically cannot hand one out at checkout.
 				//
 				// These addresses stay in the saved settings (they are valid,
@@ -174,10 +174,10 @@ class NMM_Validation {
 				$addresses = $newSettings->get_addresses($cryptoId);
 
 				foreach ($addresses as $ind => $address) {
-					if (NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
+					if (NMMPRO_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
 						$address = trim($address);
 
-						if ($requireAutopayVerifiable && !NMM_Address::is_autopay_verifiable_form($cryptoId, $address)) {
+						if ($requireAutopayVerifiable && !NMMPRO_Address::is_autopay_verifiable_form($cryptoId, $address)) {
 							$unverifiableAddresses[] = $address;
 							continue;
 						}
@@ -204,7 +204,7 @@ class NMM_Validation {
 						// by an EARLIER save could still be holding the now
 						// unusable addresses. Clear it so no code path can
 						// reach one.
-						$carouselRepo = new NMM_Carousel_Repo();
+						$carouselRepo = new NMMPRO_Carousel_Repo();
 						$carouselRepo->set_buffer($cryptoId, array());
 					}
 					else {
@@ -213,15 +213,15 @@ class NMM_Validation {
 					}
 				}
 				else {
-					$carouselRepo = new NMM_Carousel_Repo();
+					$carouselRepo = new NMMPRO_Carousel_Repo();
 					$carouselRepo->set_buffer($cryptoId, $carouselAddresses);
 				}
 			}
 			else if ($cryptoSelected && $newSettings->hd_enabled($cryptoId)) {
 				$mpk = $newSettings->get_mpk($cryptoId);
 
-				if (NMM_Util::p_enabled()) {
-					if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
+				if (NMMPRO_Util::p_enabled()) {
+					if (!NMMPRO_Hd::is_valid_mpk($cryptoId, $mpk)) {
 						$invalidCryptoSettings = true;
 						$atLeastOneInvalidCrypto = true;
 						/* translators: %1$s: cryptocurrency name */
@@ -229,10 +229,10 @@ class NMM_Validation {
 					}
 				}
 				else {
-					if (NMM_Hd::is_valid_ypub($mpk) || NMM_Hd::is_valid_zpub($mpk)) {
+					if (NMMPRO_Hd::is_valid_ypub($mpk) || NMMPRO_Hd::is_valid_zpub($mpk)) {
 						$invalidCryptoSettings = true;
 						$atLeastOneInvalidCrypto = true;
-						if (NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
+						if (NMMPRO_Hd::is_valid_mpk($cryptoId, $mpk)) {
 							/* translators: %s: cryptocurrency name */
 							$errorMessages[] = sprintf(__('Please use an xpub MPK. Disabling %s.', 'nomiddleman-crypto-payments-for-woocommerce'), $cryptoName);
 						}
@@ -242,7 +242,7 @@ class NMM_Validation {
 						}
 					}
 					else {
-						if (!NMM_Hd::is_valid_xpub($mpk)) {
+						if (!NMMPRO_Hd::is_valid_xpub($mpk)) {
 							$invalidCryptoSettings = true;
 							$atLeastOneInvalidCrypto = true;
 							/* translators: %1$s: cryptocurrency name */
@@ -256,7 +256,7 @@ class NMM_Validation {
 			// strip out invalid data from settings
 			$invalidAddressKeys = [];
 			foreach ($newSettings->get_addresses($cryptoId) as $k => $address) {
-				if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
+				if (!NMMPRO_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
 					if ($address !== '') {
 						$invalidAddressKeys[] = $k;
 						/* translators: 1: cryptocurrency name, 2: the invalid address */
@@ -279,13 +279,13 @@ class NMM_Validation {
 				$newValues[$cryptoId . '_addresses'] = array_values($newValues[$cryptoId . '_addresses']);
 			}
 
-			if (NMM_Util::p_enabled()) {
-				if (!NMM_Hd::is_valid_mpk($cryptoId, $newSettings->get_mpk($cryptoId))) {
+			if (NMMPRO_Util::p_enabled()) {
+				if (!NMMPRO_Hd::is_valid_mpk($cryptoId, $newSettings->get_mpk($cryptoId))) {
 					unset($newValues[$cryptoId . '_hd_mpk']);
 				}
 			}
 			else {
-				if (!NMM_Hd::is_valid_xpub($newSettings->get_mpk($cryptoId))) {
+				if (!NMMPRO_Hd::is_valid_xpub($newSettings->get_mpk($cryptoId))) {
 					unset($newValues[$cryptoId . '_hd_mpk']);
 				}
 			}

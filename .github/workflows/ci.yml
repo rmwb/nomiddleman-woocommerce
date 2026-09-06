@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
 
 jobs:
   lint:
@@ -112,6 +113,19 @@ jobs:
       - name: Derive against known-good BIP32 addresses (GMP + BCMATH)
         run: php tests/test-hd-derivation.php
 
+  hd-addrtype:
+    name: HD address version bytes (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, gmp
+          coverage: none
+      - name: Check HD address version-byte mappings
+        run: php tests/test-hd-addrtype.php
+
   qr-rendering:
     name: QR rendering (offline + decode)
     runs-on: ubuntu-latest
@@ -157,6 +171,8 @@ jobs:
         run: php tests/test-pinned-request.php
       - name: Settings bounds (server-side clamping) tests
         run: php tests/test-settings-bounds.php
+      - name: Exact decimal and atomic amounts
+        run: php tests/test-amount.php
       - name: Exchange-rate consensus (median, outlier rejection, stale tier) tests
         run: php tests/test-exchange-rate.php
 
@@ -240,3 +256,13 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "test-hd-verify: skipped" && { echo "::error::hd-verify test skipped"; exit 1; } || true
           echo "$OUT" | grep -q "HD-VERIFY CHECKS PASSED" || { echo "::error::hd-verify test did not pass"; exit 1; }
+      - name: Durable history, payment integrity and upgrade compatibility
+        run: |
+          set -e
+          for entry in 'test-consumed-history.php:CONSUMED-HISTORY CHECKS PASSED' 'test-payment-integrity.php:PAYMENT-INTEGRITY CHECKS PASSED' 'test-upgrade-compat.php:UPGRADE-COMPAT CHECKS PASSED'; do
+            script="${entry%%:*}"
+            marker="${entry#*:}"
+            OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/$script" --path=wp 2>&1)
+            echo "$OUT"
+            echo "$OUT" | grep -q "$marker" || { echo "::error::$script did not pass"; exit 1; }
+          done

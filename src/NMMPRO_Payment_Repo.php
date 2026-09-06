@@ -4,13 +4,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Payment_Repo {
+class NMMPRO_Payment_Repo {
 	private $tableName;
 
 	public function __construct() {
 		global $wpdb;
 
-		$this->tableName = $wpdb->prefix . NMM_PAYMENT_TABLE;
+		$this->tableName = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
 	}
 
 	/**
@@ -26,7 +26,7 @@ class NMM_Payment_Repo {
 	 * @return bool
 	 */
 	public function insert($address, $cryptocurrency, $orderId, $paymentAmount, $status, $hdAddress = '0') {
-		NMM_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status . ' with order amount of: ' . $paymentAmount);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status . ' with order amount of: ' . $paymentAmount);
 		global $wpdb;
 
 		$affected = $wpdb->query($wpdb->prepare(
@@ -37,7 +37,7 @@ class NMM_Payment_Repo {
 		));
 
 		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Failed to insert payment row for order ' . $orderId . ' (' . $cryptocurrency . ' ' . $address . '): ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Failed to insert payment row for order ' . $orderId . ' (' . $cryptocurrency . ' ' . $address . '): ' . $wpdb->last_error, 'error');
 			return false;
 		}
 
@@ -255,7 +255,7 @@ class NMM_Payment_Repo {
 		// never-used one and aggregation would proceed on it. Return null so
 		// the caller can refuse rather than guess.
 		if ($count === null) {
-			NMM_Util::log(__FILE__, __LINE__, "Could not count payment rows for " . $cryptoId . " " . $address . ": " . $wpdb->last_error, "error");
+			NMMPRO_Util::log(__FILE__, __LINE__, "Could not count payment rows for " . $cryptoId . " " . $address . ": " . $wpdb->last_error, "error");
 			return null;
 		}
 
@@ -283,7 +283,7 @@ class NMM_Payment_Repo {
 
 	public function set_status($orderId, $orderAmount, $status) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'updating ' . $orderId . ' to ' . $status);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'updating ' . $orderId . ' to ' . $status);
 
 		$wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName`
@@ -325,7 +325,7 @@ class NMM_Payment_Repo {
 		));
 
 		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'claim to ' . $toStatus . ' DB error for order ' . $orderId . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'claim to ' . $toStatus . ' DB error for order ' . $orderId . ': ' . $wpdb->last_error, 'error');
 			return self::CLAIM_DB_ERROR;
 		}
 

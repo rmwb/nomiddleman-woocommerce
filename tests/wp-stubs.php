@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/');
 
 if (!defined('MINUTE_IN_SECONDS')) define('MINUTE_IN_SECONDS', 60);
 if (!defined('HOUR_IN_SECONDS')) define('HOUR_IN_SECONDS', 3600);
-if (!defined('NMM_REDUX_ID')) define('NMM_REDUX_ID', 'nmmpro_redux_options');
+if (!defined('NMMPRO_REDUX_ID')) define('NMMPRO_REDUX_ID', 'nmmpro_redux_options');
 
 if (!function_exists('apply_filters')) {
 	function apply_filters($tag, $value) { return $value; }
@@ -65,11 +65,11 @@ function is_wp_error($thing) {
 	return $thing instanceof WP_Error_Stub;
 }
 
-function nmm_test_http($url, $method = 'GET', $postBody = null, $headers = array(), $ua = 'nmm-test-suite') {
+function nmmpro_test_http($url, $method = 'GET', $postBody = null, $headers = array(), $ua = 'nmm-test-suite') {
 	// Offline tests can install a fixture handler to answer HTTP without a
 	// network. Default behaviour (real curl) is unchanged when none is set.
-	if (isset($GLOBALS['nmm_http_handler']) && is_callable($GLOBALS['nmm_http_handler'])) {
-		return call_user_func($GLOBALS['nmm_http_handler'], $url, $method, $postBody, $headers);
+	if (isset($GLOBALS['nmmpro_http_handler']) && is_callable($GLOBALS['nmmpro_http_handler'])) {
+		return call_user_func($GLOBALS['nmmpro_http_handler'], $url, $method, $postBody, $headers);
 	}
 
 	$ch = curl_init($url);
@@ -91,7 +91,7 @@ function nmm_test_http($url, $method = 'GET', $postBody = null, $headers = array
 }
 
 function wp_remote_get($url, $args = array()) {
-	return nmm_test_http($url, 'GET', null, array(),
+	return nmmpro_test_http($url, 'GET', null, array(),
 		isset($args['user-agent']) ? $args['user-agent'] : 'nmm-test-suite');
 }
 
@@ -100,14 +100,14 @@ function wp_remote_post($url, $args = array()) {
 	foreach ((array) (isset($args['headers']) ? $args['headers'] : array()) as $k => $v) {
 		$headers[] = $k . ': ' . $v;
 	}
-	return nmm_test_http($url, 'POST', isset($args['body']) ? $args['body'] : null, $headers);
+	return nmmpro_test_http($url, 'POST', isset($args['body']) ? $args['body'] : null, $headers);
 }
 
 // stateful in-process transients so the plugin's backoff layer behaves normally
-$GLOBALS['nmm_test_transients'] = array();
+$GLOBALS['nmmpro_test_transients'] = array();
 
 function get_transient($key) {
-	$row = isset($GLOBALS['nmm_test_transients'][$key]) ? $GLOBALS['nmm_test_transients'][$key] : null;
+	$row = isset($GLOBALS['nmmpro_test_transients'][$key]) ? $GLOBALS['nmmpro_test_transients'][$key] : null;
 	if ($row === null || $row['expires'] < time()) {
 		return false;
 	}
@@ -115,12 +115,12 @@ function get_transient($key) {
 }
 
 function set_transient($key, $value, $expiration) {
-	$GLOBALS['nmm_test_transients'][$key] = array('value' => $value, 'expires' => time() + $expiration);
+	$GLOBALS['nmmpro_test_transients'][$key] = array('value' => $value, 'expires' => time() + $expiration);
 	return true;
 }
 
 function delete_transient($key) {
-	unset($GLOBALS['nmm_test_transients'][$key]);
+	unset($GLOBALS['nmmpro_test_transients'][$key]);
 	return true;
 }
 
@@ -128,9 +128,12 @@ function get_option($key, $default = array()) {
 	return $default;
 }
 
-function nmm_test_require_plugin($files) {
+function nmmpro_test_require_plugin($files) {
 	$root = dirname(__DIR__);
 	foreach ($files as $f) {
 		require_once $root . '/' . $f;
 	}
 }
+
+require_once dirname(__DIR__) . "/src/NMMPRO_Autoloader.php";
+NMMPRO_Autoloader::register(dirname(__DIR__) . "/src");

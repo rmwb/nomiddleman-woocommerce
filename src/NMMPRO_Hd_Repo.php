@@ -5,10 +5,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Repository for hd mpk storage in WP Database
-class NMM_Hd_Repo {
+class NMMPRO_Hd_Repo {
 
 	// Outcomes of claim_for_complete(). Tri-state for the same reason Autopay's
-	// claim is (see NMM_Payment_Repo): a genuine race loss (CLAIM_ALREADY) is
+	// claim is (see NMMPRO_Payment_Repo): a genuine race loss (CLAIM_ALREADY) is
 	// conclusive, whereas a transient database failure (CLAIM_DB_ERROR) must be
 	// retried rather than treated as settled.
 	const CLAIM_CLAIMED = 'claimed';
@@ -35,7 +35,7 @@ class NMM_Hd_Repo {
 		$this->mpk = $mpk;
 		$this->cryptoId = $cryptoId;
 		$this->hdMode = $hdMode;
-		$this->tableName = $wpdb->prefix . NMM_HD_TABLE;
+		$this->tableName = $wpdb->prefix . NMMPRO_HD_TABLE;
 	}
 
 	/**
@@ -53,7 +53,7 @@ class NMM_Hd_Repo {
 	 * @return bool
 	 */
 	public function insert($address, $mpk_index, $status) {
-		NMM_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'inserting ' . $address . ' into db as ' . $status);
 		global $wpdb;
 
 		$affected = $wpdb->query($wpdb->prepare(
@@ -64,7 +64,7 @@ class NMM_Hd_Repo {
 		));
 
 		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Failed to insert HD address row for ' . $this->cryptoId . ' ' . $address . ' (index ' . $mpk_index . ', status ' . $status . '): ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Failed to insert HD address row for ' . $this->cryptoId . ' ' . $address . ' (index ' . $mpk_index . ', status ' . $status . '): ' . $wpdb->last_error, 'error');
 			return false;
 		}
 
@@ -129,7 +129,7 @@ class NMM_Hd_Repo {
 			 LIMIT 1",
 			$this->mpk, $this->cryptoId, $this->hdMode
 		));
-		NMM_Util::log(__FILE__, __LINE__, "Oldest ready address is: " . print_r($address, true));
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Ready HD address available: ' . ($address ? 'yes' : 'no'));
 		return $address;
 	}
 
@@ -178,7 +178,7 @@ class NMM_Hd_Repo {
 			// affected === 0: another request claimed this id first; retry.
 		}
 
-		NMM_Util::log(__FILE__, __LINE__, 'claim_oldest_ready exhausted retries for ' . $this->cryptoId, 'warning');
+		NMMPRO_Util::log(__FILE__, __LINE__, 'claim_oldest_ready exhausted retries for ' . $this->cryptoId, 'warning');
 		return null;
 	}
 
@@ -227,7 +227,7 @@ class NMM_Hd_Repo {
 		));
 
 		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'claim_for_complete DB error for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'claim_for_complete DB error for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
 			return self::CLAIM_DB_ERROR;
 		}
 
@@ -364,7 +364,7 @@ class NMM_Hd_Repo {
 	 */
 	public function set_total_received($address, $totalReceived) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'Updating total received at ' . $address .' to: ' . $totalReceived);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Updating total received at ' . $address .' to: ' . $totalReceived);
 
 		$affected = $wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName` SET `total_received` = %s WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d",
@@ -372,7 +372,7 @@ class NMM_Hd_Repo {
 		));
 
 		if ($affected === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Failed to update total_received for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Failed to update total_received for ' . $this->cryptoId . ' address ' . $address . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 
@@ -381,7 +381,7 @@ class NMM_Hd_Repo {
 
 	public function set_order_amount($address, $orderAmount) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'Updating order amount at ' . $address . ' to: ' . $orderAmount);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Updating order amount at ' . $address . ' to: ' . $orderAmount);
 
 		$wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName` SET `order_amount` = %s WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d",
@@ -391,7 +391,7 @@ class NMM_Hd_Repo {
 
 	public function set_status($address, $status) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'Updating ' . $address . ' to ' . $status);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Updating ' . $address . ' to ' . $status);
 		if ($status === 'assigned') {
 			$wpdb->query($wpdb->prepare(
 				"UPDATE `$this->tableName` SET `status` = %s, `assigned_at` = %d WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d",
@@ -408,7 +408,7 @@ class NMM_Hd_Repo {
 
 	public function set_order_id($address, $orderId) {
 		global $wpdb;
-		NMM_Util::log(__FILE__, __LINE__, 'Setting address ' . $address . ' order id to: ' . $orderId);
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Setting address ' . $address . ' order id to: ' . $orderId);
 
 		$wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName` SET `order_id` = %d WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d",

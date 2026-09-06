@@ -12,9 +12,9 @@
  */
 
 // BIP32 test vector 1 chain m/0'/1 xpub
-const NMM_TEST_XPUB = 'xpub6ASuArnXKPbfEwhqN6e3mwBcDTgzisQN1wXN9BJcM47sSikHjJf3UFHKkNAWbWMiGj7Wf5uMash7SyYq527Hqck2AxYysAA7xmALppuCkwQ';
+const NMMPRO_TEST_XPUB = 'xpub6ASuArnXKPbfEwhqN6e3mwBcDTgzisQN1wXN9BJcM47sSikHjJf3UFHKkNAWbWMiGj7Wf5uMash7SyYq527Hqck2AxYysAA7xmALppuCkwQ';
 
-const NMM_TEST_EXPECTED = array(
+const NMMPRO_TEST_EXPECTED = array(
 	0 => '1BiCdXSDHyeXSzmx2paVPFVTrmyx7BeCGD',
 	1 => '132EVXhbnaeF2U9ZkakX6FJWqLzmPazQA7',
 	2 => '1DfqqdJJfsTAy5qnz4LnSdkycQVWrnQR9Y',
@@ -34,7 +34,7 @@ define('USE_EXT', $argv[1]);
 
 if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/');
 
-class NMM_Util {
+class NMMPRO_Util {
 	public static function p_enabled() { return false; }
 	public static function log($f, $l, $m) {}
 }
@@ -49,8 +49,8 @@ require $root . '/src/vendor/HdHelper.php';
 
 $failed = false;
 
-foreach (NMM_TEST_EXPECTED as $index => $expected) {
-	$actual = HdHelper::mpk_to_bc_address('BTC', NMM_TEST_XPUB, $index, 2, false);
+foreach (NMMPRO_TEST_EXPECTED as $index => $expected) {
+	$actual = HdHelper::mpk_to_bc_address('BTC', NMMPRO_TEST_XPUB, $index, 2, false);
 	$ok = ($actual === $expected);
 	printf("%-7s m/0/%d  %-36s %s\n", USE_EXT, $index, $actual, $ok ? 'ok' : "FAIL (expected $expected)");
 	if (!$ok) {

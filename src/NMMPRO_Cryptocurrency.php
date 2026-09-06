@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 // Dummy plain object
-class NMM_Cryptocurrency {
+class NMMPRO_Cryptocurrency {
 
     private $id;
     private $name;
@@ -43,14 +43,14 @@ class NMM_Cryptocurrency {
     }
 
     public function get_logo_file_path() {
-        return NMM_PLUGIN_DIR . '/assets/img/' . $this->logoFilePath;
+        return NMMPRO_PLUGIN_DIR . '/assets/img/' . $this->logoFilePath;
     }
 
     public function get_update_interval() {
         return $this->updateInterval;
     }
 
-    public function get_symbol() {        
+    public function get_symbol() {
         return $this->symbol;
     }
     public function has_hd() {
