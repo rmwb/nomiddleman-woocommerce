@@ -158,7 +158,7 @@ class NMMPRO_Monero {
 	 * NMMPRO_XMR_ALLOW_PRIVATE_RPC constant or the nmmpro_xmr_allow_private_rpc filter.
 	 */
 	public static function validate_rpc_url($url) {
-		$parts = wp_parse_url(trim((string) $url));
+		$parts = wp_parse_url(trim((string) $url, " \n\r\t\v\x00"));
 		if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
 			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC URL is malformed.');
 		}

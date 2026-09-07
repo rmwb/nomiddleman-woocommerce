@@ -57,7 +57,7 @@ class NMMPRO_Settings {
 	private static function clamp_numeric($suffix, $value, $fallback) {
 		$bounds = self::NUMERIC_BOUNDS[$suffix];
 
-		$candidate = is_string($value) ? trim($value) : $value;
+		$candidate = is_string($value) ? trim($value, " \n\r\t\v\x00") : $value;
 
 		if (!is_scalar($candidate) || !is_numeric($candidate)) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Setting ' . $suffix . ' is not numeric; falling back to ' . $fallback . '.', 'warning');
@@ -182,7 +182,7 @@ class NMMPRO_Settings {
 		$mpkKey = $cryptoId . '_hd_mpk';
 		if (is_array($this->settings)) {
 			if (array_key_exists($mpkKey, $this->settings)) {
-				return trim($this->settings[$mpkKey]);
+				return trim($this->settings[$mpkKey], " \n\r\t\v\x00");
 			}
 		}
 
@@ -278,7 +278,7 @@ class NMMPRO_Settings {
 
 	public function get_xmr_rpc_url() {
 		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_url', $this->settings)) {
-			return trim((string) $this->settings['XMR_wallet_rpc_url']);
+			return trim((string) $this->settings['XMR_wallet_rpc_url'], " \n\r\t\v\x00");
 		}
 
 		return '';
@@ -286,7 +286,7 @@ class NMMPRO_Settings {
 
 	public function get_xmr_rpc_user() {
 		if (is_array($this->settings) && array_key_exists('XMR_wallet_rpc_user', $this->settings)) {
-			return trim((string) $this->settings['XMR_wallet_rpc_user']);
+			return trim((string) $this->settings['XMR_wallet_rpc_user'], " \n\r\t\v\x00");
 		}
 
 		return '';
@@ -317,7 +317,7 @@ class NMMPRO_Settings {
 	 */
 	public function get_sol_rpc_url() {
 		if (is_array($this->settings) && array_key_exists('SOL_rpc_url', $this->settings)) {
-			return trim((string) $this->settings['SOL_rpc_url']);
+			return trim((string) $this->settings['SOL_rpc_url'], " \n\r\t\v\x00");
 		}
 
 		return '';
@@ -328,7 +328,7 @@ class NMMPRO_Settings {
 
 		if (is_array($this->settings)) {
 			if (array_key_exists($tokenKey, $this->settings)) {
-				return trim((string) $this->settings[$tokenKey]);
+				return trim((string) $this->settings[$tokenKey], " \n\r\t\v\x00");
 			}
 		}
 

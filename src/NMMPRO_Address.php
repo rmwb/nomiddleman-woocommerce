@@ -889,7 +889,7 @@ class NMMPRO_Address {
 				$cryptoId = $crypto->get_id();
 
 				foreach ($settings->get_addresses($cryptoId) as $address) {
-					$address = trim((string) $address);
+					$address = trim((string) $address, " \n\r\t\v\x00");
 
 					if ($address === '') {
 						continue;

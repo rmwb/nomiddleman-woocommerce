@@ -88,7 +88,7 @@ class NMMPRO_Validation {
 			$addressesKey = $cryptoId . '_addresses';
 			if (isset($newValues[$addressesKey]) && is_array($newValues[$addressesKey])) {
 				$newValues[$addressesKey] = array_map(function($address) {
-					return is_string($address) ? trim($address) : $address;
+					return is_string($address) ? trim($address, " \n\r\t\v\x00") : $address;
 				}, $newValues[$addressesKey]);
 			}
 		}
@@ -175,7 +175,7 @@ class NMMPRO_Validation {
 
 				foreach ($addresses as $ind => $address) {
 					if (NMMPRO_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
-						$address = trim($address);
+						$address = trim($address, " \n\r\t\v\x00");
 
 						if ($requireAutopayVerifiable && !NMMPRO_Address::is_autopay_verifiable_form($cryptoId, $address)) {
 							$unverifiableAddresses[] = $address;

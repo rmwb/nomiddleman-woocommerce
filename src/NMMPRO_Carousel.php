@@ -37,8 +37,8 @@ class NMMPRO_Carousel {
 		$seats = array();
 
 		foreach ($rawBuffer as $address) {
-			if (is_string($address) && trim($address) !== '') {
-				$seats[] = trim($address);
+			if (is_string($address) && trim($address, " \n\r\t\v\x00") !== '') {
+				$seats[] = trim($address, " \n\r\t\v\x00");
 			}
 		}
 

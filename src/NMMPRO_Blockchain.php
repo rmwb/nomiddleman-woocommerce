@@ -426,7 +426,7 @@ class NMMPRO_Blockchain {
 		);
 
 		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body']))) {
+		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body'], " \n\r\t\v\x00"))) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
@@ -436,7 +436,7 @@ class NMMPRO_Blockchain {
 			return $result;
 		}
 
-		$totalReceived = NMMPRO_Amount::normalize(trim($response['body']));
+		$totalReceived = NMMPRO_Amount::normalize(trim($response['body'], " \n\r\t\v\x00"));
 
 		$result = array (
 			'result' => 'success',
@@ -2302,10 +2302,10 @@ class NMMPRO_Blockchain {
 		}
 
 		$url = NMMPRO_Compat::filter('nmmpro_api_url', $configured);
-		if (!is_string($url) || trim($url) === '') {
+		if (!is_string($url) || trim($url, " \n\r\t\v\x00") === '') {
 			$url = $configured;
 		}
-		$fromFilter = (trim($url) !== $configured);
+		$fromFilter = (trim($url, " \n\r\t\v\x00") !== $configured);
 
 		// The built-in default is our own compile-time constant, not merchant
 		// input, so it needs no SSRF vetting - and vetting it would put a DNS
@@ -2359,7 +2359,7 @@ class NMMPRO_Blockchain {
 	 * Returns array( url, host, port, ip, is_literal, is_private ) or a WP_Error.
 	 */
 	public static function validate_sol_rpc_url($url, $trusted = false) {
-		$url = trim((string) $url);
+		$url = trim((string) $url, " \n\r\t\v\x00");
 
 		if ($url === '') {
 			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL is empty.', 'nomiddleman-crypto-payments-for-woocommerce'));
