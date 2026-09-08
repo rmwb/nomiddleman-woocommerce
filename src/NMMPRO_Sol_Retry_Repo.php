@@ -12,10 +12,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  * always advance past a failure, having stored it here first.
  *
  * All methods no-op (returning empty) when $wpdb is unavailable, so the offline
- * sweep tests can exercise NMM_Blockchain without a database. In WordPress $wpdb
+ * sweep tests can exercise NMMPRO_Blockchain without a database. In WordPress $wpdb
  * is always present.
  */
-class NMM_Sol_Retry_Repo {
+class NMMPRO_Sol_Retry_Repo {
 
 	private static function available() {
 		return isset($GLOBALS['wpdb']) && is_object($GLOBALS['wpdb']);
@@ -23,7 +23,7 @@ class NMM_Sol_Retry_Repo {
 
 	private static function table() {
 		global $wpdb;
-		return $wpdb->prefix . NMM_SOL_RETRY_TABLE;
+		return $wpdb->prefix . NMMPRO_SOL_RETRY_TABLE;
 	}
 
 	// The oldest-due signatures for an address (next_retry_at <= now), bounded so
@@ -63,7 +63,7 @@ class NMM_Sol_Retry_Repo {
 			$address, $signature, $now, $now, (int) $blockTime
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry enqueue failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana retry enqueue failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 		return true;
@@ -81,7 +81,7 @@ class NMM_Sol_Retry_Repo {
 			$attempts, $nextRetryAt, $address, $signature
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry reschedule failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana retry reschedule failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 		return true;
@@ -99,7 +99,7 @@ class NMM_Sol_Retry_Repo {
 			$address, $signature
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry remove failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana retry remove failed for ' . $signature . ': ' . $wpdb->last_error, 'error');
 			return false;
 		}
 		return true;
@@ -127,7 +127,7 @@ class NMM_Sol_Retry_Repo {
 			$address, (int) $windowCutoffBlockTime, (int) $limit
 		));
 		if ($byBlock === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry block-time expiry failed for ' . $address . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana retry block-time expiry failed for ' . $address . ': ' . $wpdb->last_error, 'error');
 			return -1;
 		}
 
@@ -136,7 +136,7 @@ class NMM_Sol_Retry_Repo {
 			$address, (int) $retentionCutoffFirstFailed, (int) $limit
 		));
 		if ($byRetention === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry retention expiry failed for ' . $address . ': ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana retry retention expiry failed for ' . $address . ': ' . $wpdb->last_error, 'error');
 			return -1;
 		}
 
@@ -160,7 +160,7 @@ class NMM_Sol_Retry_Repo {
 			(int) $cutoffFirstFailed, (int) $limit
 		));
 		if ($result === false) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana retry global cleanup failed: ' . $wpdb->last_error, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana retry global cleanup failed: ' . $wpdb->last_error, 'error');
 			return -1;
 		}
 		return (int) $result;

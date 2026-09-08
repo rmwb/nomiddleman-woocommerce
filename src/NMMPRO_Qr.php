@@ -10,59 +10,15 @@ if ( ! defined( 'ABSPATH' ) ) {
  * to disk (the old approach left world-readable tmp{orderId}_qrcode.png
  * files - one per order - in the plugin directory).
  */
-class NMM_Qr {
+class NMMPRO_Qr {
 
 	private static $emailImages = array();
 	private static $mailerHooked = false;
 
 	// decimal coin amount -> integer base units as a string (no float rounding)
 	public static function to_base_units($amountDecimal, $precision) {
-		$amount = trim((string) $amountDecimal);
-
-		if (!is_numeric($amount)) {
-			return '0';
-		}
-
-		$precision = (int) $precision;
-
-		// bcmath when present (gmp-only hosts are supported too); otherwise a
-		// pure-string scaling that is correct with neither extension and never
-		// loses precision to float rounding.
-		if (function_exists('bcmul')) {
-			$units = bcmul($amount, bcpow('10', (string) $precision, 0), 0);
-			return ltrim($units, '+');
-		}
-
-		return self::decimal_to_base_units_string($amount, $precision);
-	}
-
-	// Scale a decimal string by 10^precision using string ops only, so it is
-	// correct with no bcmath/gmp and never loses precision to float rounding.
-	private static function decimal_to_base_units_string($amount, $precision) {
-		$negative = false;
-		if (strpos($amount, '-') === 0) {
-			$negative = true;
-			$amount = substr($amount, 1);
-		}
-
-		$parts = explode('.', $amount, 2);
-		$intPart = $parts[0] === '' ? '0' : $parts[0];
-		$fracPart = isset($parts[1]) ? $parts[1] : '';
-
-		// Pad or truncate the fractional part to exactly $precision digits.
-		if (strlen($fracPart) < $precision) {
-			$fracPart = str_pad($fracPart, $precision, '0');
-		}
-		else {
-			$fracPart = substr($fracPart, 0, $precision);
-		}
-
-		$digits = ltrim($intPart . $fracPart, '0');
-		if ($digits === '') {
-			$digits = '0';
-		}
-
-		return ($negative && $digits !== '0') ? '-' . $digits : $digits;
+		try { return NMMPRO_Amount::to_units($amountDecimal, (int) $precision); }
+		catch (\InvalidArgumentException $e) { return '0'; }
 	}
 
 	/**
@@ -82,7 +38,7 @@ class NMM_Qr {
 
 		$contract = $crypto->get_erc20_contract();
 		if (is_string($contract) && $contract !== '') {
-			$chainId = NMM_Cryptocurrencies::evm_chain_id($cryptoId);
+			$chainId = NMMPRO_Cryptocurrencies::evm_chain_id($cryptoId);
 
 			return 'ethereum:' . $contract . '@' . $chainId . '/transfer?address=' . $address
 				. '&uint256=' . self::to_base_units($amountDecimal, $crypto->get_round_precision());

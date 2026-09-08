@@ -17,13 +17,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  * restriction, and the digest credentials monero-wallet-rpc needs when
  * --rpc-login is set (which the HTTP API does not speak on its own) are
  * installed on the handle from the http_api_curl action - see
- * NMM_Util::post_with_curl_options(), which fails closed if WordPress would
+ * NMMPRO_Util::post_with_curl_options(), which fails closed if WordPress would
  * have sent the request over a transport that could not be pinned.
  */
-class NMM_Monero {
+class NMMPRO_Monero {
 
 	private static function settings() {
-		return new NMM_Settings(get_option(NMM_REDUX_ID));
+		return new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 	}
 
 	public static function rpc($method, $params = array()) {
@@ -31,7 +31,7 @@ class NMM_Monero {
 		$url = $settings->get_xmr_rpc_url();
 
 		if ($url === '') {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC is not configured.');
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC is not configured.');
 		}
 
 		$target = self::validate_rpc_url($url);
@@ -56,7 +56,7 @@ class NMM_Monero {
 		$plan = self::plan_request($target, $hasCurl, $canPin, $user !== '');
 
 		if ($plan['transport'] === 'reject') {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC host cannot be reached safely: without a pinning-capable cURL installation (the cURL extension with CURLOPT_RESOLVE) the connection cannot be pinned to the validated address, so a hostname could be rebound to a private target. Use an IP-literal RPC URL, or install a pinning-capable cURL.');
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC host cannot be reached safely: without a pinning-capable cURL installation (the cURL extension with CURLOPT_RESOLVE) the connection cannot be pinned to the validated address, so a hostname could be rebound to a private target. Use an IP-literal RPC URL, or install a pinning-capable cURL.');
 		}
 
 		if ($plan['transport'] === 'curl') {
@@ -88,7 +88,7 @@ class NMM_Monero {
 				$curlOptions[CURLOPT_RESOLVE] = array(self::curl_resolve_entry($target['host'], $target['port'], $target['ip']));
 			}
 
-			$response = NMM_Util::post_with_curl_options($url, array(
+			$response = NMMPRO_Util::post_with_curl_options($url, array(
 				'headers' => array('Content-Type' => 'application/json'),
 				'body' => $payload,
 				'timeout' => 20,
@@ -96,12 +96,12 @@ class NMM_Monero {
 
 			// A pin that could not be installed is a refusal, not a retry: the
 			// helper reports that before any unpinned connection is made.
-			if (is_wp_error($response) && $response->get_error_code() === 'nmm_pin_unavailable') {
-				return new WP_Error('nmm_xmr', 'Monero wallet RPC request was not sent: WordPress did not use its cURL transport, so the connection could not be pinned to the address that was validated. Use an IP-literal RPC URL, or install a pinning-capable cURL.');
+			if (is_wp_error($response) && $response->get_error_code() === 'nmmpro_pin_unavailable') {
+				return new WP_Error('nmmpro_xmr', 'Monero wallet RPC request was not sent: WordPress did not use its cURL transport, so the connection could not be pinned to the address that was validated. Use an IP-literal RPC URL, or install a pinning-capable cURL.');
 			}
 
 			if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
-				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable (http ' . (is_wp_error($response) ? '0' : (int) wp_remote_retrieve_response_code($response)) . ').');
+				return new WP_Error('nmmpro_xmr', 'Monero wallet RPC unreachable (http ' . (is_wp_error($response) ? '0' : (int) wp_remote_retrieve_response_code($response)) . ').');
 			}
 
 			$body = wp_remote_retrieve_body($response);
@@ -118,16 +118,16 @@ class NMM_Monero {
 			));
 
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
-				return new WP_Error('nmm_xmr', 'Monero wallet RPC unreachable.');
+				return new WP_Error('nmmpro_xmr', 'Monero wallet RPC unreachable.');
 			}
 
 			$body = $response['body'];
 		}
 
-		$decoded = json_decode($body);
+		$decoded = json_decode($body, false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_object($decoded)) {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC returned an unreadable response.');
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC returned an unreadable response.');
 		}
 
 		if (isset($decoded->error)) {
@@ -135,11 +135,11 @@ class NMM_Monero {
 				? $decoded->error->message
 				: 'code ' . (isset($decoded->error->code) ? $decoded->error->code : '?') . ' (is the wallet RPC connected to a daemon?)';
 
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC error: ' . $message);
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC error: ' . $message);
 		}
 
 		if (!isset($decoded->result)) {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC returned no result.');
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC returned no result.');
 		}
 
 		return $decoded->result;
@@ -155,15 +155,15 @@ class NMM_Monero {
 	 * Monero wallet RPC legitimately runs on localhost or a private LAN, so
 	 * private targets are permitted for single-site installs (the merchant owns
 	 * the server). On multisite they require an explicit opt-in - the
-	 * NMM_XMR_ALLOW_PRIVATE_RPC constant or the nmm_xmr_allow_private_rpc filter.
+	 * NMMPRO_XMR_ALLOW_PRIVATE_RPC constant or the nmmpro_xmr_allow_private_rpc filter.
 	 */
 	public static function validate_rpc_url($url) {
-		$parts = wp_parse_url(trim((string) $url));
+		$parts = wp_parse_url(trim((string) $url, " \n\r\t\v\x00"));
 		if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC URL is malformed.');
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC URL is malformed.');
 		}
 		if (!in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
-			return new WP_Error('nmm_xmr', 'Monero wallet RPC URL must use http or https.');
+			return new WP_Error('nmmpro_xmr', 'Monero wallet RPC URL must use http or https.');
 		}
 
 		$host = $parts['host'];
@@ -178,10 +178,10 @@ class NMM_Monero {
 
 		$isPrivate = (strtolower($host) === 'localhost') || self::is_private_or_reserved_ip($ip);
 		if ($isPrivate) {
-			$allow = defined('NMM_XMR_ALLOW_PRIVATE_RPC') ? (bool) NMM_XMR_ALLOW_PRIVATE_RPC : !is_multisite();
-			$allow = (bool) apply_filters('nmm_xmr_allow_private_rpc', $allow, $url, $host, $ip);
+			$allow = (NMMPRO_Compat::config('NMMPRO_XMR_ALLOW_PRIVATE_RPC') !== null) ? (bool) NMMPRO_Compat::config('NMMPRO_XMR_ALLOW_PRIVATE_RPC') : !is_multisite();
+			$allow = (bool) NMMPRO_Compat::filter('nmmpro_xmr_allow_private_rpc', $allow, $url, $host, $ip);
 			if (!$allow) {
-				return new WP_Error('nmm_xmr', 'Monero wallet RPC points at a private or loopback address, which is not permitted here. Define NMM_XMR_ALLOW_PRIVATE_RPC or use the nmm_xmr_allow_private_rpc filter to allow it.');
+				return new WP_Error('nmmpro_xmr', 'Monero wallet RPC points at a private or loopback address, which is not permitted here. Define NMMPRO_XMR_ALLOW_PRIVATE_RPC or use the nmmpro_xmr_allow_private_rpc filter to allow it.');
 			}
 		}
 
@@ -325,7 +325,7 @@ class NMM_Monero {
 		$result = self::rpc('get_transfers', $params);
 
 		if (is_wp_error($result)) {
-			NMM_Util::log(__FILE__, __LINE__, 'XMR RPC failed: ' . $result->get_error_message());
+			NMMPRO_Util::log(__FILE__, __LINE__, 'XMR RPC failed: ' . $result->get_error_message());
 
 			return array(
 				'result' => 'error',
@@ -345,7 +345,7 @@ class NMM_Monero {
 					continue;
 				}
 
-				$transactions[] = new NMM_Transaction(
+				$transactions[] = new NMMPRO_Transaction(
 					$transfer->amount,
 					isset($transfer->confirmations) ? (int) $transfer->confirmations : 0,
 					isset($transfer->timestamp) ? (int) $transfer->timestamp : time(),
@@ -402,16 +402,16 @@ class NMM_Monero {
 	 * established wallet's full incoming history is never fetched every tick -
 	 * pool (unconfirmed) transfers are unaffected by the height filter and always
 	 * included. Returns { result: 'success', by_address: { address =>
-	 * NMM_Transaction[] } } or { result: 'error' } so callers can skip this tick
+	 * NMMPRO_Transaction[] } } or { result: 'error' } so callers can skip this tick
 	 * without crediting anyone.
 	 */
 	public static function get_account_transactions($lifetimeSeconds) {
-		do_action('nmm_xmr_account_fetch');
+		NMMPRO_Compat::action('nmmpro_xmr_account_fetch');
 
 		// Seam for integrations (a self-hosted indexer) and tests: a filter may
 		// supply the batch result array directly instead of the wallet RPC. Return
 		// anything non-array (the default null) to use the real RPC below.
-		$injected = apply_filters('nmm_xmr_account_transactions', null, $lifetimeSeconds);
+		$injected = NMMPRO_Compat::filter('nmmpro_xmr_account_transactions', null, $lifetimeSeconds);
 		if (is_array($injected)) {
 			return $injected;
 		}
@@ -421,7 +421,7 @@ class NMM_Monero {
 		// so skip the tick rather than fall back to an unbounded fetch.
 		$heightResult = self::rpc('get_height');
 		if (is_wp_error($heightResult) || !isset($heightResult->height)) {
-			NMM_Util::log(__FILE__, __LINE__, 'XMR batch: could not read wallet height; skipping this tick.');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'XMR batch: could not read wallet height; skipping this tick.');
 
 			return array('result' => 'error');
 		}
@@ -429,7 +429,7 @@ class NMM_Monero {
 		$result = self::rpc('get_transfers', self::account_transfers_params((int) $heightResult->height, $lifetimeSeconds));
 
 		if (is_wp_error($result)) {
-			NMM_Util::log(__FILE__, __LINE__, 'XMR batch get_transfers failed: ' . $result->get_error_message());
+			NMMPRO_Util::log(__FILE__, __LINE__, 'XMR batch get_transfers failed: ' . $result->get_error_message());
 
 			return array('result' => 'error');
 		}
@@ -446,7 +446,7 @@ class NMM_Monero {
 					continue;
 				}
 
-				$byAddress[$transfer->address][] = new NMM_Transaction(
+				$byAddress[$transfer->address][] = new NMMPRO_Transaction(
 					$transfer->amount,
 					isset($transfer->confirmations) ? (int) $transfer->confirmations : 0,
 					isset($transfer->timestamp) ? (int) $transfer->timestamp : time(),

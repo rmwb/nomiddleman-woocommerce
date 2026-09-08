@@ -1,6 +1,6 @@
 <?php
 /**
- * Offline test: NMM_Settings clamps merchant-supplied numeric settings to their
+ * Offline test: NMMPRO_Settings clamps merchant-supplied numeric settings to their
  * documented ranges. The settings screen only ever applied HTML min/max, which a
  * crafted POST, a hand-edited row, a bad import or a damaged option bypasses -
  * and the resulting values are not cosmetic: a negative confirmation
@@ -13,13 +13,13 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED);
 if (!defined('ABSPATH')) { define('ABSPATH', sys_get_temp_dir() . '/'); }
-if (!defined('NMM_REDUX_ID')) { define('NMM_REDUX_ID', 'nmmpro_redux_options'); }
+if (!defined('NMMPRO_REDUX_ID')) { define('NMMPRO_REDUX_ID', 'nmmpro_redux_options'); }
 
 function get_option($key, $default = array()) { return $default; }
 function apply_filters($tag, $value) { return $value; }
 
-require dirname(__DIR__) . '/src/NMM_Util.php';
-require dirname(__DIR__) . '/src/NMM_Settings.php';
+require dirname(__DIR__) . '/src/NMMPRO_Util.php';
+require dirname(__DIR__) . '/src/NMMPRO_Settings.php';
 
 $failed = false;
 function sok($label, $pass, $extra = '') {
@@ -30,7 +30,7 @@ function sok($label, $pass, $extra = '') {
 
 // Build a settings object holding one raw stored value for BTC.
 function with($key, $value) {
-	return new NMM_Settings(array('BTC' . $key => $value));
+	return new NMMPRO_Settings(array('BTC' . $key => $value));
 }
 
 // --- confirmations: a negative requirement would accept unconfirmed payments ---
@@ -91,7 +91,7 @@ sok('null markup falls back to the default',
 
 // --- absent keys keep the historical defaults: a store that never saved the
 // field must not change behaviour on upgrade ---
-$empty = new NMM_Settings(array());
+$empty = new NMMPRO_Settings(array());
 sok('absent autopay cancellation time keeps the 24h default',
 	(float) $empty->get_autopay_cancellation_time('BTC') === 24.0);
 sok('absent autopay percent keeps the 0.999 default',
@@ -101,11 +101,11 @@ sok('absent confirmations keep the default of 2',
 sok('absent markup keeps 0.0',
 	(float) $empty->get_markup('BTC') === 0.0);
 sok('non-array settings do not fatal',
-	(float) (new NMM_Settings(null))->get_autopay_cancellation_time('BTC') === 24.0);
+	(float) (new NMMPRO_Settings(null))->get_autopay_cancellation_time('BTC') === 24.0);
 
 // --- every default the getters fall back to must itself be inside the bounds,
 // or a store with no saved value would run on an out-of-range setting ---
-$bounds = NMM_Settings::NUMERIC_BOUNDS;
+$bounds = NMMPRO_Settings::NUMERIC_BOUNDS;
 $defaults = array(
 	'_markup'                                 => (float) $empty->get_markup('BTC'),
 	'_hd_percent_to_process'                  => (float) $empty->get_hd_processing_percent('BTC'),

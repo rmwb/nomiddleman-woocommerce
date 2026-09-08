@@ -5,7 +5,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Class that communicates with various blockchains via HTTP
-class NMM_Blockchain {
+class NMMPRO_Blockchain {
 
 	// Hosts that ask for a minimum spacing between requests (seconds)
 	private static $hostCooldowns = array(
@@ -26,7 +26,7 @@ class NMM_Blockchain {
 	// misbehaving or throttling API is left alone with exponential backoff.
 	private static function api_get($request, $args = array()) {
 		// lets merchants point a coin at their own node or explorer instance
-		$request = apply_filters('nmm_api_url', $request);
+		$request = NMMPRO_Compat::filter('nmmpro_api_url', $request);
 		$host = (string) wp_parse_url($request, PHP_URL_HOST);
 
 		if (self::host_unavailable($host)) {
@@ -48,12 +48,12 @@ class NMM_Blockchain {
 	}
 
 	// $applyUrlFilter lets a caller that has ALREADY run the URL through
-	// nmm_api_url (and vetted the result - see sol_rpc_target) suppress the
+	// nmmpro_api_url (and vetted the result - see sol_rpc_target) suppress the
 	// second application, so a filter is never applied twice to one request and
 	// cannot hand us a URL that skipped validation.
 	private static function api_post($request, $args = array(), $applyUrlFilter = true) {
 		if ($applyUrlFilter) {
-			$request = apply_filters('nmm_api_url', $request);
+			$request = NMMPRO_Compat::filter('nmmpro_api_url', $request);
 		}
 		$host = (string) wp_parse_url($request, PHP_URL_HOST);
 
@@ -77,11 +77,11 @@ class NMM_Blockchain {
 			return false;
 		}
 
-		if (get_transient('nmm_backoff_' . md5($host)) !== false) {
+		if (get_transient('nmmpro_backoff_' . md5($host)) !== false) {
 			return true;
 		}
 
-		if (isset(self::$hostCooldowns[$host]) && get_transient('nmm_cooldown_' . md5($host)) !== false) {
+		if (isset(self::$hostCooldowns[$host]) && get_transient('nmmpro_cooldown_' . md5($host)) !== false) {
 			return true;
 		}
 
@@ -94,7 +94,7 @@ class NMM_Blockchain {
 		}
 
 		if (isset(self::$hostCooldowns[$host])) {
-			set_transient('nmm_cooldown_' . md5($host), 1, self::$hostCooldowns[$host]);
+			set_transient('nmmpro_cooldown_' . md5($host), 1, self::$hostCooldowns[$host]);
 		}
 
 		$code = (!is_wp_error($response) && isset($response['response']['code'])) ? (int) $response['response']['code'] : 0;
@@ -102,22 +102,22 @@ class NMM_Blockchain {
 		$isFailure = is_wp_error($response) || $code === 429 || $code === 402 || $code >= 500;
 
 		if ($isFailure) {
-			$failures = (int) get_transient('nmm_apifail_' . md5($host)) + 1;
-			set_transient('nmm_apifail_' . md5($host), $failures, HOUR_IN_SECONDS);
+			$failures = (int) get_transient('nmmpro_apifail_' . md5($host)) + 1;
+			set_transient('nmmpro_apifail_' . md5($host), $failures, HOUR_IN_SECONDS);
 
 			// 60s, 120s, 240s ... capped at 30 minutes
 			$backoff = min(60 * pow(2, $failures - 1), 30 * MINUTE_IN_SECONDS);
-			set_transient('nmm_backoff_' . md5($host), 1, $backoff);
-			NMM_Util::log(__FILE__, __LINE__, 'API host ' . $host . ' failing (http ' . $code . '), backing off ' . $backoff . 's', 'warning');
+			set_transient('nmmpro_backoff_' . md5($host), 1, $backoff);
+			NMMPRO_Util::log(__FILE__, __LINE__, 'API host ' . $host . ' failing (http ' . $code . '), backing off ' . $backoff . 's', 'warning');
 		}
 		elseif ($code === 200) {
-			delete_transient('nmm_apifail_' . md5($host));
+			delete_transient('nmmpro_apifail_' . md5($host));
 		}
 	}
 
 	// Optional BlockCypher token raises their keyless rate limits substantially
 	private static function blockcypher_token_query($urlHasQuery) {
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 		$token = $nmmSettings->get_blockcypher_token();
 
 		if ($token === '') {
@@ -139,7 +139,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -148,10 +148,10 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedSatoshi = (float) json_decode($response['body']);
+		$totalReceivedSatoshi = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 		$result = array (
 			'result' => 'success',
-			'total_received' => $totalReceivedSatoshi / 100000000,
+			'total_received' => NMMPRO_Amount::from_units((string) $totalReceivedSatoshi, 8),
 		);
 
 		return $result;
@@ -168,7 +168,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -177,7 +177,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body->chain_stats->funded_txo_sum)) {
 			$result = array (
@@ -188,11 +188,11 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedSatoshi = (float) $body->chain_stats->funded_txo_sum;
+		$totalReceivedSatoshi = $body->chain_stats->funded_txo_sum;
 
 		$result = array (
 			'result' => 'success',
-			'total_received' => $totalReceivedSatoshi / 100000000,
+			'total_received' => NMMPRO_Amount::from_units((string) $totalReceivedSatoshi, 8),
 		);
 
 		return $result;
@@ -209,7 +209,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -218,7 +218,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body->chain_stats->funded_txo_sum)) {
 			$result = array (
@@ -229,11 +229,11 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedSatoshi = (float) $body->chain_stats->funded_txo_sum;
+		$totalReceivedSatoshi = $body->chain_stats->funded_txo_sum;
 
 		$result = array (
 			'result' => 'success',
-			'total_received' => $totalReceivedSatoshi / 100000000,
+			'total_received' => NMMPRO_Amount::from_units((string) $totalReceivedSatoshi, 8),
 		);
 
 		return $result;
@@ -241,7 +241,7 @@ class NMM_Blockchain {
 
 	public static function get_blockcypher_total_received_for_ltc_address($address, $requiredConfirmations) {
 		$userAgentString = self::get_user_agent_string();
-		
+
 		$request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . rawurlencode($address) . '?confirmations=' . $requiredConfirmations . self::blockcypher_token_query(true);
 
 		$args = array(
@@ -250,7 +250,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -259,8 +259,8 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceivedMmltc = json_decode($response['body'])->total_received;
-		$totalReceived = $totalReceivedMmltc / 100000000;
+		$totalReceivedMmltc = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING)->total_received;
+		$totalReceived = NMMPRO_Amount::from_units((string) $totalReceivedMmltc, 8);
 
 		$result = array (
 			'result' => 'success',
@@ -281,7 +281,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array (
 				'result' => 'error',
@@ -291,7 +291,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body->chain_stats->funded_txo_sum)) {
 			$result = array (
@@ -302,7 +302,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceived = (float) $body->chain_stats->funded_txo_sum / 100000000;
+		$totalReceived = NMMPRO_Amount::from_units((string) $body->chain_stats->funded_txo_sum, 8);
 
 		$result = array (
 			'result' => 'success',
@@ -314,7 +314,7 @@ class NMM_Blockchain {
 
 	public static function get_qtuminfo_total_received_for_qtum_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
+
 		$request = 'https://qtum.info/api/address/' . rawurlencode($address);
 
 		$args = array(
@@ -323,7 +323,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array (
 				'result' => 'error',
@@ -332,8 +332,8 @@ class NMM_Blockchain {
 
 			return $result;
 		}
-		
-		$totalReceived = (float) json_decode($response['body'])->totalReceived / 100000000;
+
+		$totalReceived = NMMPRO_Amount::from_units((string) json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING)->totalReceived, 8);
 
 		$result = array (
 			'result' => 'success',
@@ -345,7 +345,7 @@ class NMM_Blockchain {
 
 	public static function get_dashblockexplorer_total_received_for_dash_address($address) {
 		$userAgentString = self::get_user_agent_string();
-		
+
 		$request = 'https://insight.dash.org/insight-api/addr/' . rawurlencode($address) . '/totalReceived';
 
 		$args = array(
@@ -354,7 +354,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array (
 				'result' => 'error',
@@ -363,8 +363,8 @@ class NMM_Blockchain {
 
 			return $result;
 		}
-		
-		$totalReceived = (float) json_decode($response['body']) / 100000000;
+
+		$totalReceived = NMMPRO_Amount::from_units((string) json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING), 8);
 
 		$result = array (
 			'result' => 'success',
@@ -385,7 +385,7 @@ class NMM_Blockchain {
 
 		$response = self::api_get($request, $args);
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -394,7 +394,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body->total_received)) {
 			$result = array (
@@ -407,7 +407,7 @@ class NMM_Blockchain {
 
 		$result = array (
 			'result' => 'success',
-			'total_received' => (float) $body->total_received / 100000000,
+			'total_received' => NMMPRO_Amount::from_units((string) $body->total_received, 8),
 		);
 
 		return $result;
@@ -426,8 +426,8 @@ class NMM_Blockchain {
 		);
 
 		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body']))) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body'], " \n\r\t\v\x00"))) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 			$result = array (
 				'result' => 'error',
 				'total_received' => '',
@@ -436,7 +436,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$totalReceived = (float) trim($response['body']);
+		$totalReceived = NMMPRO_Amount::normalize(trim($response['body'], " \n\r\t\v\x00"));
 
 		$result = array (
 			'result' => 'success',
@@ -457,7 +457,7 @@ class NMM_Blockchain {
 		));
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -467,7 +467,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$rawTxList = json_decode($response['body']);
+		$rawTxList = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_array($rawTxList)) {
 			$result = array(
@@ -485,7 +485,7 @@ class NMM_Blockchain {
 		// so a malformed row fails the visit for retry, like a bad response.
 		foreach ($rawTxList as $row) {
 			if (!is_object($row) || !isset($row->block_height) || !isset($row->tx_hash) || !isset($row->block_time)) {
-				NMM_Util::log(__FILE__, __LINE__, 'koios address_txs: malformed transaction row; failing the visit for retry.');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'koios address_txs: malformed transaction row; failing the visit for retry.');
 
 				return array(
 					'result' => 'error',
@@ -529,7 +529,7 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( koios tx_utxos ): ' . NMM_Util::summarize_response($response2));
+				NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( koios tx_utxos ): ' . NMMPRO_Util::summarize_response($response2));
 
 				return array(
 					'result' => 'error',
@@ -537,9 +537,9 @@ class NMM_Blockchain {
 				);
 			}
 
-			$utxoRows = json_decode($response2['body']);
+			$utxoRows = json_decode($response2['body'], false, 512, JSON_BIGINT_AS_STRING);
 			if (!is_array($utxoRows)) {
-				NMM_Util::log(__FILE__, __LINE__, 'koios tx_utxos: malformed bulk response body; failing the visit for retry.');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'koios tx_utxos: malformed bulk response body; failing the visit for retry.');
 
 				return array(
 					'result' => 'error',
@@ -557,15 +557,15 @@ class NMM_Blockchain {
 				$seenHashes[$utxoRow->tx_hash] = true;
 
 				// amounts are in lovelace (1e-6 ADA), matching ADA's round precision
-				$received = 0;
+				$received = '0';
 				foreach ($utxoRow->outputs as $output) {
 					if (isset($output->payment_addr->bech32) && $output->payment_addr->bech32 === $address) {
-						$received += (float) $output->value;
+						$received = NMMPRO_Amount::add($received, (string) $output->value);
 					}
 				}
 
 				if ($received > 0) {
-					$transactions[] = new NMM_Transaction($received,
+					$transactions[] = new NMMPRO_Transaction($received,
 														  10000,
 														  isset($txTimes[$utxoRow->tx_hash]) ? $txTimes[$utxoRow->tx_hash] : time(),
 														  $utxoRow->tx_hash);
@@ -580,7 +580,7 @@ class NMM_Blockchain {
 			// verifier retries it instead.
 			foreach ($txHashes as $requestedHash) {
 				if (!isset($seenHashes[$requestedHash])) {
-					NMM_Util::log(__FILE__, __LINE__, 'koios tx_utxos: transaction ' . $requestedHash . ' missing from the bulk response; failing the visit for retry.');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'koios tx_utxos: transaction ' . $requestedHash . ' missing from the bulk response; failing the visit for retry.');
 
 					return array(
 						'result' => 'error',
@@ -617,7 +617,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -627,7 +627,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$rawTransactions = json_decode($response['body']);
+		$rawTransactions = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_array($rawTransactions)) {
 			$result = array(
@@ -654,7 +654,7 @@ class NMM_Blockchain {
 		$tipHeight = 0;
 		$tipResponse = self::api_get('https://api.blockchain.info/haskoin-store/bch/block/best?notx=true');
 		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
-			$tipBody = json_decode($tipResponse['body']);
+			$tipBody = json_decode($tipResponse['body'], false, 512, JSON_BIGINT_AS_STRING);
 			if (isset($tipBody->height)) {
 				$tipHeight = (int) $tipBody->height;
 			}
@@ -675,7 +675,7 @@ class NMM_Blockchain {
 				}
 
 				if ($output->address === $addressToMatch) {
-					$transactions[] = new NMM_Transaction(
+					$transactions[] = new NMMPRO_Transaction(
 						$output->value,
 						$confirmations,
 						$rawTransaction->time,
@@ -693,13 +693,13 @@ class NMM_Blockchain {
 	}
 
 	public static function get_blk_address_transactions($address) {
-		
+
 		$request = 'https://explorer.blackcoin.nl/ext/getaddress/' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -709,13 +709,13 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		// A malformed 200 body decodes to null/scalar; property_exists() on a
 		// non-object throws a TypeError on PHP 8, which would escape the
 		// verifier's fetch boundary - treat it as the fetch failure it is.
 		if (!is_object($body) || property_exists($body, 'error')) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . (is_object($body) ? $body->error : 'malformed response body'));
 			$result = array(
 				'result' => 'error',
 				'total_received' => '',
@@ -762,7 +762,7 @@ class NMM_Blockchain {
 					continue;
 				}
 
-				$rawTransaction = json_decode($response2['body']);
+				$rawTransaction = json_decode($response2['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 				if (!is_object($rawTransaction) || !isset($rawTransaction->vout) || !is_array($rawTransaction->vout) || count($rawTransaction->vout) === 0) {
 					// HTTP 200 with a malformed, partial or error body is just
@@ -794,7 +794,7 @@ class NMM_Blockchain {
 					}
 
 					if (in_array($address, $voutAddresses, true)) {
-						$transactions[] = new NMM_Transaction($vout->value * 100000000,
+						$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($vout->value, 8),
 															  isset($rawTransaction->confirmations) ? $rawTransaction->confirmations : 0,
 															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
 															  $rawTransaction->txid);
@@ -837,7 +837,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -847,7 +847,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$history = json_decode($response['body']);
+		$history = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_array($history)) {
 			$result = array(
@@ -869,7 +869,7 @@ class NMM_Blockchain {
 		$tipHeight = 0;
 		$tipResponse = self::api_get('https://api.whatsonchain.com/v1/bsv/main/chain/info');
 		if (!is_wp_error($tipResponse) && $tipResponse['response']['code'] === 200) {
-			$tipBody = json_decode($tipResponse['body']);
+			$tipBody = json_decode($tipResponse['body'], false, 512, JSON_BIGINT_AS_STRING);
 			if (isset($tipBody->blocks)) {
 				$tipHeight = (int) $tipBody->blocks;
 			}
@@ -893,7 +893,7 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( whatsonchain bulk txs ): ' . NMM_Util::summarize_response($response2));
+				NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( whatsonchain bulk txs ): ' . NMMPRO_Util::summarize_response($response2));
 
 				return array(
 					'result' => 'error',
@@ -901,9 +901,9 @@ class NMM_Blockchain {
 				);
 			}
 
-			$rawTransactions = json_decode($response2['body']);
+			$rawTransactions = json_decode($response2['body'], false, 512, JSON_BIGINT_AS_STRING);
 			if (!is_array($rawTransactions)) {
-				NMM_Util::log(__FILE__, __LINE__, 'whatsonchain bulk txs: malformed bulk response body; failing the visit for retry.');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'whatsonchain bulk txs: malformed bulk response body; failing the visit for retry.');
 
 				return array(
 					'result' => 'error',
@@ -925,7 +925,7 @@ class NMM_Blockchain {
 
 				foreach ($rawTransaction->vout as $vout) {
 					if (isset($vout->scriptPubKey->addresses) && in_array($address, $vout->scriptPubKey->addresses, true)) {
-						$transactions[] = new NMM_Transaction($vout->value * 100000000,
+						$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($vout->value, 8),
 															  $confirmations,
 															  isset($rawTransaction->time) ? $rawTransaction->time : time(),
 															  $rawTransaction->txid);
@@ -941,7 +941,7 @@ class NMM_Blockchain {
 			// Fail the visit so the verifier retries it instead.
 			foreach ($txHashes as $requestedHash) {
 				if (!isset($seenHashes[$requestedHash])) {
-					NMM_Util::log(__FILE__, __LINE__, 'whatsonchain bulk txs: transaction ' . $requestedHash . ' missing from the bulk response; failing the visit for retry.');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'whatsonchain bulk txs: transaction ' . $requestedHash . ' missing from the bulk response; failing the visit for retry.');
 
 					return array(
 						'result' => 'error',
@@ -971,7 +971,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request, $args);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
             $request2 = 'https://api.blockcypher.com/v1/btc/main/addrs/' . rawurlencode($address) . self::blockcypher_token_query(false);
             $response2 = self::api_get($request2, $args);
             if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
@@ -983,7 +983,7 @@ class NMM_Blockchain {
                 return $result;
             }
 
-            $body = json_decode($response2['body']);
+            $body = json_decode($response2['body'], false, 512, JSON_BIGINT_AS_STRING);
 
             $rawTransactions = $body->txrefs;
             if (!is_array($rawTransactions)) {
@@ -1008,7 +1008,7 @@ class NMM_Blockchain {
             $transactions = array();
             foreach ($rawTransactions as $rawTransaction) {
                 if ($rawTransaction->tx_input_n == -1) {
-                    $transactions[] = new NMM_Transaction(
+                    $transactions[] = new NMMPRO_Transaction(
                         $rawTransaction->value,
                         $rawTransaction->confirmations,
                         $rawTransaction->confirmed,
@@ -1023,7 +1023,7 @@ class NMM_Blockchain {
             return $result;
 		}
 
-		$rawTransactions = json_decode($response['body']);
+		$rawTransactions = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_array($rawTransactions)) {
 			$result = array(
@@ -1067,7 +1067,7 @@ class NMM_Blockchain {
 
 			foreach ($rawTransaction->vout as $vout) {
 				if (isset($vout->scriptpubkey_address) && $vout->scriptpubkey_address === $address) {
-					$transactions[] = new NMM_Transaction($vout->value,
+					$transactions[] = new NMMPRO_Transaction($vout->value,
 														  $confirmations,
 														  $time,
 														  $rawTransaction->txid);
@@ -1084,13 +1084,13 @@ class NMM_Blockchain {
 	}
 
 
-	public static function get_dash_address_transactions($address) {		
-		
+	public static function get_dash_address_transactions($address) {
+
 		$request = 'https://insight.dash.org/insight-api/txs/?address=' . rawurlencode($address);
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1100,7 +1100,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->txs;
 		if (!is_array($rawTransactions)) {
@@ -1128,14 +1128,14 @@ class NMM_Blockchain {
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
 				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
+					$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($vout->value, 8),
+														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+														  $rawTransaction->txid);
 				}
 			}
-			
-		
+
+
 		}
 
 		$result = array (
@@ -1147,13 +1147,13 @@ class NMM_Blockchain {
 	}
 
 	public static function get_dcr_address_transactions($address) {
-		
+
 		$request = 'https://explorer.dcrdata.org/insight/api/txs/?address=' . rawurlencode($address);
-		
+
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1163,7 +1163,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->txs;
 		if (!is_array($rawTransactions)) {
@@ -1191,14 +1191,14 @@ class NMM_Blockchain {
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
 				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
+					$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($vout->value, 8),
+														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+														  $rawTransaction->txid);
 				}
 			}
-			
-		
+
+
 		}
 
 		$result = array (
@@ -1216,7 +1216,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1226,7 +1226,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = isset($body->txrefs) ? $body->txrefs : null;
 		if (!is_array($rawTransactions)) {
@@ -1251,7 +1251,7 @@ class NMM_Blockchain {
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if ($rawTransaction->tx_input_n == -1) {
-				$transactions[] = new NMM_Transaction($rawTransaction->value,
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->value,
 													  $rawTransaction->confirmations,
 													  $rawTransaction->confirmed,
 													  $rawTransaction->tx_hash);
@@ -1273,7 +1273,7 @@ class NMM_Blockchain {
         $response = self::api_get($request);
 
         if (is_wp_error($response) || $response['response']['code'] !== 200) {
-            NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+            NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
             $result = array(
                 'result' => 'error',
@@ -1283,7 +1283,7 @@ class NMM_Blockchain {
             return $result;
         }
 
-        $rawTransactions = json_decode($response['body']);
+        $rawTransactions = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
         if (!is_array($rawTransactions)) {
             $result = array(
@@ -1327,7 +1327,7 @@ class NMM_Blockchain {
 
             foreach ($rawTransaction->vout as $vout) {
                 if (isset($vout->scriptpubkey_address) && $vout->scriptpubkey_address === $address) {
-                    $transactions[] = new NMM_Transaction($vout->value,
+                    $transactions[] = new NMMPRO_Transaction($vout->value,
                         $confirmations,
                         $time,
                         $rawTransaction->txid);
@@ -1351,7 +1351,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (!is_wp_error($response) && $response['response']['code'] === 200) {
-			$body = json_decode($response['body']);
+			$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 			if (isset($body->actions) && is_array($body->actions)) {
 				// Report the RAW page (get_actions covers BOTH directions) for
@@ -1383,7 +1383,7 @@ class NMM_Blockchain {
 					}
 
 					// quantity is "1.2345 EOS"; EOS has 4 decimal places
-					$transactions[] = new NMM_Transaction((float) $data->quantity * 10000,
+					$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units(explode(' ', $data->quantity)[0], 4),
 														  10000,
 														  strtotime($action->timestamp),
 														  $action->trx_id);
@@ -1396,7 +1396,7 @@ class NMM_Blockchain {
 			}
 		}
 
-		NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+		NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 		// Fallback: Greymass v1 history (deprecated but maintained)
 		$request2 = 'https://eos.greymass.com/v1/history/get_actions';
@@ -1411,7 +1411,7 @@ class NMM_Blockchain {
 		));
 
 		if (is_wp_error($response2) || $response2['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request2) . ' ): ' . NMM_Util::summarize_response($response2));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request2) . ' ): ' . NMMPRO_Util::summarize_response($response2));
 
 			return array(
 				'result' => 'error',
@@ -1419,7 +1419,7 @@ class NMM_Blockchain {
 			);
 		}
 
-		$body2 = json_decode($response2['body']);
+		$body2 = json_decode($response2['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body2->actions) || !is_array($body2->actions)) {
 			return array(
@@ -1468,7 +1468,7 @@ class NMM_Blockchain {
 			}
 			$seenTrxIds[$trxId] = true;
 
-			$transactions[] = new NMM_Transaction((float) $act->data->quantity * 10000,
+			$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units(explode(' ', $act->data->quantity)[0], 4),
 												  10000,
 												  strtotime($action->block_time),
 												  $trxId);
@@ -1481,13 +1481,13 @@ class NMM_Blockchain {
 	}
 
 	public static function get_etc_address_transactions($address) {
-		
+
 		$request = 'https://blockscout.com/etc/mainnet/api?module=account&action=txlist&address=' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1497,7 +1497,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->result;
 		if (!is_array($rawTransactions)) {
@@ -1524,11 +1524,11 @@ class NMM_Blockchain {
 
 
 		foreach ($rawTransactions as $rawTransaction) {
-			
+
 			if (strtolower($rawTransaction->to) === strtolower($address)) {
-				
-				$transactions[] = new NMM_Transaction($rawTransaction->value, 
-													  $rawTransaction->confirmations, 
+
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->value,
+													  $rawTransaction->confirmations,
 													  $rawTransaction->timeStamp,
 													  $rawTransaction->hash);
 			}
@@ -1543,13 +1543,13 @@ class NMM_Blockchain {
 	}
 
 	public static function get_eth_address_transactions($address) {
-		
+
 		$request = 'https://eth.blockscout.com/api?module=account&action=txlist&address=' . rawurlencode($address) . '&startblock=0&endblock=99999999&sort=desc';
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1559,7 +1559,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->result;
 
@@ -1585,11 +1585,11 @@ class NMM_Blockchain {
 
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
-			
+
 			if (strtolower($rawTransaction->to) === strtolower($address)) {
-				
-				$transactions[] = new NMM_Transaction($rawTransaction->value, 
-													  $rawTransaction->confirmations, 
+
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->value,
+													  $rawTransaction->confirmations,
 													  $rawTransaction->timeStamp,
 													  $rawTransaction->hash);
 			}
@@ -1604,13 +1604,13 @@ class NMM_Blockchain {
 	}
 
 	public static function get_grs_address_transactions($address) {
-		
+
 		$request = 'https://groestlsight.groestlcoin.org/api/txs?address=' . rawurlencode($address);
-		
+
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1620,7 +1620,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->txs;
 		if (!is_array($rawTransactions)) {
@@ -1648,14 +1648,14 @@ class NMM_Blockchain {
 		foreach ($rawTransactions as $rawTransaction) {
 			foreach ($rawTransaction->vout as $vout) {
 				if ($vout->scriptPubKey->addresses[0] === $address) {
-					$transactions[] = new NMM_Transaction($vout->value * 100000000, 
-														  $rawTransaction->confirmations, 
+					$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($vout->value, 8),
+														  $rawTransaction->confirmations,
 														  $rawTransaction->time,
-														  $rawTransaction->txid);		
+														  $rawTransaction->txid);
 				}
 			}
-			
-		
+
+
 		}
 
 		$result = array (
@@ -1687,7 +1687,7 @@ class NMM_Blockchain {
             return $result;
         }
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
         $rawTransactions = $body->txrefs;
         if (!is_array($rawTransactions)) {
@@ -1712,7 +1712,7 @@ class NMM_Blockchain {
         $transactions = array();
         foreach ($rawTransactions as $rawTransaction) {
             if ($rawTransaction->tx_input_n == -1) {
-                $transactions[] = new NMM_Transaction(
+                $transactions[] = new NMMPRO_Transaction(
                     $rawTransaction->value,
                     $rawTransaction->confirmations,
                     $rawTransaction->confirmed,
@@ -1729,13 +1729,13 @@ class NMM_Blockchain {
 
 
 	public static function get_trx_address_transactions($address) {
-		
+
 		$request = 'https://apilist.tronscan.org/api/transaction?address=' . rawurlencode($address);
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1745,7 +1745,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->data;
 		if (!is_array($rawTransactions)) {
@@ -1770,11 +1770,11 @@ class NMM_Blockchain {
 		self::note_raw_page(count($rawTransactions), $rawOldestTs);
 
 		$transactions = array();
-		
+
 		foreach ($rawTransactions as $rawTransaction) {
-			
+
 			if ($rawTransaction->toAddress === $address && $rawTransaction->confirmed) {
-				$transactions[] = new NMM_Transaction($rawTransaction->contractData->amount,
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->contractData->amount,
 													  10000,
 													  $rawTransaction->timestamp/1000,
 													  $rawTransaction->hash);
@@ -1790,13 +1790,13 @@ class NMM_Blockchain {
 	}
 
 	public static function get_waves_address_transactions($address) {
-		
+
 		$request = 'https://nodes.wavesnodes.com/transactions/address/' . rawurlencode($address) . '/limit/100';
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1806,7 +1806,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body[0];
 		if (!is_array($rawTransactions)) {
@@ -1833,8 +1833,8 @@ class NMM_Blockchain {
 		$transactions = array();
 		foreach ($rawTransactions as $rawTransaction) {
 			if ($rawTransaction->type == '4') {
-				$transactions[] = new NMM_Transaction($rawTransaction->amount, 
-													  10000, 
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->amount,
+													  10000,
 													  $rawTransaction->timestamp,
 													  $rawTransaction->id);
 			}
@@ -1855,7 +1855,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1865,7 +1865,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->_embedded->records;
 		if (!is_array($rawTransactions)) {
@@ -1890,12 +1890,12 @@ class NMM_Blockchain {
 		self::note_raw_page(count($rawTransactions), $rawOldestTs);
 
 		$transactions = array();
-		
+
 		foreach ($rawTransactions as $rawTransaction) {
-			
+
 			if ($rawTransaction->type === 'create_account') {
 				if ($rawTransaction->account === $address) {
-					$transactions[] = new NMM_Transaction($rawTransaction->starting_balance * 10000000,
+					$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($rawTransaction->starting_balance, 7),
 												  10000,
 												  strtotime($rawTransaction->created_at),
 												  $rawTransaction->transaction_hash);
@@ -1903,8 +1903,8 @@ class NMM_Blockchain {
 			}
 			if ($rawTransaction->type === 'payment') {
 				if ($rawTransaction->to === $address) {
-					$transactions[] = new NMM_Transaction($rawTransaction->amount * 10000000,
-												  10000, 
+					$transactions[] = new NMMPRO_Transaction(NMMPRO_Amount::to_units($rawTransaction->amount, 7),
+												  10000,
 												  strtotime($rawTransaction->created_at),
 												  $rawTransaction->transaction_hash);
 				}
@@ -1921,13 +1921,13 @@ class NMM_Blockchain {
 
 
 	public static function get_xrp_address_transactions($address) {
-		
+
 		$request = 'https://api.xrpscan.com/api/v1/account/' . rawurlencode($address) . '/transactions';
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -1937,7 +1937,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = isset($body->transactions) ? $body->transactions : null;
 		if (!is_array($rawTransactions)) {
@@ -1975,7 +1975,7 @@ class NMM_Blockchain {
 
 			if ($rawTransaction->Destination === $address) {
 
-				$transactions[] = new NMM_Transaction($rawTransaction->Amount->value,
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->Amount->value,
 												  10000,
 												  strtotime($rawTransaction->date),
 												  $rawTransaction->hash);
@@ -1998,7 +1998,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2008,7 +2008,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$rawTransactions = json_decode($response['body']);
+		$rawTransactions = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_array($rawTransactions)) {
 			$result = array(
@@ -2039,7 +2039,7 @@ class NMM_Blockchain {
 				continue;
 			}
 
-			$transactions[] = new NMM_Transaction($rawTransaction->amount,
+			$transactions[] = new NMMPRO_Transaction($rawTransaction->amount,
 											  10000,
 											  strtotime($rawTransaction->timestamp),
 											  $rawTransaction->hash);
@@ -2061,7 +2061,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2071,7 +2071,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body->data) || !is_array($body->data)) {
 			$result = array(
@@ -2104,7 +2104,7 @@ class NMM_Blockchain {
 				$confirmations = $tipHeight - (int) $output->block_id + 1;
 			}
 
-			$transactions[] = new NMM_Transaction($output->value,
+			$transactions[] = new NMMPRO_Transaction($output->value,
 												  $confirmations,
 												  strtotime($output->time),
 												  $output->transaction_hash);
@@ -2117,7 +2117,7 @@ class NMM_Blockchain {
 	}
 
 	public static function get_erc20_address_transactions($cryptoId, $address) {
-		$cryptos = NMM_Cryptocurrencies::get();
+		$cryptos = NMMPRO_Cryptocurrencies::get();
 		$contract = isset($cryptos[$cryptoId]) ? (string) $cryptos[$cryptoId]->get_erc20_contract() : '';
 
 		if ($contract === '') {
@@ -2134,7 +2134,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			$result = array(
 				'result' => 'error',
@@ -2144,7 +2144,7 @@ class NMM_Blockchain {
 			return $result;
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		$rawTransactions = $body->result;
 		if (!is_array($rawTransactions)) {
@@ -2177,7 +2177,7 @@ class NMM_Blockchain {
 				&& isset($rawTransaction->contractAddress)
 				&& strtolower($rawTransaction->contractAddress) === strtolower($contract)) {
 
-				$transactions[] = new NMM_Transaction($rawTransaction->value,
+				$transactions[] = new NMMPRO_Transaction($rawTransaction->value,
 												  $rawTransaction->confirmations,
 												  $rawTransaction->timeStamp,
 												  $rawTransaction->hash);
@@ -2202,7 +2202,7 @@ class NMM_Blockchain {
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMM_Util::redact_url($request) . ' ): ' . NMM_Util::summarize_response($response));
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
 			return array(
 				'result' => 'error',
@@ -2210,7 +2210,7 @@ class NMM_Blockchain {
 			);
 		}
 
-		$body = json_decode($response['body']);
+		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!isset($body->token_transfers) || !is_array($body->token_transfers)) {
 			return array(
@@ -2251,7 +2251,7 @@ class NMM_Blockchain {
 
 			// quant is already in 1e-6 USDT units; Tron finality is fast, so
 			// confirmed transfers get the no-confirmation-tracking sentinel
-			$transactions[] = new NMM_Transaction($transfer->quant,
+			$transactions[] = new NMMPRO_Transaction($transfer->quant,
 												  10000,
 												  (int) ($transfer->block_ts / 1000),
 												  $transfer->transaction_id);
@@ -2281,7 +2281,7 @@ class NMM_Blockchain {
 	 * Work out - and vet - the Solana JSON-RPC endpoint to use for this request.
 	 *
 	 * PRECEDENCE: the SOL_rpc_url setting replaces the built-in default, and the
-	 * nmm_api_url filter then runs LAST, so PHP-level code always wins over the
+	 * nmmpro_api_url filter then runs LAST, so PHP-level code always wins over the
 	 * stored setting (it is the documented escape hatch and must still be able to
 	 * rewrite or key-stamp whatever the setting produced). The filter is applied
 	 * HERE, not inside api_post, so that whatever it returns is validated before
@@ -2293,19 +2293,19 @@ class NMM_Blockchain {
 	private static function sol_rpc_target() {
 		$configured = self::SOL_DEFAULT_RPC_URL;
 
-		if (defined('NMM_REDUX_ID') && class_exists('NMM_Settings')) {
-			$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		if (defined('NMMPRO_REDUX_ID') && class_exists('NMMPRO_Settings')) {
+			$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 			$fromSettings = $nmmSettings->get_sol_rpc_url();
 			if ($fromSettings !== '') {
 				$configured = $fromSettings;
 			}
 		}
 
-		$url = apply_filters('nmm_api_url', $configured);
-		if (!is_string($url) || trim($url) === '') {
+		$url = NMMPRO_Compat::filter('nmmpro_api_url', $configured);
+		if (!is_string($url) || trim($url, " \n\r\t\v\x00") === '') {
 			$url = $configured;
 		}
-		$fromFilter = (trim($url) !== $configured);
+		$fromFilter = (trim($url, " \n\r\t\v\x00") !== $configured);
 
 		// The built-in default is our own compile-time constant, not merchant
 		// input, so it needs no SSRF vetting - and vetting it would put a DNS
@@ -2322,7 +2322,7 @@ class NMM_Blockchain {
 			);
 		}
 
-		// A URL produced by the nmm_api_url filter comes from PHP running on this
+		// A URL produced by the nmmpro_api_url filter comes from PHP running on this
 		// server, which is already a higher trust level than the settings screen
 		// (a manage_options user, or a site admin on multisite who is NOT the host
 		// admin). It is still checked for scheme/shape, but - as before this
@@ -2337,7 +2337,7 @@ class NMM_Blockchain {
 	 * or loopback-only admin ports, and to smuggle non-HTTP schemes.
 	 *
 	 * The address vetting is NOT a second implementation: after the scheme/shape
-	 * checks it hands the URL to NMM_Monero::validate_rpc_url(), the guard the
+	 * checks it hands the URL to NMMPRO_Monero::validate_rpc_url(), the guard the
 	 * Monero wallet RPC field already uses, which resolves the host (A, then
 	 * AAAA), classifies the result with FILTER_FLAG_NO_PRIV_RANGE |
 	 * FILTER_FLAG_NO_RES_RANGE, treats an unresolvable host as private, and
@@ -2349,20 +2349,20 @@ class NMM_Blockchain {
 	 * localhost, while a Solana RPC on loopback/private space is the exception.
 	 * So Monero's own policy hook is neutralised for the duration of the call and
 	 * a private target is refused on every install unless the merchant opts in
-	 * with the NMM_SOL_ALLOW_PRIVATE_RPC constant or the nmm_sol_allow_private_rpc
+	 * with the NMMPRO_SOL_ALLOW_PRIVATE_RPC constant or the nmmpro_sol_allow_private_rpc
 	 * filter (both PHP-level, i.e. out of reach of the settings screen).
 	 *
-	 * $trusted marks a URL that came from PHP (the nmm_api_url filter) rather
+	 * $trusted marks a URL that came from PHP (the nmmpro_api_url filter) rather
 	 * than from the settings screen; such a URL may target private space without
 	 * the extra opt-in, preserving the filter's pre-existing behaviour.
 	 *
 	 * Returns array( url, host, port, ip, is_literal, is_private ) or a WP_Error.
 	 */
 	public static function validate_sol_rpc_url($url, $trusted = false) {
-		$url = trim((string) $url);
+		$url = trim((string) $url, " \n\r\t\v\x00");
 
 		if ($url === '') {
-			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL is empty.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL is empty.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		$parts = wp_parse_url($url);
@@ -2373,11 +2373,11 @@ class NMM_Blockchain {
 		// host at all - is reported as the scheme problem it is.
 		if (is_array($parts) && !empty($parts['scheme'])
 			&& !in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
-			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL must use http or https.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL must use http or https.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
-			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL is malformed.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL is malformed.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		// Credentials in the URL would be sent to whatever the host resolves to
@@ -2385,50 +2385,50 @@ class NMM_Blockchain {
 		// path or the query string instead (Helius ?api-key=..., QuickNode
 		// /<token>/), so there is no legitimate reason for userinfo here.
 		if (isset($parts['user']) || isset($parts['pass'])) {
-			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
-		if (!class_exists('NMM_Monero') || !method_exists('NMM_Monero', 'validate_rpc_url')) {
+		if (!class_exists('NMMPRO_Monero') || !method_exists('NMMPRO_Monero', 'validate_rpc_url')) {
 			// Fail closed: without the shared guard we cannot vet the address, and
 			// guessing with a weaker check is exactly what this code exists to avoid.
-			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		// Neutralise Monero's private-target policy for this call so the decision
 		// below is the only one that applies to Solana (and so a merchant's
-		// nmm_xmr_allow_private_rpc callback cannot loosen the Solana path).
+		// nmmpro_xmr_allow_private_rpc callback cannot loosen the Solana path).
 		$allowAll = null;
 		if (function_exists('add_filter') && function_exists('remove_filter')) {
 			$allowAll = function ($allow) { return true; };
-			add_filter('nmm_xmr_allow_private_rpc', $allowAll, PHP_INT_MAX);
+			add_filter('nmmpro_xmr_allow_private_rpc', $allowAll, PHP_INT_MAX);
 		}
 
 		try {
-			$target = NMM_Monero::validate_rpc_url($url);
+			$target = NMMPRO_Monero::validate_rpc_url($url);
 		}
 		finally {
 			if ($allowAll !== null) {
-				remove_filter('nmm_xmr_allow_private_rpc', $allowAll, PHP_INT_MAX);
+				remove_filter('nmmpro_xmr_allow_private_rpc', $allowAll, PHP_INT_MAX);
 			}
 		}
 
 		if (is_wp_error($target)) {
 			// Scheme and shape were already checked above, so the shared guard can
 			// only be objecting to the address itself.
-			return new WP_Error('nmm_sol_rpc', __('Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted.', 'nomiddleman-crypto-payments-for-woocommerce'));
+			return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted.', 'nomiddleman-crypto-payments-for-woocommerce'));
 		}
 
 		if (!empty($target['is_private'])) {
-			$allow = $trusted || (defined('NMM_SOL_ALLOW_PRIVATE_RPC') ? (bool) NMM_SOL_ALLOW_PRIVATE_RPC : false);
+			$allow = $trusted || ((NMMPRO_Compat::config('NMMPRO_SOL_ALLOW_PRIVATE_RPC') !== null) ? (bool) NMMPRO_Compat::config('NMMPRO_SOL_ALLOW_PRIVATE_RPC') : false);
 			/**
 			 * Allow a Solana RPC endpoint on loopback/private/link-local space
 			 * (a validator on the same box or LAN). Off by default: the settings
 			 * screen must not be able to aim the server at internal services.
 			 */
-			$allow = (bool) apply_filters('nmm_sol_allow_private_rpc', $allow, $url, $target['host'], $target['ip']);
+			$allow = (bool) NMMPRO_Compat::filter('nmmpro_sol_allow_private_rpc', $allow, $url, $target['host'], $target['ip']);
 
 			if (!$allow) {
-				return new WP_Error('nmm_sol_rpc', __('Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMM_SOL_ALLOW_PRIVATE_RPC (or use the nmm_sol_allow_private_rpc filter) to allow a validator on this machine or LAN.', 'nomiddleman-crypto-payments-for-woocommerce'));
+				return new WP_Error('nmmpro_sol_rpc', __('Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMMPRO_SOL_ALLOW_PRIVATE_RPC (or use the nmmpro_sol_allow_private_rpc filter) to allow a validator on this machine or LAN.', 'nomiddleman-crypto-payments-for-woocommerce'));
 			}
 		}
 
@@ -2442,7 +2442,7 @@ class NMM_Blockchain {
 	 * POST a JSON-RPC body to an already-vetted Solana endpoint.
 	 *
 	 * Validation alone only proves where the host pointed a moment ago, so this
-	 * closes the DNS-rebinding half the same way NMM_Monero does: for a PUBLIC
+	 * closes the DNS-rebinding half the same way NMMPRO_Monero does: for a PUBLIC
 	 * hostname target the WordPress cURL handle is pinned (CURLOPT_RESOLVE) to
 	 * the exact IP that was vetted, so the name cannot re-resolve into private
 	 * space between validation and connect. IP literals have no DNS to rebind,
@@ -2458,7 +2458,7 @@ class NMM_Blockchain {
 	 */
 	/**
 	 * POST to a Solana RPC over cURL we drive ourselves, pinned to the exact IP
-	 * that was vetted. Mirrors NMM_Monero's curl transport rather than handing
+	 * that was vetted. Mirrors NMMPRO_Monero's curl transport rather than handing
 	 * the choice to WordPress: a pin installed as an http_api_curl callback only
 	 * takes effect if WP actually selects its cURL transport, and when it falls
 	 * back to fsockopen the hostname is resolved again at connect time - the
@@ -2491,22 +2491,22 @@ class NMM_Blockchain {
 			$curlOptions[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
 		}
 
-		if ($pin && defined('CURLOPT_RESOLVE') && !empty($target['ip']) && class_exists('NMM_Monero')) {
-			$curlOptions[CURLOPT_RESOLVE] = array(NMM_Monero::curl_resolve_entry($host, $target['port'], $target['ip']));
+		if ($pin && defined('CURLOPT_RESOLVE') && !empty($target['ip']) && class_exists('NMMPRO_Monero')) {
+			$curlOptions[CURLOPT_RESOLVE] = array(NMMPRO_Monero::curl_resolve_entry($host, $target['port'], $target['ip']));
 		}
 
 		// Same transport as the Monero RPC: WordPress's HTTP API issues the
 		// request and these options are installed on its cURL handle from the
 		// http_api_curl action, which refuses to send at all if the handle
-		// could not be configured (see NMM_Util::post_with_curl_options).
-		$response = NMM_Util::post_with_curl_options($target['url'], array(
+		// could not be configured (see NMMPRO_Util::post_with_curl_options).
+		$response = NMMPRO_Util::post_with_curl_options($target['url'], array(
 			'headers' => array('Content-Type' => 'application/json'),
 			'body'    => isset($args['body']) ? $args['body'] : '',
 			'timeout' => isset($args['timeout']) ? (int) $args['timeout'] : 8,
 		), $curlOptions);
 
-		if (is_wp_error($response) && $response->get_error_code() === 'nmm_pin_unavailable') {
-			$response = new WP_Error('nmm_sol_http', 'Solana RPC request was not sent: the connection could not be pinned to the address that was validated.');
+		if (is_wp_error($response) && $response->get_error_code() === 'nmmpro_pin_unavailable') {
+			$response = new WP_Error('nmmpro_sol_http', 'Solana RPC request was not sent: the connection could not be pinned to the address that was validated.');
 		}
 
 		self::record_api_result($host, $response);
@@ -2527,8 +2527,8 @@ class NMM_Blockchain {
 			$canPin = $hasCurl && defined('CURLOPT_RESOLVE') && function_exists('add_filter');
 
 			// Same rebinding decision the Monero path makes, from the same code.
-			$plan = (class_exists('NMM_Monero') && method_exists('NMM_Monero', 'plan_request'))
-				? NMM_Monero::plan_request($target, $hasCurl, $canPin, false)
+			$plan = (class_exists('NMMPRO_Monero') && method_exists('NMMPRO_Monero', 'plan_request'))
+				? NMMPRO_Monero::plan_request($target, $hasCurl, $canPin, false)
 				: array('transport' => 'reject', 'pin' => false);
 
 			// FAIL CLOSED. The planner says reject when it cannot guarantee the
@@ -2542,12 +2542,12 @@ class NMM_Blockchain {
 			// failed fetch and marks the address unswept, so a refused endpoint
 			// can never be mistaken for a completed sweep.
 			if ($plan['transport'] === 'reject') {
-				NMM_Util::log(__FILE__, __LINE__, 'Solana RPC request refused: ' . $target['host'] . ' is a hostname this host cannot pin (no cURL), so the address it resolves to at connect time cannot be guaranteed. Use an IP-literal endpoint, or install the cURL extension.', 'error');
-				return new WP_Error('nmm_sol_unpinnable', __('Solana RPC endpoint cannot be safely reached on this host.', 'nomiddleman-crypto-payments-for-woocommerce'));
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Solana RPC request refused: ' . $target['host'] . ' is a hostname this host cannot pin (no cURL), so the address it resolves to at connect time cannot be guaranteed. Use an IP-literal endpoint, or install the cURL extension.', 'error');
+				return new WP_Error('nmmpro_sol_unpinnable', __('Solana RPC endpoint cannot be safely reached on this host.', 'nomiddleman-crypto-payments-for-woocommerce'));
 			}
 
 			// transport => curl means DO THE REQUEST WITH cURL OURSELVES, which
-			// is what NMM_Monero does for the same plan. Installing an
+			// is what NMMPRO_Monero does for the same plan. Installing an
 			// http_api_curl callback and calling wp_remote_post instead only
 			// pins IF WordPress happens to choose its cURL transport - and it
 			// will not when, say, libcurl has no SSL support for an https URL,
@@ -2588,7 +2588,7 @@ class NMM_Blockchain {
 		$rpc = self::sol_rpc_target();
 
 		if (is_wp_error($rpc)) {
-			NMM_Util::log(__FILE__, __LINE__, 'Solana RPC endpoint refused: ' . $rpc->get_error_message(), 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Solana RPC endpoint refused: ' . $rpc->get_error_message(), 'error');
 
 			// An unusable endpoint means this address was NOT checked. It must
 			// never look like a completed sweep, or the Autopay verifier could
@@ -2610,7 +2610,7 @@ class NMM_Blockchain {
 		// We sweep the in-window history newest-to-oldest across ticks, resuming
 		// from a persisted cursor and inspecting a bounded batch. A signature
 		// whose detail lookup fails is recorded in a DURABLE table
-		// (NMM_Sol_Retry_Repo) before the cursor advances past it, then retried on
+		// (NMMPRO_Sol_Retry_Repo) before the cursor advances past it, then retried on
 		// later ticks with exponential backoff until it succeeds or ages out of
 		// the matching window. Because that store is durable and unbounded, the
 		// sweep never has to pause and no in-window failure is ever dropped, so
@@ -2629,7 +2629,7 @@ class NMM_Blockchain {
 		$retryBaseSec = 60;       // first backoff step (~one cron tick)
 		$retryMaxSec = 30 * 60;   // cap on the interval between retries
 
-		$cursorKey = 'nmm_sol_cursor_' . md5($address);
+		$cursorKey = 'nmmpro_sol_cursor_' . md5($address);
 
 		// Resume the sweep from the persisted cursor; false => start a fresh
 		// sweep from the newest signature.
@@ -2644,9 +2644,9 @@ class NMM_Blockchain {
 
 		// Expire durable retries now conclusively outside the matching window (or
 		// past the retention safety net), logging the final give-up.
-		$expiredCount = NMM_Sol_Retry_Repo::delete_expired($address, $windowCutoffBlockTime, $retentionCutoff);
+		$expiredCount = NMMPRO_Sol_Retry_Repo::delete_expired($address, $windowCutoffBlockTime, $retentionCutoff);
 		if ($expiredCount > 0) {
-			NMM_Util::log(__FILE__, __LINE__, 'Expired ' . $expiredCount . ' Solana retry signature(s) for ' . $address . ' now past the payment matching window.');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Expired ' . $expiredCount . ' Solana retry signature(s) for ' . $address . ' now past the payment matching window.');
 		}
 
 		// Retry phase: re-check a bounded oldest-due batch of previously failed
@@ -2655,7 +2655,7 @@ class NMM_Blockchain {
 		// sweep always keeps at least half the per-tick budget - and, being a
 		// LIMITed query, the cost is fixed no matter how large the queue is.
 		$retriesUsed = 0;
-		foreach (NMM_Sol_Retry_Repo::get_due($address, $retryBudget, $nowTs) as $row) {
+		foreach (NMMPRO_Sol_Retry_Repo::get_due($address, $retryBudget, $nowTs) as $row) {
 			$retriesUsed++;
 			$sig = $row['signature'];
 			list($ok, $tx) = self::sol_inspect_signature($rpc, $sig, $address);
@@ -2663,13 +2663,13 @@ class NMM_Blockchain {
 				if ($tx !== null) {
 					$transactions[] = $tx;
 				}
-				NMM_Sol_Retry_Repo::remove($address, $sig);
+				NMMPRO_Sol_Retry_Repo::remove($address, $sig);
 			}
 			else {
 				$attempts = (int) $row['attempts'] + 1;
-				NMM_Sol_Retry_Repo::reschedule($address, $sig, $attempts, $nowTs + self::sol_retry_backoff($attempts, $retryBaseSec, $retryMaxSec));
+				NMMPRO_Sol_Retry_Repo::reschedule($address, $sig, $attempts, $nowTs + self::sol_retry_backoff($attempts, $retryBaseSec, $retryMaxSec));
 				if ($attempts % 10 === 0) {
-					NMM_Util::log(__FILE__, __LINE__, 'Solana signature ' . $sig . ' still failing detail lookup after ' . $attempts . ' attempts (' . ($nowTs - (int) $row['first_failed_at']) . 's).', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Solana signature ' . $sig . ' still failing detail lookup after ' . $attempts . ' attempts (' . ($nowTs - (int) $row['first_failed_at']) . 's).', 'warning');
 				}
 			}
 		}
@@ -2702,7 +2702,7 @@ class NMM_Blockchain {
 			));
 
 			if (is_wp_error($response) || $response['response']['code'] !== 200) {
-				NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . NMM_Util::summarize_response($response));
+				NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( solana getSignaturesForAddress ): ' . NMMPRO_Util::summarize_response($response));
 
 				// Signal a hard error only if we end up with nothing at all; a
 				// later-page failure still lets us inspect what we collected, and
@@ -2713,7 +2713,7 @@ class NMM_Blockchain {
 				break;
 			}
 
-			$body = json_decode($response['body']);
+			$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 			if (!isset($body->result) || !is_array($body->result)) {
 				if ($page === 0) {
@@ -2793,12 +2793,12 @@ class NMM_Blockchain {
 			// Retryable failure: it MUST be durably queued before the cursor may
 			// move past it.
 			$blockTime = (isset($entry->blockTime) && $entry->blockTime !== null) ? (int) $entry->blockTime : 0;
-			if (NMM_Sol_Retry_Repo::enqueue($address, $entry->signature, $blockTime, $nowTs)) {
+			if (NMMPRO_Sol_Retry_Repo::enqueue($address, $entry->signature, $blockTime, $nowTs)) {
 				$resumeCursor = $entry->signature; // durably stored; safe to move past
 				continue;
 			}
 
-			NMM_Util::log(__FILE__, __LINE__, 'Could not durably enqueue Solana retry for ' . $entry->signature . '; holding the sweep cursor behind it so it is retried.', 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Could not durably enqueue Solana retry for ' . $entry->signature . '; holding the sweep cursor behind it so it is retried.', 'error');
 			$enqueueFailed = true;
 			break;
 		}
@@ -2858,7 +2858,7 @@ class NMM_Blockchain {
 	 * verifier uses this to detect a possibly-truncated visit (a FULL page
 	 * whose oldest entry is still inside the matching window may hide older
 	 * in-window transactions below it) and withholds the cancellation
-	 * coverage stamp for that coin - see NMM_Payment::page_possibly_truncated.
+	 * coverage stamp for that coin - see NMMPRO_Payment::page_possibly_truncated.
 	 *
 	 * 0 means depth-complete within the matching window (no cap to hit).
 	 * Values for adapters that send no limit parameter are the explorer's
@@ -2977,11 +2977,11 @@ class NMM_Blockchain {
 			return false;
 		}
 
-		if (get_transient('nmm_sol_cursor_' . md5($address)) !== false) {
+		if (get_transient('nmmpro_sol_cursor_' . md5($address)) !== false) {
 			return false;
 		}
 
-		return NMM_Sol_Retry_Repo::count_for($address) === 0;
+		return NMMPRO_Sol_Retry_Repo::count_for($address) === 0;
 	}
 
 	// Seconds until the next retry for a signature on its Nth failed attempt: the
@@ -2999,7 +2999,7 @@ class NMM_Blockchain {
 	// array($inspected, $transactionOrNull): $inspected is false when the detail
 	// lookup failed or came back unusable in a way that could be transient (the
 	// caller should retry it), and true when we got a usable finalized result;
-	// the second element is an NMM_Transaction when the tx credited $address,
+	// the second element is an NMMPRO_Transaction when the tx credited $address,
 	// otherwise null.
 	// $rpc is the vetted target array from sol_rpc_target(), not a bare URL.
 	private static function sol_inspect_signature($rpc, $signature, $address) {
@@ -3021,7 +3021,7 @@ class NMM_Blockchain {
 			return array(false, null); // HTTP failure (incl. rate limit); retry
 		}
 
-		$tx = json_decode($txResponse['body']);
+		$tx = json_decode($txResponse['body'], false, 512, JSON_BIGINT_AS_STRING);
 
 		if (!is_object($tx) || isset($tx->error)) {
 			return array(false, null); // truncated body or RPC error object; retry
@@ -3044,7 +3044,7 @@ class NMM_Blockchain {
 				$delta = $tx->result->meta->postBalances[$index] - $tx->result->meta->preBalances[$index];
 
 				if ($delta > 0) {
-					return array(true, new NMM_Transaction($delta,
+					return array(true, new NMMPRO_Transaction($delta,
 														  10000,
 														  isset($tx->result->blockTime) ? $tx->result->blockTime : time(),
 														  $signature));

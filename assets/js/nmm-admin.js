@@ -81,7 +81,7 @@
 			type: 'POST',
 			url: window.ajaxurl || 'admin-ajax.php',
 			data: {
-				action: 'nmm_first_mpk_address',
+				action: 'nmmpro_first_mpk_address',
 				_ajax_nonce: (window.nmmAdmin || {}).mpkNonce || '',
 				mpk: mpk,
 				cryptoId: cryptoId,

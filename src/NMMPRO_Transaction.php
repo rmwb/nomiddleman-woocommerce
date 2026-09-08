@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Transaction {
+class NMMPRO_Transaction {
 	private $amount;
 	private $confirmations;
 	private $timeStamp;

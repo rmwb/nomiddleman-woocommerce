@@ -8,10 +8,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Native WordPress settings page for Nomiddleman Crypto Payments.
  *
  * Replaces the previously bundled Redux Framework. Settings are stored in the
- * same option array (NMM_REDUX_ID) with the same field IDs, so existing
+ * same option array (NMMPRO_REDUX_ID) with the same field IDs, so existing
  * installs keep their configuration with no migration.
  */
-class NMM_Admin {
+class NMMPRO_Admin {
 
     const OPTION_GROUP = 'nmmpro_options_group';
 
@@ -20,10 +20,10 @@ class NMM_Admin {
         add_action('admin_init', array(__CLASS__, 'register_settings'));
 
         // One-shot re-validation of addresses stored under the old sloppy
-        // validation (see NMM_Address::flag_invalid_stored_addresses - it is
+        // validation (see NMMPRO_Address::flag_invalid_stored_addresses - it is
         // flag-guarded, so this is a cheap option read after the first run),
         // plus the dismissible notice surfacing whatever it found.
-        add_action('admin_init', array('NMM_Address', 'flag_invalid_stored_addresses'));
+        add_action('admin_init', array('NMMPRO_Address', 'flag_invalid_stored_addresses'));
         add_action('admin_init', array(__CLASS__, 'maybe_dismiss_invalid_address_notice'));
         add_action('admin_notices', array(__CLASS__, 'render_invalid_address_notice'));
     }
@@ -34,17 +34,17 @@ class NMM_Admin {
      * telling us "I have checked these", so the recorded list is deleted.
      */
     public static function maybe_dismiss_invalid_address_notice() {
-        if (!isset($_GET['nmm_dismiss_invalid_addresses'])) {
+        if (!isset($_GET['nmmpro_dismiss_invalid_addresses'])) {
             return;
         }
         if (!current_user_can('manage_options')) {
             return;
         }
-        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'nmm_dismiss_invalid_addresses')) {
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'nmmpro_dismiss_invalid_addresses')) {
             return;
         }
 
-        delete_option(NMM_Address::INVALID_STORED_OPTION);
+        NMMPRO_Compat::delete_option(NMMPRO_Address::INVALID_STORED_OPTION);
     }
 
     /**
@@ -59,15 +59,15 @@ class NMM_Admin {
             return;
         }
 
-        $invalid = get_option(NMM_Address::INVALID_STORED_OPTION, array());
+        $invalid = NMMPRO_Compat::get_option(NMMPRO_Address::INVALID_STORED_OPTION, array());
 
         if (!is_array($invalid) || count($invalid) === 0) {
             return;
         }
 
         $dismissUrl = wp_nonce_url(
-            add_query_arg('nmm_dismiss_invalid_addresses', '1'),
-            'nmm_dismiss_invalid_addresses'
+            add_query_arg('nmmpro_dismiss_invalid_addresses', '1'),
+            'nmmpro_dismiss_invalid_addresses'
         );
         ?>
         <div class="notice notice-error">
@@ -82,7 +82,7 @@ class NMM_Admin {
                 <?php endforeach; ?>
             </ul>
             <p>
-                <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMM_REDUX_SLUG)); ?>" class="button button-primary"><?php esc_html_e('Review addresses', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
+                <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMMPRO_REDUX_SLUG)); ?>" class="button button-primary"><?php esc_html_e('Review addresses', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
                 <a href="<?php echo esc_url($dismissUrl); ?>" class="button"><?php esc_html_e('I have checked these - dismiss', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
             </p>
         </div>
@@ -91,12 +91,12 @@ class NMM_Admin {
 
     public static function register_menu() {
         $hook = add_menu_page(
-            apply_filters('nmm_settings_page_title', __('Nomiddleman Crypto Settings', 'nomiddleman-crypto-payments-for-woocommerce')),
-            apply_filters('nmm_settings_menu_title', __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce')),
+            NMMPRO_Compat::filter('nmmpro_settings_page_title', __('Nomiddleman Crypto Settings', 'nomiddleman-crypto-payments-for-woocommerce')),
+            NMMPRO_Compat::filter('nmmpro_settings_menu_title', __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce')),
             'manage_options',
-            NMM_REDUX_SLUG,
+            NMMPRO_REDUX_SLUG,
             array(__CLASS__, 'render_page'),
-            NMM_PLUGIN_DIR . '/assets/img/redux-menu-icon.svg',
+            NMMPRO_PLUGIN_DIR . '/assets/img/redux-menu-icon.svg',
             56
         );
 
@@ -105,23 +105,23 @@ class NMM_Admin {
 
     public static function enqueue_assets() {
         add_action('admin_enqueue_scripts', function() {
-            wp_enqueue_style('nmm-admin-styles', NMM_PLUGIN_DIR . '/assets/css/nmm-admin-settings.css', array(), NMM_VERSION);
-            wp_enqueue_script('nmm-admin-scripts', NMM_PLUGIN_DIR . '/assets/js/nmm-admin.js', array('jquery'), NMM_VERSION, true);
+            wp_enqueue_style('nmm-admin-styles', NMMPRO_PLUGIN_DIR . '/assets/css/nmm-admin-settings.css', array(), NMMPRO_VERSION);
+            wp_enqueue_script('nmm-admin-scripts', NMMPRO_PLUGIN_DIR . '/assets/js/nmm-admin.js', array('jquery'), NMMPRO_VERSION, true);
             wp_localize_script('nmm-admin-scripts', 'nmmAdmin', array(
-                'mpkNonce' => wp_create_nonce('nmm_first_mpk_address'),
+                'mpkNonce' => wp_create_nonce('nmmpro_first_mpk_address'),
             ));
         });
     }
 
     public static function register_settings() {
-        register_setting(self::OPTION_GROUP, NMM_REDUX_ID, array(
+        register_setting(self::OPTION_GROUP, NMMPRO_REDUX_ID, array(
             'type' => 'array',
-            'sanitize_callback' => array('NMM_Validation', 'sanitize_options'),
+            'sanitize_callback' => array('NMMPRO_Validation', 'sanitize_options'),
         ));
     }
 
     private static function get_option_values() {
-        return get_option(NMM_REDUX_ID, array());
+        return NMMPRO_Compat::get_option(NMMPRO_REDUX_ID, array());
     }
 
     private static function value($values, $key, $default = '') {
@@ -134,8 +134,8 @@ class NMM_Admin {
         }
 
         $values = self::get_option_values();
-        $settings = new NMM_Settings($values);
-        $cryptos = NMM_Cryptocurrencies::get_alpha();
+        $settings = new NMMPRO_Settings($values);
+        $cryptos = NMMPRO_Cryptocurrencies::get_alpha();
 
         $tabs = array(
             'general' => __('General Settings', 'nomiddleman-crypto-payments-for-woocommerce'),
@@ -152,12 +152,12 @@ class NMM_Admin {
 
         ?>
         <div class="wrap nmm-settings-wrap">
-            <h1><?php echo esc_html(apply_filters('nmm_settings_display_name', __('Nomiddleman Crypto Payments for Woocommerce', 'nomiddleman-crypto-payments-for-woocommerce'))); ?>
-                <span class="nmm-version">v<?php echo esc_html(NMM_VERSION); ?></span></h1>
+            <h1><?php echo esc_html(NMMPRO_Compat::filter('nmmpro_settings_display_name', __('Nomiddleman Crypto Payments for Woocommerce', 'nomiddleman-crypto-payments-for-woocommerce'))); ?>
+                <span class="nmm-version">v<?php echo esc_html(NMMPRO_VERSION); ?></span></h1>
 
             <?php settings_errors('nmmpro_options'); ?>
 
-            <?php if (!NMM_Util::hd_math_available()) : ?>
+            <?php if (!NMMPRO_Util::hd_math_available()) : ?>
                 <div class="notice notice-warning">
                     <p><strong><?php esc_html_e('Privacy Mode is unavailable on this server.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong>
                     <?php esc_html_e('Generating HD wallet addresses needs the PHP gmp extension (preferred) or bcmath, and neither is enabled. Ask your host to enable one, then reload this page. Classic and Autopay Modes are unaffected.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
@@ -207,7 +207,7 @@ class NMM_Admin {
                                     $cid = $crypto->get_id(); ?>
                                     <label class="nmm-crypto-choice">
                                         <input type="checkbox"
-                                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[crypto_select][]"
+                                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[crypto_select][]"
                                                value="<?php echo esc_attr($cid); ?>"
                                                <?php checked(in_array($cid, $selected, true)); ?> />
                                         <img src="<?php echo esc_url($crypto->get_logo_file_path()); ?>" alt="" />
@@ -244,7 +244,7 @@ class NMM_Admin {
                                 <?php foreach ($priceApis as $apiId => $apiLabel) : ?>
                                     <label class="nmm-crypto-choice">
                                         <input type="checkbox"
-                                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[selected_price_apis][]"
+                                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[selected_price_apis][]"
                                                value="<?php echo esc_attr($apiId); ?>"
                                                <?php checked(in_array((string) $apiId, array_map('strval', $selectedApis), true)); ?> />
                                         <?php echo esc_html($apiLabel); ?>
@@ -274,8 +274,8 @@ class NMM_Admin {
         $cid = $crypto->get_id();
         $mode = self::value($values, $cid . '_mode', '');
 
-        $autopayAvailable = NMM_Cryptocurrencies::autopay_verifiable($cid);
-        $hdAvailable = NMM_Cryptocurrencies::hd_verifiable($cid);
+        $autopayAvailable = NMMPRO_Cryptocurrencies::autopay_verifiable($cid);
+        $hdAvailable = NMMPRO_Cryptocurrencies::hd_verifiable($cid);
 
         $storedModeUnavailable = ($mode === '1' && !$autopayAvailable) || ($mode === '2' && !$hdAvailable);
         ?>
@@ -310,7 +310,7 @@ class NMM_Admin {
                     <th scope="row"><?php esc_html_e('Markup/Markdown %', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <input type="number" step="0.1" min="-99.9" max="100"
-                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_markup]"
+                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_markup]"
                                value="<?php echo esc_attr(self::value($values, $cid . '_markup', '0.0')); ?>" />
                         <p class="description"><?php esc_html_e('This will increase/decrease the amount of cryptocurrency the customer will owe for the order. (4.8 = 4.8% markup, -10.0 = 10% markdown). Only the crypto amount changes; the fiat value shown to the customer stays the same.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
@@ -319,12 +319,12 @@ class NMM_Admin {
                     <th scope="row"><?php esc_html_e('Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <fieldset class="nmm-mode-select">
-                            <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="0" <?php checked($mode, '0'); ?> /> <?php esc_html_e('Classic Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></label><br />
+                            <label><input type="radio" name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="0" <?php checked($mode, '0'); ?> /> <?php esc_html_e('Classic Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></label><br />
                             <?php if ($autopayAvailable) : ?>
-                                <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="1" <?php checked($mode, '1'); ?> /> <?php esc_html_e('Autopay Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?> <strong><?php esc_html_e('(BETA)', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></label><br />
+                                <label><input type="radio" name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="1" <?php checked($mode, '1'); ?> /> <?php esc_html_e('Autopay Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?> <strong><?php esc_html_e('(BETA)', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></label><br />
                             <?php endif; ?>
                             <?php if ($hdAvailable) : ?>
-                                <label><input type="radio" name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="2" <?php checked($mode, '2'); ?> /> <?php esc_html_e('Privacy Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></label>
+                                <label><input type="radio" name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_mode]" value="2" <?php checked($mode, '2'); ?> /> <?php esc_html_e('Privacy Mode', 'nomiddleman-crypto-payments-for-woocommerce'); ?></label>
                             <?php endif; ?>
                         </fieldset>
                     </td>
@@ -336,7 +336,7 @@ class NMM_Admin {
                     <td>
                         <div class="notice notice-warning inline nmm-inline-notice">
                             <p><?php echo wp_kses_post(__('Please note Autopay Mode is still in <strong>beta</strong>. There is no guarantee every order will be processed correctly.', 'nomiddleman-crypto-payments-for-woocommerce')); ?></p>
-                            <p><?php echo wp_kses_post(__('<strong>Adjusting the following settings can improve Autopay accuracy:</strong>', 'nomiddleman-crypto-payments-for-woocommerce')); ?></p>
+                            <p><strong><?php esc_html_e('Adjusting the following settings can improve Autopay accuracy:', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></p>
                             <ul>
                                 <li><?php echo wp_kses_post(__('<strong>Wallet Addresses:</strong> Adding more addresses greatly increases autopay reliability while increasing privacy. <em>We suggest having as many addresses as orders you get an hour in that cryptocurrency.</em>', 'nomiddleman-crypto-payments-for-woocommerce')); ?></li>
                                 <li><?php echo wp_kses_post(__('<strong>Order Cancellation Timer:</strong> Reducing this will not only increase autopay reliability but also reduce the effects of volatility. <em>We suggest a value of 1 hour for high throughput stores.</em>', 'nomiddleman-crypto-payments-for-woocommerce')); ?></li>
@@ -352,7 +352,7 @@ class NMM_Admin {
                     <th scope="row"><?php esc_html_e('Wallet RPC URL', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <input type="text" class="regular-text" placeholder="http://127.0.0.1:18083/json_rpc"
-                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_url]"
+                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[XMR_wallet_rpc_url]"
                                value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_url', '')); ?>" />
                         <p class="description"><?php esc_html_e('Your own monero-wallet-rpc endpoint (a view-only wallet is enough). Each order gets a fresh subaddress and payments are verified through this RPC - your view key never leaves your server. If the RPC runs on another host, protect it with --rpc-login and fill in the credentials below.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
@@ -361,20 +361,20 @@ class NMM_Admin {
                     <th scope="row"><?php esc_html_e('Wallet RPC Login (optional)', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
                         <input type="text" placeholder="username"
-                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_user]"
+                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[XMR_wallet_rpc_user]"
                                value="<?php echo esc_attr(self::value($values, 'XMR_wallet_rpc_user', '')); ?>" />
                         <?php
                         // Write-only field: never emit the stored password into the page
                         // source (browser caches, DOM snapshots, admin-side XSS would all
                         // expose it). An empty submission means "keep the current value".
-                        $passwordFromConstant = defined('NMM_XMR_RPC_PASSWORD');
+                        $passwordFromConstant = (NMMPRO_Compat::config('NMMPRO_XMR_RPC_PASSWORD') !== null);
                         $passwordStored = self::value($values, 'XMR_wallet_rpc_password', '') !== '';
                         ?>
                         <input type="password" placeholder="password" autocomplete="new-password"
-                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_password]"
+                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[XMR_wallet_rpc_password]"
                                value="" <?php disabled($passwordFromConstant); ?> />
                         <?php if ($passwordFromConstant) : ?>
-                            <p class="description"><?php esc_html_e('The RPC password is set via the NMM_XMR_RPC_PASSWORD constant in wp-config.php, so it cannot be changed here. Remove the constant to manage it from this page again.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+                            <p class="description"><?php esc_html_e('The RPC password is set via the NMMPRO_XMR_RPC_PASSWORD constant in wp-config.php, so it cannot be changed here. Remove the constant to manage it from this page again.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                         <?php else : ?>
                             <p class="description"><?php
                                 if ($passwordStored) {
@@ -387,7 +387,7 @@ class NMM_Admin {
                             <?php if ($passwordStored) : ?>
                                 <label>
                                     <input type="checkbox" value="1"
-                                           name="<?php echo esc_attr(NMM_REDUX_ID); ?>[XMR_wallet_rpc_password_clear]" />
+                                           name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[XMR_wallet_rpc_password_clear]" />
                                     <?php esc_html_e('Clear the saved password on save', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
                                 </label>
                             <?php endif; ?>
@@ -400,12 +400,12 @@ class NMM_Admin {
                 <tr class="nmm-requires-mode" data-modes="1">
                     <th scope="row"><?php esc_html_e('RPC Endpoint', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
                     <td>
-                        <input type="text" class="regular-text" placeholder="<?php echo esc_attr(NMM_Blockchain::sol_default_rpc_url()); ?>"
-                               name="<?php echo esc_attr(NMM_REDUX_ID); ?>[SOL_rpc_url]"
+                        <input type="text" class="regular-text" placeholder="<?php echo esc_attr(NMMPRO_Blockchain::sol_default_rpc_url()); ?>"
+                               name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[SOL_rpc_url]"
                                value="<?php echo esc_attr(self::value($values, 'SOL_rpc_url', '')); ?>" />
                         <p class="description"><?php
                             /* translators: %s: the default public Solana RPC endpoint URL */
-                            printf(esc_html__('Leave blank to use the public endpoint %s. That endpoint is heavily rate-limited and its operators state it is not intended for production use, so a busy store should point this at a dedicated provider (Helius, QuickNode, Alchemy, Triton...) or its own validator - for example https://mainnet.helius-rpc.com/?api-key=YOUR-KEY. Must be an http(s) URL that speaks the standard Solana JSON-RPC (getSignaturesForAddress and getTransaction); addresses on the local network are rejected unless the NMM_SOL_ALLOW_PRIVATE_RPC constant allows them.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html(NMM_Blockchain::sol_default_rpc_url()));
+                            printf(esc_html__('Leave blank to use the public endpoint %s. That endpoint is heavily rate-limited and its operators state it is not intended for production use, so a busy store should point this at a dedicated provider (Helius, QuickNode, Alchemy, Triton...) or its own validator - for example https://mainnet.helius-rpc.com/?api-key=YOUR-KEY. Must be an http(s) URL that speaks the standard Solana JSON-RPC (getSignaturesForAddress and getTransaction); addresses on the local network are rejected unless the NMMPRO_SOL_ALLOW_PRIVATE_RPC constant allows them.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html(NMMPRO_Blockchain::sol_default_rpc_url()));
                         ?></p>
                     </td>
                 </tr>
@@ -423,7 +423,7 @@ class NMM_Admin {
                             foreach ($addresses as $address) : ?>
                                 <div class="nmm-multi-text-row">
                                     <input type="text" class="regular-text"
-                                           name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_addresses][]"
+                                           name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_addresses][]"
                                            value="<?php echo esc_attr($address); ?>" />
                                     <button type="button" class="button-link nmm-multi-text-remove" aria-label="<?php esc_attr_e('Remove address', 'nomiddleman-crypto-payments-for-woocommerce'); ?>"><?php esc_html_e('Remove', 'nomiddleman-crypto-payments-for-woocommerce'); ?></button>
                                 </div>
@@ -439,7 +439,7 @@ class NMM_Admin {
                     <td>
                         <textarea rows="3" class="large-text nmm-mpk-input" id="<?php echo esc_attr($cid); ?>_hd_mpk-textarea"
                                   data-crypto="<?php echo esc_attr($cid); ?>"
-                                  name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_hd_mpk]"><?php echo esc_textarea(self::value($values, $cid . '_hd_mpk', '')); ?></textarea>
+                                  name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($cid); ?>_hd_mpk]"><?php echo esc_textarea(self::value($values, $cid . '_hd_mpk', '')); ?></textarea>
                         <p class="description"><?php esc_html_e('Your HD Wallet Master Public Key. We highly recommend using a brand new MPK for each store you run. You run the risk of address reuse and incorrectly processed orders if you use your MPK for multiple stores and/or purposes.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                     </td>
                 </tr>
@@ -493,7 +493,7 @@ class NMM_Admin {
             <th scope="row"><label for="<?php echo esc_attr($id); ?>"><?php echo esc_html($title); ?></label></th>
             <td>
                 <input type="text" class="regular-text" id="<?php echo esc_attr($id); ?>"
-                       name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"
+                       name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"
                        value="<?php echo esc_attr($value); ?>" />
                 <p class="description"><?php echo esc_html($desc); ?></p>
             </td>
@@ -507,7 +507,7 @@ class NMM_Admin {
             <th scope="row"><label for="<?php echo esc_attr($id); ?>"><?php echo esc_html($title); ?></label></th>
             <td>
                 <textarea rows="4" class="large-text" id="<?php echo esc_attr($id); ?>"
-                          name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"><?php echo esc_textarea($value); ?></textarea>
+                          name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"><?php echo esc_textarea($value); ?></textarea>
                 <p class="description"><?php echo esc_html($desc); ?></p>
             </td>
         </tr>
@@ -515,19 +515,19 @@ class NMM_Admin {
     }
 
     // $cid: crypto id; $suffix: option-name suffix, also the key into
-    // NMM_Settings::NUMERIC_BOUNDS - the min/max/step offered to the browser come
-    // from the same table NMM_Settings clamps against, so the two cannot drift.
+    // NMMPRO_Settings::NUMERIC_BOUNDS - the min/max/step offered to the browser come
+    // from the same table NMMPRO_Settings clamps against, so the two cannot drift.
     // $modes: comma-separated list of crypto modes ('0','1','2') the row applies to
     private static function render_number_row($cid, $suffix, $title, $value, $modes, $desc) {
         $id = $cid . $suffix;
-        $bounds = NMM_Settings::NUMERIC_BOUNDS[$suffix];
+        $bounds = NMMPRO_Settings::NUMERIC_BOUNDS[$suffix];
         ?>
         <tr class="nmm-requires-mode" data-modes="<?php echo esc_attr($modes); ?>">
             <th scope="row"><label for="<?php echo esc_attr($id); ?>"><?php echo esc_html($title); ?></label></th>
             <td>
                 <input type="number" id="<?php echo esc_attr($id); ?>"
                        min="<?php echo esc_attr($bounds['min']); ?>" max="<?php echo esc_attr($bounds['max']); ?>" step="<?php echo esc_attr($bounds['step']); ?>"
-                       name="<?php echo esc_attr(NMM_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"
+                       name="<?php echo esc_attr(NMMPRO_REDUX_ID); ?>[<?php echo esc_attr($id); ?>]"
                        value="<?php echo esc_attr($value); ?>" />
                 <p class="description"><?php echo esc_html($desc); ?></p>
             </td>
@@ -536,4 +536,4 @@ class NMM_Admin {
     }
 }
 
-NMM_Admin::init();
+NMMPRO_Admin::init();

@@ -5,14 +5,14 @@ Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.11.0
+Stable Tag: 2.12.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
 == Description ==
 Utilizing the power of blockchain, we provide the only WooCommerce Cryptocurrency Gateway that truly takes out the middleman. Empowering you to accept all major cryptocurrencies directly to your own wallets for free. No middleman fees and open source on <a target="_blank" href="https://github.com/rmwb/nomiddleman-woocommerce" alt="WordPress Cryptocurrency Payment Gateway">GitHub</a>.
 
-Accept customer payments in Bitcoin, Ethereum, Tether (USDT on Ethereum or Tron), Solana, Litecoin, XRP and 51 other cryptocurrencies. Tested with WordPress 7.1 and WooCommerce 10.8 on PHP 7.4-8.4.
+Accept customer payments in Bitcoin, Ethereum, Tether (USDT on Ethereum or Tron), Solana, Litecoin, XRP and 51 other cryptocurrencies. The automated compatibility workflow targets PHP 7.4-8.4.
 
 == Supported Cryptocurrencies ==
 
@@ -122,23 +122,23 @@ Public transaction APIs for these coins no longer exist or were never available,
 
 == External Services ==
 
-This plugin contacts third-party blockchain explorers and price APIs. Every request is made server-side by your store, never by the customer's browser. The only data ever transmitted is public blockchain information: the payment address generated for an order, public transaction identifiers, cryptocurrency tickers, and ISO currency codes. No customer name, email address, IP address, order contents or any other personal data is sent to any of these services, and no account or API key is required with any of them.
+This plugin contacts third-party blockchain explorers and price APIs from your store's server, never from the customer's browser. The request payloads contain public blockchain or market-query data: payment addresses, public transaction identifiers or signatures, cryptocurrency tickers, and ISO currency codes. A BlockCypher token is also sent if you configure one. As with any server-to-server HTTP request, the receiving operator can see the connecting server's IP address and request metadata. The plugin does not put customer name, email address, order contents or other WooCommerce customer fields in these requests. Monero wallet-RPC credentials and JSON-RPC commands go only to the wallet-RPC URL you configure.
 
-Requests happen at two moments: when a customer reaches the payment page (an exchange-rate lookup), and when the plugin's background job checks whether an unpaid order has been paid (a verification lookup, repeated until the order is paid or its payment window closes). Verification services are contacted only for the cryptocurrencies you enable, and only in Autopay or Privacy Mode - in Classic Mode no verification service is contacted at all.
+Requests happen during checkout/order payment setup when a needed exchange rate is not cached, and during scheduled background rate warm-ups when cached rates expire. The background job also checks whether an unpaid Autopay or Privacy Mode order has been paid (a verification lookup, repeated until the order is paid or its payment window closes). Verification services are contacted only for the cryptocurrencies and modes that need them; Classic Mode does not perform verification lookups.
 
-Where an operator publishes no terms of service or privacy policy, that is stated below. All links were checked on 21 August 2026.
+Where an operator publishes no terms of service or privacy policy, that is stated below. The CoinGecko, ExchangeRate-API, and Solana Foundation links were checked on 5 September 2026. Other links are supplied for operator reference and remain unverified in this review; availability of a page does not by itself establish that its policy applies to the API endpoint.
 
 = Exchange rate services =
 
-Used to convert your store's prices into cryptocurrency. Only a coin ticker or an ISO currency code is sent. You choose which price APIs are enabled on the Pricing Options tab; prices are averaged across those you select.
+Used to convert your store's prices into cryptocurrency. Only a coin ticker or an ISO currency code is placed in the query. You choose which price APIs are enabled on the Pricing Options tab. The plugin uses a screened consensus/median of usable cryptocurrency quotes (not a simple average), with special handling when only one or two sources are usable; fiat conversion uses Frankfurter first and ExchangeRate-API as fallback.
 
 * CoinGecko (api.coingecko.com) - cryptocurrency to USD prices. Terms: https://www.coingecko.com/en/terms - Privacy: https://www.coingecko.com/en/privacy
 * HitBTC (api.hitbtc.com) - cryptocurrency to USD prices. Terms: https://hitbtc.com/terms-of-use - Privacy: https://hitbtc.com/privacy-policy
 * Gate.io (data.gate.io) - cryptocurrency to USD prices. Terms: https://www.gate.io/user-agreement - Privacy: https://www.gate.io/privacy-policy
 * Binance (api.binance.com) - cryptocurrency to USD prices. Terms: https://www.binance.com/en/terms - Privacy: https://www.binance.com/en/about-legal/privacy-portal
-* Poloniex (api.poloniex.com) - cryptocurrency to USD prices. Terms: https://poloniex.com/terms - Privacy: https://poloniex.com/support/privacy
-* Frankfurter (api.frankfurter.dev) - fiat exchange rates (European Central Bank reference rates) when your store currency is not USD. Only the currency code is sent. Frankfurter is a free open-source service that publishes no terms of service or privacy policy: https://frankfurter.dev/
-* ExchangeRate-API (open.er-api.com) - fiat exchange rates, used as a fallback when Frankfurter does not answer. Only the currency code is sent. Terms: https://www.exchangerate-api.com/terms - the operator publishes no separate privacy policy.
+* Poloniex (api.poloniex.com) - cryptocurrency to USD prices. Terms: https://poloniex.com/terms - Privacy: a direct policy document could not be verified at the operator's published link.
+* Frankfurter (api.frankfurter.dev) - fiat exchange rates (European Central Bank reference rates) when your store currency is not USD. Only the currency code is sent. Frankfurter is a free open-source service; terms and a privacy policy were not located in this review: https://frankfurter.dev/
+* ExchangeRate-API (open.er-api.com) - fiat exchange rates, used as a fallback when Frankfurter does not answer. Only the currency code is sent. Terms and included Privacy Policy: https://www.exchangerate-api.com/terms
 
 = Payment verification services =
 
@@ -147,7 +147,7 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * mempool.space - Bitcoin. Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
 * Blockstream (blockstream.info) - Bitcoin, as a fallback. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
 * Blockchain.com (blockchain.info, api.blockchain.info) - Bitcoin and Bitcoin Cash. Terms: https://www.blockchain.com/legal/terms - Privacy: https://www.blockchain.com/legal/privacy
-* Litecoin Space (litecoinspace.org) - Litecoin. The operator publishes no terms of service or privacy policy.
+* Litecoin Space (litecoinspace.org) - Litecoin. Terms and a privacy policy were not located in this review.
 * BlockCypher (api.blockcypher.com) - Litecoin and Dogecoin. If you configure a BlockCypher API token, it is sent with these requests. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
 * Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com) - Ethereum, Ethereum Classic, ERC-20 tokens and the multi-network stablecoins. Terms: https://eaas.blockscout.com/terms-and-conditions - Privacy: https://eaas.blockscout.com/privacy-notice
 * WhatsOnChain (api.whatsonchain.com) - Bitcoin SV. Terms: https://whatsonchain.com/terms - Privacy: https://whatsonchain.com/privacy
@@ -156,25 +156,25 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * Koios (api.koios.rest) - Cardano. Terms: https://koios.rest/terms.html - Privacy: https://koios.rest/privacy.html
 * Blockchair (api.blockchair.com) - Zcash. Terms: https://blockchair.com/terms - Privacy: https://blockchair.com/privacy
 * chainz.cryptoid.info - Bitcore balance checks in Privacy Mode. Terms and privacy policy (one document): https://chainz.cryptoid.info/terms.dws
-* Stellar Horizon (horizon.stellar.org) - Stellar. Terms: https://stellar.org/terms-of-service - Privacy: https://stellar.org/privacy
+* Stellar Horizon (horizon.stellar.org) - Stellar. Terms: https://stellar.org/terms-of-service - Privacy: https://stellar.org/privacy-policy
 * Waves public nodes (nodes.wavesnodes.com) - Waves. Terms: https://waves.tech/docs/terms - Privacy: https://waves.tech/docs/privacy-policy
-* Greymass (eos.greymass.com) - EOS. Privacy: https://greymass.com/privacy_policy - the operator publishes no separate terms of service.
-* Groestlsight (groestlsight.groestlcoin.org) - Groestlcoin. Privacy: https://groestlcoin.org/privacy - the operator publishes no separate terms of service.
-* TzKT (api.tzkt.io) - Tezos. The operator publishes no terms of service or privacy policy.
-* TronScan (apilist.tronscan.org) - Tron and USDT on Tron. No terms of service or privacy policy could be located.
-* EOSRIO Hyperion (eos.hyperion.eosrio.io) - EOS, as a fallback. The operator publishes no terms of service or privacy policy.
-* dcrdata (explorer.dcrdata.org) - Decred. The operator publishes no terms of service or privacy policy.
-* DigiExplorer (digiexplorer.info) - DigiByte. The operator publishes no terms of service or privacy policy.
-* qtum.info - Qtum. The operator publishes no terms of service or privacy policy.
-* BlackCoin explorer (explorer.blackcoin.nl) - BlackCoin. The operator publishes no terms of service or privacy policy.
+* Greymass (eos.greymass.com) - EOS. Privacy: https://greymass.com/privacy_policy - separate terms of service were not located in this review.
+* Groestlsight (groestlsight.groestlcoin.org) - Groestlcoin. Privacy: https://groestlcoin.org/privacy - separate terms of service were not located in this review.
+* TzKT (api.tzkt.io) - Tezos. Terms and a privacy policy were not located in this review.
+* TronScan (apilist.tronscan.org) - Tron and USDT on Tron. Terms: https://tronscan.org/contracts/terms - Privacy: https://tronscan.org/aboutUs/privacyPolicy
+* EOSRIO Hyperion (eos.hyperion.eosrio.io) - EOS, as a fallback. Terms and a privacy policy were not located in this review.
+* dcrdata (explorer.dcrdata.org) - Decred. Terms and a privacy policy were not located in this review.
+* DigiExplorer (digiexplorer.info) - DigiByte. Terms and a privacy policy were not located in this review.
+* qtum.info - Qtum. Terms and a privacy policy were not located in this review.
+* BlackCoin explorer (explorer.blackcoin.nl) - BlackCoin. Terms and a privacy policy were not located in this review.
 
 = Endpoints you configure yourself =
 
-These contact no third party unless you enter an address yourself:
+These endpoints are configured by you; Solana uses a public default if its setting is left blank:
 
-* Monero Autopay talks only to your own monero-wallet-rpc instance, at the URL you enter in settings. A view-only wallet is enough and your view key never leaves your server.
-* Solana Autopay uses the JSON-RPC endpoint entered on the Solana settings tab. Left blank, it uses Solana's public mainnet RPC (api.mainnet-beta.solana.com - Terms: https://solana.com/tos - Privacy: https://solana.com/privacy-policy ), which is rate-limited and which its operators state is not intended for production use. You can point it at a dedicated provider such as Helius (mainnet.helius-rpc.com, which the settings screen shows as an example - Terms: https://www.helius.dev/terms - Privacy: https://www.helius.dev/privacy-policy ), QuickNode, Alchemy or Triton, or at your own validator. Nothing is sent to any of those providers unless you enter their endpoint yourself. Only the payment address and transaction signatures are sent, whichever endpoint is used.
-* Any verification request above can be redirected to your own node or explorer with the nmm_api_url filter, in which case no third-party service is contacted for that coin.
+* Monero Autopay talks only to your own monero-wallet-rpc instance, at the URL you enter in settings. A view-only wallet is enough. The plugin sends JSON-RPC commands and configured authentication credentials to that endpoint; it does not send your view key in these requests.
+* Solana Autopay uses the JSON-RPC endpoint entered on the Solana settings tab. If left blank, it uses Solana's public mainnet RPC at `api.mainnet-beta.solana.com`; this endpoint is rate-limited and the Solana documentation recommends a dedicated provider for production workloads. The Solana Foundation's [Terms](https://solana.com/tos) and [Privacy Policy](https://solana.com/privacy-policy) are published for its website/service; they do not clearly state that they govern this community RPC endpoint, so applicability to RPC traffic is uncertain. You can point it at Helius (the settings screen example: `mainnet.helius-rpc.com`; [Terms](https://www.helius.dev/terms), [Privacy](https://www.helius.dev/privacy-policy)), QuickNode, Alchemy, Triton, or your own validator. Only the endpoint you actually use receives the JSON-RPC request, including the payment address and transaction signatures needed for the scan.
+* Any verification request above can be redirected to your own node or explorer with the nmm_api_url filter, so verification traffic goes to the endpoint returned by your filter. Exchange-rate services are configured separately.
 
 QR codes are generated locally in memory by the bundled phpqrcode library. No QR or image service is contacted.
 
@@ -199,6 +199,12 @@ Yes. Filters are available for redirecting verification requests, customizing th
 Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
 
 == Changelog ==
+
+= 2.12.0 =
+* Use a distinct NMMPRO prefix with migration of retained settings and legacy hook compatibility.
+* Persist consumed transactions and atomically bind payment claims; recover interrupted order completion.
+* Match payments and calculate requested amounts using exact decimal units.
+* Expand external-service data and timing disclosures and require CI before release.
 
 = 2.11.0 =
 * Exchange rates: the USD price is now the median of the price APIs you have enabled, with any source more than 5% away from it rejected, instead of a plain average - one exchange returning a bad quote can no longer drag the price your customers are charged. Small source counts are handled explicitly rather than pretending a median exists: with two sources they must agree and the lower is used, and with three or more at least two must corroborate each other

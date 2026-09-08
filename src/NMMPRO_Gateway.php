@@ -4,22 +4,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Gateway extends WC_Payment_Gateway {
+class NMMPRO_Gateway extends WC_Payment_Gateway {
     private $cryptos;
     private $gapLimit;
 
     public function __construct() {
-        
-        
-        $cryptoArray = NMM_Cryptocurrencies::get();
 
-        $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));  
+
+        $cryptoArray = NMMPRO_Cryptocurrencies::get();
+
+        $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
         $this->cryptos = $cryptoArray;
         $this->gapLimit = 2;
 
-        $this->id = 'nmmpro_gateway';
-        $this->icon = apply_filters('nmm_gateway_icon', NMM_PLUGIN_DIR . '/assets/img/bitcoin_logo_small.png');        
+        $this->id = 'nmm_gateway';
+        $this->icon = NMMPRO_Compat::filter('nmmpro_gateway_icon', NMMPRO_PLUGIN_DIR . '/assets/img/bitcoin_logo_small.png');
         $this->title = sanitize_text_field($nmmSettings->get_customer_gateway_message());
         $this->has_fields = true;
         $this->method_title = __('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce');
@@ -30,7 +30,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, array($this, 'process_admin_options'));
         add_action('woocommerce_thankyou_' . $this->id, array($this, 'thank_you_page'));
         // The order-pay receipt renderer is registered in the bootstrap
-        // (NMM_render_order_receipt), NOT here: the receipt template's
+        // (NMMPRO_render_order_receipt), NOT here: the receipt template's
         // do_action fires without anything having instantiated the payment
         // gateways first, so a constructor-registered hook would never exist
         // on that page.
@@ -49,21 +49,21 @@ class NMM_Gateway extends WC_Payment_Gateway {
     }
 
     public function admin_options() {
-        
+
         ?>
         <h2><?php esc_html_e('Nomiddleman Crypto Payments', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
         <div class="nmm-options">
             <table class="form-table">
                 <?php $this->generate_settings_html(); ?>
             </table><!--/.form-table-->
-            <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMM_REDUX_SLUG . '&tab=general')); ?>"><?php esc_html_e('Nomiddleman Plugin Settings', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
+            <a href="<?php echo esc_url(admin_url('admin.php?page=' . NMMPRO_REDUX_SLUG . '&tab=general')); ?>"><?php esc_html_e('Nomiddleman Plugin Settings', 'nomiddleman-crypto-payments-for-woocommerce'); ?></a>
         </div>
-        <?php        
+        <?php
     }
 
     // WooCommerce Admin Payment Method Settings
     public function init_form_fields() {
-                
+
         // general settings
         $generalSettings = array(
             'general_settings' => array(
@@ -79,15 +79,15 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 'class' => 'nmm-setting',
             ),
         );
-        
+
         $this->form_fields = $generalSettings;
     }
-    
+
     // This runs when the user hits the checkout page
     // We load our crypto select with valid crypto currencies
     public function payment_fields() {
 
-        $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+        $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
         $validCryptos = $nmmSettings->get_valid_selected_cryptos();
         $excludedCryptoIds = array();
@@ -99,16 +99,16 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
                 $mpk = $nmmSettings->get_mpk($cryptoId);
                 $hdMode = $nmmSettings->get_hd_mode($cryptoId);
-                $hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
+                $hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
 
                 $count = $hdRepo->count_ready();
 
                 if ($count < 1) {
                     try {
-                        NMM_Hd::force_new_address($cryptoId, $mpk, $hdMode);                        
+                        NMMPRO_Hd::force_new_address($cryptoId, $mpk, $hdMode);
                     }
                     catch ( \Exception $e) {
-                        NMM_Util::log(__FILE__, __LINE__, 'UNABLE TO GENERATE HD ADDRESS FOR ' . $crypto->get_name() . ' ADMIN MUST BE NOTIFIED. REMOVING CRYPTO FROM PAYMENT OPTIONS' . $e->getTraceAsString());
+                        NMMPRO_Util::log(__FILE__, __LINE__, 'UNABLE TO GENERATE HD ADDRESS FOR ' . $crypto->get_name() . ' ADMIN MUST BE NOTIFIED. REMOVING CRYPTO FROM PAYMENT OPTIONS' . $e->getTraceAsString());
                         $excludedCryptoIds[] = $cryptoId;
                     }
                 }
@@ -118,14 +118,14 @@ class NMM_Gateway extends WC_Payment_Gateway {
         $selectOptions = $this->get_select_options_for_valid_cryptos($excludedCryptoIds);
 
         woocommerce_form_field(
-            'nmm_currency_id', array(
-                'type'     => 'select',                
+            'nmmpro_currency_id', array(
+                'type'     => 'select',
                 'label'    => __('Choose a cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce'),
                 'required' => true,
                 'default' => 'BTC',
                 'options'  => $selectOptions,
             )
-        );    
+        );
     }
 
     // This runs when the customer selects Place Order, before process_payment, has nothing to do with the other validation methods
@@ -133,12 +133,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // if the currently selected gateway is this gateway we set transients related to conversions and if something goes wrong we prevent the customer from hitting the thank you page  by throwing the WooCommerce Error Notice.
         if (WC()->session->get('chosen_payment_method') === $this->id) {
             // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce verifies its checkout nonce before invoking gateway hooks.
-            if (empty($_POST['nmm_currency_id'])) {
+            if (empty($_POST['nmmpro_currency_id'])) {
                 wc_add_notice(__('Please choose a cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
                 return;
             }
             try {
-                $chosenCryptoId = sanitize_text_field($_POST['nmm_currency_id']); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- checked against the configured crypto list below; a slashed value cannot match and is rejected.
+                $chosenCryptoId = sanitize_text_field($_POST['nmmpro_currency_id']); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- checked against the configured crypto list below; a slashed value cannot match and is rejected.
                 if (!array_key_exists($chosenCryptoId, $this->cryptos)) {
                     wc_add_notice(__('Please choose a valid cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
                     return;
@@ -146,12 +146,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 $crypto = $this->cryptos[$chosenCryptoId];
                 $curr = get_woocommerce_currency();
                 $cryptoPerUsd = $this->get_crypto_value_in_usd($crypto->get_id(), $crypto->get_update_interval());
-                
+
                 // this is just a check to make sure we can hit the currency exchange if we need to
-                $usdTotal = NMM_Exchange::get_order_total_in_usd(1.0, $curr);
+                $usdTotal = NMMPRO_Exchange::get_order_total_in_usd(1.0, $curr);
             }
             catch ( \Exception $e) {
-                NMM_Util::log(__FILE__, __LINE__, $e->getMessage());
+                NMMPRO_Util::log(__FILE__, __LINE__, $e->getMessage());
                 wc_add_notice($e->getMessage(), 'error');
             }
             // phpcs:enable
@@ -162,17 +162,17 @@ class NMM_Gateway extends WC_Payment_Gateway {
     public function process_payment($order_id) {
         $order = wc_get_order($order_id);
 
-        // Classic checkout posts nmm_currency_id directly; the Blocks checkout
+        // Classic checkout posts nmmpro_currency_id directly; the Blocks checkout
         // delivers it via the Store API's paymentMethodData, which WooCommerce
         // also surfaces through $_POST for legacy gateways.
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce/Store API verify their own nonces before process_payment runs.
         // phpcs:disable WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- the value must match a configured crypto id exactly; a slashed value cannot match and is rejected, so wp_unslash() would be a no-op and is deferred to avoid any data-flow change in this release.
-        if (empty($_POST['nmm_currency_id']) || !array_key_exists(sanitize_text_field($_POST['nmm_currency_id']), $this->cryptos)) {
+        if (empty($_POST['nmmpro_currency_id']) || !array_key_exists(sanitize_text_field($_POST['nmmpro_currency_id']), $this->cryptos)) {
             wc_add_notice(__('Please choose a cryptocurrency.', 'nomiddleman-crypto-payments-for-woocommerce'), 'error');
             return array('result' => 'failure');
         }
 
-        $selectedCryptoId = sanitize_text_field($_POST['nmm_currency_id']);
+        $selectedCryptoId = sanitize_text_field($_POST['nmmpro_currency_id']);
         // phpcs:enable
         WC()->session->set('chosen_crypto_id', $selectedCryptoId);
 
@@ -224,9 +224,9 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
     // This is called after process payment, when the customer places the order
     public function thank_you_page($order_id) {
-        $cssPath = NMM_PLUGIN_DIR . '/assets/css/nmm-thank-you-page.css';
-        wp_enqueue_style('nmm-styles', $cssPath);
-        wp_enqueue_script('nmm-pay', NMM_PLUGIN_DIR . '/assets/js/nmm-pay.js', array(), NMM_VERSION, true);
+        $cssPath = NMMPRO_PLUGIN_DIR . '/assets/css/nmm-thank-you-page.css';
+        wp_enqueue_style('nmm-styles', $cssPath, array(), NMMPRO_VERSION);
+        wp_enqueue_script('nmm-pay', NMMPRO_PLUGIN_DIR . '/assets/js/nmm-pay.js', array(), NMMPRO_VERSION, true);
         wp_localize_script('nmm-pay', 'nmmPayI18n', array(
             'confirmInWallet' => __('Confirm the payment in your wallet…', 'nomiddleman-crypto-payments-for-woocommerce'),
             /* translators: %s: truncated transaction hash */
@@ -238,7 +238,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             /* translators: 1: amount received, 2: amount expected */
             'partial' => __('Partial payment received: %1$s of %2$s. Please send the remaining amount to the same address.', 'nomiddleman-crypto-payments-for-woocommerce'),
         ));
-        
+
         try {
             $order = wc_get_order($order_id);
             if (!$order) {
@@ -298,7 +298,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // \Throwable, not \Exception: on PHP 8 an undefined-index/null
             // dereference in the display path raises an \Error, which must
             // render this notice instead of a 500 on the customer's order page.
-            NMM_Util::log(__FILE__, __LINE__, 'Error rendering the payment page: ' . $e->getMessage());
+            NMMPRO_Util::log(__FILE__, __LINE__, 'Error rendering the payment page: ' . $e->getMessage());
             $this->render_checkout_error($e->getMessage());
         }
     }
@@ -344,7 +344,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
      * credit a stranger's order.
      */
     private function order_can_initialize($order, $allowFailedRetry = false) {
-        if (NMM_Hd::order_awaits_payment($order)) {
+        if (NMMPRO_Hd::order_awaits_payment($order)) {
             return true;
         }
 
@@ -373,7 +373,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // asking the customer to pay again, and putting a monitored address on
         // an order nobody is watching.
         if (!$this->order_can_initialize($order, $allowFailedRetry)) {
-            NMM_Util::log(__FILE__, __LINE__, 'Not initializing payment for order ' . $order_id . ': status is ' . $order->get_status() . ', which is not awaiting payment.');
+            NMMPRO_Util::log(__FILE__, __LINE__, 'Not initializing payment for order ' . $order_id . ': status is ' . $order->get_status() . ', which is not awaiting payment.');
             return array('outcome' => 'not_payable', 'message' => '');
         }
         if (!empty($order->get_meta('wallet_address'))) {
@@ -387,7 +387,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // from the address recorded in the payment table, leaving the
             // displayed address unmonitored. Uses the same crash-safe MySQL
             // advisory lock the cron uses.
-            $lockResult = NMM_Util::acquire_order_init_lock($order_id);
+            $lockResult = NMMPRO_Util::acquire_order_init_lock($order_id);
             $initializing = false; // becomes true once we commit to allocating
 
             try {
@@ -414,7 +414,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // admin, a webhook, or the verifier. Allocating now would revive
                 // a dead order and push it back to on-hold.
                 if (!$this->order_can_initialize($order, $allowFailedRetry)) {
-                    NMM_Util::log(__FILE__, __LINE__, 'Order ' . $order_id . ' became ' . $order->get_status() . ' while waiting for the init lock; not initializing payment.');
+                    NMMPRO_Util::log(__FILE__, __LINE__, 'Order ' . $order_id . ' became ' . $order->get_status() . ' while waiting for the init lock; not initializing payment.');
                     return array('outcome' => 'not_payable', 'message' => '');
                 }
 
@@ -426,7 +426,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     // decides what "busy" means for its context (the thank-you
                     // fallback shows a refresh notice; process_payment just
                     // redirects and lets the order page catch up).
-                    NMM_Util::log(__FILE__, __LINE__, 'Order-init lock busy for order ' . $order_id . '; another request is still initializing.', 'warning');
+                    NMMPRO_Util::log(__FILE__, __LINE__, 'Order-init lock busy for order ' . $order_id . '; another request is still initializing.', 'warning');
                     return array('outcome' => 'busy', 'message' => '');
                 }
 
@@ -434,7 +434,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     // null: advisory locks are unavailable on this host. Degrade to
                     // initializing without overlap protection (matching the pre-lock
                     // behaviour) rather than never allocating an address at all.
-                    NMM_Util::log(__FILE__, __LINE__, 'Advisory locks unavailable on this host; initializing order ' . $order_id . ' without overlap protection.', 'warning');
+                    NMMPRO_Util::log(__FILE__, __LINE__, 'Advisory locks unavailable on this host; initializing order ' . $order_id . ' without overlap protection.', 'warning');
                 }
 
             // From here we are allocating; a throw past this point must fail the
@@ -449,21 +449,21 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // insert, leaving the previous attempt's address monitored while we
             // show the customer a different, unwatched one. Paid/cancelled rows
             // are real records and are never touched.
-            $staleRepo = new NMM_Payment_Repo();
+            $staleRepo = new NMMPRO_Payment_Repo();
             $staleRepo->delete_unpaid_for_order($order_id);
 
-            $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+            $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
             if ($requestedCryptoId !== null && array_key_exists($requestedCryptoId, $this->cryptos)) {
                 // Checkout path: persist the submitting request's coin here,
                 // under the lock, so it can never be overwritten between
                 // another worker reading it and committing an address for it.
-                $order->update_meta_data('nmm_chosen_crypto_id', $requestedCryptoId);
+                $order->update_meta_data('nmmpro_chosen_crypto_id', $requestedCryptoId);
                 $order->save();
                 $chosenCryptoId = $requestedCryptoId;
             }
             else {
-                $chosenCryptoId = $order->get_meta('nmm_chosen_crypto_id');
+                $chosenCryptoId = ($order->get_meta('nmmpro_chosen_crypto_id') ?: $order->get_meta('nmm_chosen_crypto_id'));
                 if (empty($chosenCryptoId) && $this->session_usable()) {
                     // Legacy fallback only: orders written since the meta was
                     // introduced always carry it, and this initializer can now
@@ -483,52 +483,42 @@ class NMM_Gateway extends WC_Payment_Gateway {
             // get current price of crypto
 
             $cryptoPerUsd = $this->get_crypto_value_in_usd($cryptoId, $crypto->get_update_interval());
-            
-            // handle different woocommerce currencies and get the order total in USD
-            $curr = get_woocommerce_currency(); 
 
-            $usdTotal = NMM_Exchange::get_order_total_in_usd($order->get_total(), $curr);            
-            
+            // handle different woocommerce currencies and get the order total in USD
+            $curr = get_woocommerce_currency();
+
+            $usdTotal = NMMPRO_Exchange::get_order_total_in_usd($order->get_total(), $curr);
+
             $cryptoMarkupPercent = $nmmSettings->get_markup($cryptoId);
 
             if (!is_numeric($cryptoMarkupPercent)) {
                 $cryptoMarkupPercent = 0.0;
             }
 
-            $cryptoMarkup = $cryptoMarkupPercent / 100.0;            
-            $cryptoPriceRatio = 1.0 + $cryptoMarkup;            
-            $cryptoTotalPreMarkup = round($usdTotal / $cryptoPerUsd, $crypto->get_round_precision(), PHP_ROUND_HALF_UP);            
-            $cryptoTotal = $cryptoTotalPreMarkup * $cryptoPriceRatio;
-
-            $dustAmount = apply_filters('nmm_dust_amount', 0.000000000000000000, $cryptoId, $cryptoPerUsd, $crypto->get_round_precision(), $usdTotal, $cryptoTotal);
-            //error_log('filter dust amount: ' . $dustAmount);
-            //error_log('cryptoTotal pre-dust: ' . $cryptoTotal);
-            $cryptoTotal += $dustAmount;
-            //error_log('cryptoTotal post-dust: ' . $cryptoTotal);
-            
-            // format the crypto amount based on crypto
-            // An order must never be issued for nothing. Any route to a zero (or
-            // negative) total - an absurd exchange rate, a pathological markup,
-            // a dust filter gone wrong - would otherwise hand the customer an
-            // address to send 0 to, and the verifier would then read "received
-            // >= 0" as fully paid and complete it. Refuse here, where we still
-            // have a customer to tell, rather than shipping goods for free.
-            if (!is_finite($cryptoTotal) || $cryptoTotal <= 0) {
-                NMM_Util::log(__FILE__, __LINE__, 'Refusing to issue order ' . $order_id . ': computed ' . $cryptoId . ' total is ' . var_export($cryptoTotal, true) . ' (usd ' . var_export($usdTotal, true) . ', rate ' . var_export($cryptoPerUsd, true) . ').', 'error');
+            $usdRate = NMMPRO_Exchange::get_order_total_in_usd('1', $curr);
+            $cryptoTotal = NMMPRO_Amount::quote($order->get_total(), $usdRate, $cryptoPerUsd,
+                $cryptoMarkupPercent, $crypto->get_round_precision());
+            $dustAmount = NMMPRO_Compat::filter('nmmpro_dust_amount', '0', $cryptoId, $cryptoPerUsd,
+                $crypto->get_round_precision(), $usdTotal, $cryptoTotal);
+            $units = NMMPRO_Amount::add(
+                NMMPRO_Amount::to_units($cryptoTotal, $crypto->get_round_precision()),
+                NMMPRO_Amount::to_units(NMMPRO_Amount::rounded($dustAmount, $crypto->get_round_precision()), $crypto->get_round_precision())
+            );
+            if ($units === '0') {
                 throw new \Exception(esc_html__('We could not work out a valid payment amount for this order. Please try again shortly, or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
             }
-
-            $formattedCryptoTotal = NMM_Cryptocurrencies::get_price_string($cryptoId, $cryptoTotal);
+            $formattedCryptoTotal = NMMPRO_Amount::from_units($units, $crypto->get_round_precision());
+            $cryptoTotal = $formattedCryptoTotal;
 
             $order->update_meta_data('crypto_amount', $formattedCryptoTotal);
 
-            NMM_Util::log(__FILE__, __LINE__, 'Crypto total: ' . $cryptoTotal . ' Formatted Total: ' . $formattedCryptoTotal);
+            NMMPRO_Util::log(__FILE__, __LINE__, 'Crypto total: ' . $cryptoTotal . ' Formatted Total: ' . $formattedCryptoTotal);
 
             // if hd is enabled we have stuff to do
             if ($nmmSettings->hd_enabled($cryptoId)) {
                 $mpk = $nmmSettings->get_mpk($cryptoId);
                 $hdMode = $nmmSettings->get_hd_mode($cryptoId);
-                $hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
+                $hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
 
                 // Atomically claim the oldest ready address for this order.
                 $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
@@ -536,7 +526,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // if none was available, derive one and try to claim again
                 if (!$orderWalletAddress) {
                     try {
-                        NMM_Hd::force_new_address($cryptoId, $mpk, $hdMode);
+                        NMMPRO_Hd::force_new_address($cryptoId, $mpk, $hdMode);
                         $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
                     }
                     catch ( \Exception $e) {
@@ -559,13 +549,13 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     $orderWalletAddress,
                     $formattedCryptoTotal,
                     $cryptoId);
-                
+
             }
             // HD is not enabled, just handle static wallet or carousel mode
             else {
                 if ($cryptoId === 'XMR' && $nmmSettings->autopay_enabled('XMR')) {
                     // fresh subaddress per order from the merchant's wallet RPC
-                    $orderWalletAddress = NMM_Monero::create_subaddress($order_id);
+                    $orderWalletAddress = NMMPRO_Monero::create_subaddress($order_id);
                 }
                 else {
                     $orderWalletAddress = $nmmSettings->get_next_carousel_address($cryptoId);
@@ -573,7 +563,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
 
                 // handle payment verification feature
                 if ($nmmSettings->autopay_enabled($cryptoId)) {
-                    $paymentRepo = new NMM_Payment_Repo();
+                    $paymentRepo = new NMMPRO_Payment_Repo();
 
                     // The row IS the monitoring: Autopay only ever sweeps addresses
                     // it finds in this table. If the insert fails we must fail the
@@ -593,7 +583,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                     $cryptoId,
                     $orderWalletAddress);
             }
-            
+
             // Legacy session copy (emails read order meta first since 2.9.9)
             if ($this->session_usable()) {
                 WC()->session->set($cryptoId . '_amount', $formattedCryptoTotal);
@@ -627,7 +617,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                         $failedOrder->update_status('wc-failed', sprintf(__('Error Message: %s', 'nomiddleman-crypto-payments-for-woocommerce'), $e->getMessage()));
                     }
                 }
-                NMM_Util::log(__FILE__, __LINE__, 'Something went wrong during checkout: ' . $e->getMessage());
+                NMMPRO_Util::log(__FILE__, __LINE__, 'Something went wrong during checkout: ' . $e->getMessage());
                 return array('outcome' => 'failed', 'message' => $e->getMessage());
             }
             finally {
@@ -636,7 +626,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 // and AFTER the failure handling above - so the lock covers the
                 // whole of initialization and its error handling together.
                 if ($lockResult === '1') {
-                    NMM_Util::release_order_init_lock($order_id);
+                    NMMPRO_Util::release_order_init_lock($order_id);
                 }
             }
     }
@@ -669,7 +659,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // failed missed 'refunded' (WooCommerce does not count it as paid, so
         // is_paid() above returns false for it) and every custom non-payable
         // status a site might declare.
-        if (!NMM_Hd::order_awaits_payment($order)) {
+        if (!NMMPRO_Hd::order_awaits_payment($order)) {
             echo '<p class="nmm-status-cancelled">' . esc_html__('This order is no longer awaiting payment. Please do not send any funds to the address shown previously. If you believe this is an error, contact the store.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
             return;
         }
@@ -694,7 +684,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         if (!($order instanceof WC_Order) || $order->get_payment_method() !== $this->id) {
             return;
         }
-        $chosenCrypto = $order->get_meta('nmm_chosen_crypto_id');
+        $chosenCrypto = ($order->get_meta('nmmpro_chosen_crypto_id') ?: $order->get_meta('nmm_chosen_crypto_id'));
         if (empty($chosenCrypto)) {
             $chosenCrypto = $order->get_meta('crypto_type_id');
         }
@@ -719,7 +709,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         }
         $orderId = $order->get_id();
 
-        $formattedTotal = NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $orderCryptoTotal);
+        $formattedTotal = NMMPRO_Cryptocurrencies::get_price_string($crypto->get_id(), $orderCryptoTotal);
         $totalLine = ($crypto->get_symbol() === '')
             ? $formattedTotal . ' ' . $crypto->get_id()
             : $crypto->get_symbol() . $formattedTotal;
@@ -733,11 +723,11 @@ class NMM_Gateway extends WC_Payment_Gateway {
             return;
         }
 
-        $qrData = NMM_Qr::payment_uri($crypto, $orderWalletAddress, $orderCryptoTotal);
+        $qrData = NMMPRO_Qr::payment_uri($crypto, $orderWalletAddress, $orderCryptoTotal);
 
         // embedded as an inline (CID) attachment when PHPMailer sends this
         // email; mailers that bypass PHPMailer simply show the text details
-        $cid = NMM_Qr::stash_email_image($orderId, $qrData);
+        $cid = NMMPRO_Qr::stash_email_image($orderId, $qrData);
 
         ?>
         <h2><?php esc_html_e('Additional Details', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
@@ -767,9 +757,9 @@ class NMM_Gateway extends WC_Payment_Gateway {
     private function get_select_options_for_valid_cryptos($excludedCryptoIds = array()) {
         $selectOptionArray = array();
 
-        $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+        $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
-        foreach (NMM_Cryptocurrencies::get_alpha() as $crypto) {
+        foreach (NMMPRO_Cryptocurrencies::get_alpha() as $crypto) {
             if (in_array($crypto->get_id(), $excludedCryptoIds, true)) {
                 continue;
             }
@@ -782,12 +772,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
     }
 
     private function output_thank_you_html($crypto, $orderWalletAddress, $cryptoTotal, $orderId) {
-        $formattedPrice = NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $cryptoTotal);
-        $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+        $formattedPrice = NMMPRO_Cryptocurrencies::get_price_string($crypto->get_id(), $cryptoTotal);
+        $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
-        $customerMessage = apply_filters('nmm_customer_message', $nmmSettings->get_customer_payment_message($crypto), $crypto, $orderId, $formattedPrice, $orderWalletAddress);
+        $customerMessage = NMMPRO_Compat::filter('nmmpro_customer_message', $nmmSettings->get_customer_payment_message($crypto), $crypto, $orderId, $formattedPrice, $orderWalletAddress);
 
-        $qrData = NMM_Qr::payment_uri($crypto, $orderWalletAddress, $cryptoTotal);
+        $qrData = NMMPRO_Qr::payment_uri($crypto, $orderWalletAddress, $cryptoTotal);
 
         // admin-entered HTML; allow post-safe markup but never scripts
         echo wp_kses_post($customerMessage);
@@ -798,7 +788,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
             <li class="woocommerce-order-overview__qr-code">
                 <p style="word-wrap: break-word;"><?php esc_html_e('QR Code payment:', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                 <div class="qr-code-container">
-                    <?php echo NMM_Qr::svg($qrData, 200); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- trusted SVG markup generated in memory by this plugin. ?>
+                    <?php echo NMMPRO_Qr::svg($qrData, 200); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- trusted SVG markup generated in memory by this plugin. ?>
                 </div>
             </li>
             <li>
@@ -811,7 +801,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </p>
             </li>
             <li>
-                <p><?php esc_html_e('Currency:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> 
+                <p><?php esc_html_e('Currency:', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
                     <strong>
                         <?php
                             echo '<img style="display:inline;height:23px;width:23px;vertical-align:middle;" src="' . esc_url($crypto->get_logo_file_path()) . '" />';
@@ -823,10 +813,10 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </p>
             </li>
             <li>
-                <p style="word-wrap: break-word;"><?php esc_html_e('Total:', 'nomiddleman-crypto-payments-for-woocommerce'); ?> 
+                <p style="word-wrap: break-word;"><?php esc_html_e('Total:', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
                     <strong>
                         <span class="woocommerce-Price-amount amount">
-                            <?php 
+                            <?php
                                 if ($crypto->get_symbol() === '') {
                                     echo '<span class="all-copy">' . esc_html($formattedPrice) . '</span><span class="no-copy">&nbsp;' . esc_html($crypto->get_id()) . '</span>';
                                 }
@@ -839,7 +829,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 </p>
             </li>
         </ul>
-        
+
         <?php
         $order = wc_get_order($orderId);
         $orderKey = $order ? $order->get_order_key() : '';
@@ -851,8 +841,8 @@ class NMM_Gateway extends WC_Payment_Gateway {
                 <button type="button" id="nmm-wallet-pay" class="button alt" style="display:none;"
                         data-to="<?php echo esc_attr($orderWalletAddress); ?>"
                         data-contract="<?php echo esc_attr($crypto->is_erc20_token() ? $crypto->get_erc20_contract() : ''); ?>"
-                        data-chain="<?php echo esc_attr(NMM_Cryptocurrencies::evm_chain_id($crypto->get_id())); ?>"
-                        data-units="<?php echo esc_attr(NMM_Qr::to_base_units($cryptoTotal, $crypto->get_round_precision())); ?>">
+                        data-chain="<?php echo esc_attr(NMMPRO_Cryptocurrencies::evm_chain_id($crypto->get_id())); ?>"
+                        data-units="<?php echo esc_attr(NMMPRO_Qr::to_base_units($cryptoTotal, $crypto->get_round_precision())); ?>">
                     <?php esc_html_e('Pay in browser wallet', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
                 </button>
                 <p id="nmm-wallet-msg" aria-live="polite"></p>
@@ -876,7 +866,7 @@ class NMM_Gateway extends WC_Payment_Gateway {
         // Indexing $this->cryptos with it unguarded would raise an \Error on
         // PHP 8 and 500 the customer's order page on refresh.
         if (!is_string($chosenCrypto) || !array_key_exists($chosenCrypto, $this->cryptos)) {
-            NMM_Util::log(__FILE__, __LINE__, 'Unknown crypto_type_id for order ' . $orderId . '; cannot re-display payment details.', 'warning');
+            NMMPRO_Util::log(__FILE__, __LINE__, 'Unknown crypto_type_id for order ' . $orderId . '; cannot re-display payment details.', 'warning');
             echo '<p class="nmm-status-pending">' . esc_html__('We could not display your payment details for this order. Please contact the store for assistance.', 'nomiddleman-crypto-payments-for-woocommerce') . '</p>';
             return;
         }
@@ -886,12 +876,12 @@ class NMM_Gateway extends WC_Payment_Gateway {
     // this function hits all the crypto exchange APIs that the user selected, then averages them and returns a conversion rate for USD
     // if the user has selected no exchanges to fetch data from it instead takes the average from all of them
     private function get_crypto_value_in_usd($cryptoId, $updateInterval) {
-        $reduxSettings = get_option(NMM_REDUX_ID);
+        $reduxSettings = NMMPRO_Compat::get_option(NMMPRO_REDUX_ID);
         if (!array_key_exists('selected_price_apis', $reduxSettings)) {
             throw new \Exception(esc_html__('No price API selected. Please contact plug-in support.', 'nomiddleman-crypto-payments-for-woocommerce'));
         }
 
-        return NMM_Exchange::get_average_usd_price($cryptoId, $updateInterval, $reduxSettings['selected_price_apis']);
+        return NMMPRO_Exchange::get_average_usd_price($cryptoId, $updateInterval, $reduxSettings['selected_price_apis']);
     }
 }
 

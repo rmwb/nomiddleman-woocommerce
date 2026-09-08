@@ -1095,7 +1095,7 @@ class HdHelper
             $addrtype = chr(3);
         }
         if ($cryptoId === 'BTC' && $type === 'p2sh') {
-            if (NMM_Util::p_enabled()) {
+            if (NMMPRO_Util::p_enabled()) {
                 $addrtype = chr(5);
             }
             else {
@@ -1103,7 +1103,7 @@ class HdHelper
             }
         }
         if ($cryptoId === 'LTC' && $type === 'p2sh') {
-            if (NMM_Util::p_enabled()) {
+            if (NMMPRO_Util::p_enabled()) {
                 $addrtype = chr(50);
             }
             else {
@@ -1111,7 +1111,7 @@ class HdHelper
             }
         }
         if ($cryptoId === 'QTUM' && $type === 'p2sh') {
-            if (NMM_Util::p_enabled()) {
+            if (NMMPRO_Util::p_enabled()) {
                 $addrtype = chr(50);
             }
             else {

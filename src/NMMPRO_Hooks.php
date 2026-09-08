@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-function NMM_change_cancelled_email_note_subject_line($subject, $order) {
+function NMMPRO_change_cancelled_email_note_subject_line($subject, $order) {
 	/* translators: %d: order number */
 	$subject = sprintf(__('Order %d has been cancelled due to non-payment', 'nomiddleman-crypto-payments-for-woocommerce'), $order->get_id());
 
@@ -12,28 +12,28 @@ function NMM_change_cancelled_email_note_subject_line($subject, $order) {
 
 }
 
-function NMM_change_cancelled_email_heading($heading, $order) {
+function NMMPRO_change_cancelled_email_heading($heading, $order) {
 	$heading = __('Your order has been cancelled. Do not send any cryptocurrency to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce');
 
 	return $heading;
 }
 
-function NMM_change_partial_email_note_subject_line($subject, $order) {
+function NMMPRO_change_partial_email_note_subject_line($subject, $order) {
 	/* translators: %d: order number */
 	$subject = sprintf(__('Partial payment received for Order %d', 'nomiddleman-crypto-payments-for-woocommerce'), $order->get_id());
 
 	return $subject;
 }
 
-function NMM_change_partial_email_heading($heading, $order) {
+function NMMPRO_change_partial_email_heading($heading, $order) {
 	/* translators: %d: order number */
 	$heading = sprintf(__('Partial payment received for Order %d', 'nomiddleman-crypto-payments-for-woocommerce'), $order->get_id());
 
 	return $heading;
 }
 
-function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrderStatus, $newOrderStatus ) {	
-  
+function NMMPRO_update_database_when_admin_changes_order_status( $orderId, $oldOrderStatus, $newOrderStatus ) {
+
 	$paymentAmount = 0.0;
 
 	$order = wc_get_order($orderId);
@@ -48,9 +48,9 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 	if (empty($paymentAmount)) {
 		return;
 	}
-	
 
-	$paymentRepo = new NMM_Payment_Repo();
+
+	$paymentRepo = new NMMPRO_Payment_Repo();
 
 	// If admin updates from needs-payment to has-payment, stop looking for matching transactions
 	if ($oldOrderStatus === 'pending' && $newOrderStatus === 'processing') {
@@ -109,7 +109,7 @@ function NMM_update_database_when_admin_changes_order_status( $orderId, $oldOrde
 
 // Order-key-authenticated payment status for the thank-you page poller.
 // The key is only known to the customer who placed the order.
-function NMM_order_status_ajax() {
+function NMMPRO_order_status_ajax() {
 	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- authenticated by the WooCommerce order key below, which only the purchaser has.
 	$orderId = isset($_GET['order_id']) ? absint($_GET['order_id']) : 0;
 	$key = isset($_GET['key']) ? sanitize_text_field(wp_unslash($_GET['key'])) : '';
@@ -128,7 +128,7 @@ function NMM_order_status_ajax() {
 
 	if (!$paid) {
 		global $wpdb;
-		$tableName = $wpdb->prefix . NMM_HD_TABLE;
+		$tableName = $wpdb->prefix . NMMPRO_HD_TABLE;
 
 		$row = $wpdb->get_row($wpdb->prepare(
 			"SELECT `status`, `total_received`, `order_amount` FROM `$tableName` WHERE `order_id` = %d ORDER BY `id` DESC LIMIT 1",
@@ -150,9 +150,9 @@ function NMM_order_status_ajax() {
 	));
 }
 
-function NMM_first_mpk_address_ajax() {
+function NMMPRO_first_mpk_address_ajax() {
 
-		check_ajax_referer('nmm_first_mpk_address'); // phpcs:ignore -- the referer check IS the nonce verification for the $_POST reads below.
+		if (false === check_ajax_referer('nmmpro_first_mpk_address', false, false)) { check_ajax_referer('nmm_first_mpk_address'); } // phpcs:ignore -- the referer check IS the nonce verification for the $_POST reads below.
 
 		if (!current_user_can('manage_options')) {
 			wp_die('', '', 403);
@@ -168,11 +168,11 @@ function NMM_first_mpk_address_ajax() {
 		$hdMode = isset($_POST['hdMode']) ? sanitize_text_field($_POST['hdMode']) : '0';
 		// phpcs:enable WordPress.Security.ValidatedSanitizedInput.MissingUnslash
 
-		if (!NMM_Hd::is_valid_mpk($cryptoId, $mpk)) {
+		if (!NMMPRO_Hd::is_valid_mpk($cryptoId, $mpk)) {
 			return;
 		}
-		
-		if (!NMM_Util::p_enabled() && (NMM_Hd::is_valid_ypub($mpk) || NMM_Hd::is_valid_zpub($mpk))) {
+
+		if (!NMMPRO_Util::p_enabled() && (NMMPRO_Hd::is_valid_ypub($mpk) || NMMPRO_Hd::is_valid_zpub($mpk))) {
 			$message = __('You have entered a valid Segwit MPK.', 'nomiddleman-crypto-payments-for-woocommerce');
 			$message2 = __('Segwit MPKs (ypub/zpub) are not supported - please use an xpub.', 'nomiddleman-crypto-payments-for-woocommerce');
 
@@ -180,9 +180,9 @@ function NMM_first_mpk_address_ajax() {
 			wp_die();
 		}
 		else {
-			$firstAddress = NMM_Hd::create_hd_address($cryptoId, $mpk, 0, $hdMode);
-			$secondAddress = NMM_Hd::create_hd_address($cryptoId, $mpk, 1, $hdMode);
-			$thirdAddress = NMM_Hd::create_hd_address($cryptoId, $mpk, 2, $hdMode);
+			$firstAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 0, $hdMode);
+			$secondAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 1, $hdMode);
+			$thirdAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 2, $hdMode);
 
 			echo json_encode([$firstAddress, $secondAddress, $thirdAddress]);
 
@@ -190,25 +190,25 @@ function NMM_first_mpk_address_ajax() {
 		}
 }
 
-function NMM_filter_gateways($gateways){	
+function NMMPRO_filter_gateways($gateways){
     global $woocommerce;
-    
-    $nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
 
-    foreach (NMM_Cryptocurrencies::get() as $crypto) {
+    $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
+
+    foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
         if ($nmmSettings->crypto_selected_and_valid($crypto->get_id())) {
-        	$gateways[] = 'NMM_Gateway';
+	$gateways[] = 'NMMPRO_Gateway';
             return $gateways;
         }
     }
-    
+
     if (is_checkout()) {
 	    $gateways = array_values(array_filter($gateways, function ($g) {
-	        return $g !== 'NMM_Gateway';
+	        return $g !== 'NMMPRO_Gateway';
 	    }));
 	}
 	else {
-		$gateways[] = 'NMM_Gateway';
+		$gateways[] = 'NMMPRO_Gateway';
 	}
 
     return $gateways;

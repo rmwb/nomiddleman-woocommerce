@@ -11,7 +11,7 @@
  *   Run:  wp eval-file tests/test-carousel.php
  */
 
-if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !defined('NMM_CAROUSEL_TABLE')) {
+if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !defined('NMMPRO_CAROUSEL_TABLE')) {
 	echo "test-carousel: skipped (needs WordPress + DB)\n";
 	return;
 }
@@ -25,7 +25,7 @@ function cok($label, $cond, $extra = '') {
 function car_set_index($cryptoId, $index) {
 	global $wpdb;
 	$wpdb->query($wpdb->prepare(
-		"UPDATE `{$wpdb->prefix}" . NMM_CAROUSEL_TABLE . "` SET `current_index` = %d WHERE `cryptocurrency` = %s",
+		"UPDATE `{$wpdb->prefix}" . NMMPRO_CAROUSEL_TABLE . "` SET `current_index` = %d WHERE `cryptocurrency` = %s",
 		$index, $cryptoId
 	));
 }
@@ -33,7 +33,7 @@ function car_set_index($cryptoId, $index) {
 function car_index($cryptoId) {
 	global $wpdb;
 	return (int) $wpdb->get_var($wpdb->prepare(
-		"SELECT `current_index` FROM `{$wpdb->prefix}" . NMM_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s",
+		"SELECT `current_index` FROM `{$wpdb->prefix}" . NMMPRO_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s",
 		$cryptoId
 	));
 }
@@ -41,19 +41,19 @@ function car_index($cryptoId) {
 function car_rows($cryptoId) {
 	global $wpdb;
 	return (int) $wpdb->get_var($wpdb->prepare(
-		"SELECT COUNT(*) FROM `{$wpdb->prefix}" . NMM_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s",
+		"SELECT COUNT(*) FROM `{$wpdb->prefix}" . NMMPRO_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s",
 		$cryptoId
 	));
 }
 
 function car_next() {
-	$carousel = new NMM_Carousel('BTC');
+	$carousel = new NMMPRO_Carousel('BTC');
 	return $carousel->get_next_address();
 }
 
-$repo = new NMM_Carousel_Repo();
+$repo = new NMMPRO_Carousel_Repo();
 
-// Real addresses so NMM_Cryptocurrencies::is_valid_wallet_address('BTC', ...)
+// Real addresses so NMMPRO_Cryptocurrencies::is_valid_wallet_address('BTC', ...)
 // accepts them. The junk below deliberately avoids a leading 1/3 and the
 // substring 'bc', which the BTC pattern would otherwise match.
 $addrs = array(
@@ -78,8 +78,8 @@ cok('the fourth claim wraps to the first seat',       car_next() === $addrs[0]);
 // customers the same address, then lost one of the two increments. The claim is
 // now inside get_next_address(), as a single atomic statement.
 car_set_index('BTC', 0);
-$requestA = new NMM_Carousel('BTC');
-$requestB = new NMM_Carousel('BTC');
+$requestA = new NMMPRO_Carousel('BTC');
+$requestB = new NMMPRO_Carousel('BTC');
 $a = $requestA->get_next_address();
 $b = $requestB->get_next_address();
 cok('two overlapping checkouts never share a seat',   $a !== $b, "$a vs $b");
@@ -150,7 +150,7 @@ cok('every claimed seat is within range',              min($seats) === 0 && max(
 // or a row removed by hand) is seeded on demand rather than failing checkout ---
 global $wpdb;
 $wpdb->query($wpdb->prepare(
-	"DELETE FROM `{$wpdb->prefix}" . NMM_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s", 'BTC'
+	"DELETE FROM `{$wpdb->prefix}" . NMMPRO_CAROUSEL_TABLE . "` WHERE `cryptocurrency` = %s", 'BTC'
 ));
 cok('the counter row is really gone',                  car_rows('BTC') === 0);
 $seeded = $repo->claim_next_index('BTC', 3);
@@ -185,28 +185,28 @@ $zecT1     = 't1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs';
 $zecSprout = 'zcU1Cd6zYyZCd2VJF8yKgmzjxdiiU1rgTTjEwoN1CGUWCziPkUTXUjXmX7TMqdMNsTfuiGN1jQoVN4kGxUR4sAPN4XZ7pxb';
 
 cok('vector check: t1 is valid AND Autopay-verifiable',
-	NMM_Cryptocurrencies::is_valid_wallet_address('ZEC', $zecT1) && NMM_Address::is_autopay_verifiable_form('ZEC', $zecT1));
+	NMMPRO_Cryptocurrencies::is_valid_wallet_address('ZEC', $zecT1) && NMMPRO_Address::is_autopay_verifiable_form('ZEC', $zecT1));
 cok('vector check: Sprout is valid but NOT Autopay-verifiable',
-	NMM_Cryptocurrencies::is_valid_wallet_address('ZEC', $zecSprout) && !NMM_Address::is_autopay_verifiable_form('ZEC', $zecSprout));
+	NMMPRO_Cryptocurrencies::is_valid_wallet_address('ZEC', $zecSprout) && !NMMPRO_Address::is_autopay_verifiable_form('ZEC', $zecSprout));
 
 // The harness DB persists between runs, so capture the merchant's real ZEC
 // state and put it back at the end - including the case where 'ZEC_mode' was
 // never set at all, which must be restored as ABSENT, not as ''.
-$zecSettings    = get_option(NMM_REDUX_ID);
+$zecSettings    = get_option(NMMPRO_REDUX_ID);
 $zecModeWasSet  = is_array($zecSettings) && array_key_exists('ZEC_mode', $zecSettings);
 $zecModeOrig    = $zecModeWasSet ? $zecSettings['ZEC_mode'] : null;
 $zecBufferOrig  = $repo->get_buffer('ZEC');
 $zecIndexOrig   = car_index('ZEC');
 
 function car_set_zec_mode($mode) {
-	$s = get_option(NMM_REDUX_ID);
+	$s = get_option(NMMPRO_REDUX_ID);
 	if (!is_array($s)) { $s = array(); }
 	if ($mode === null) { unset($s['ZEC_mode']); } else { $s['ZEC_mode'] = $mode; }
-	update_option(NMM_REDUX_ID, $s);
+	update_option(NMMPRO_REDUX_ID, $s);
 }
 
 function car_zec_next() {
-	$carousel = new NMM_Carousel('ZEC');
+	$carousel = new NMMPRO_Carousel('ZEC');
 	return $carousel->get_next_address();
 }
 
@@ -265,7 +265,7 @@ cok('ZEC Classic: the shielded address IS returned',   $zecClassic === $zecSprou
 car_set_zec_mode($zecModeWasSet ? $zecModeOrig : null);
 $repo->set_buffer('ZEC', is_array($zecBufferOrig) ? $zecBufferOrig : array());
 car_set_index('ZEC', $zecIndexOrig);
-$zecSettingsBack = get_option(NMM_REDUX_ID);
+$zecSettingsBack = get_option(NMMPRO_REDUX_ID);
 cok('ZEC mode option restored',
 	array_key_exists('ZEC_mode', (array) $zecSettingsBack) === $zecModeWasSet
 		&& (!$zecModeWasSet || $zecSettingsBack['ZEC_mode'] === $zecModeOrig));
@@ -273,7 +273,7 @@ cok('ZEC buffer restored',
 	$repo->get_buffer('ZEC') === (is_array($zecBufferOrig) ? $zecBufferOrig : array()));
 
 // Leave the table as we found it for a clean re-run.
-NMM_Carousel_Repo::init();
+NMMPRO_Carousel_Repo::init();
 $repo->set_buffer('BTC', array());
 car_set_index('BTC', 0);
 

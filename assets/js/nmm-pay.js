@@ -80,7 +80,7 @@
 
 		var tick = function () {
 			var url = status.dataset.ajax
-				+ '?action=nmm_order_status'
+				+ '?action=nmmpro_order_status'
 				+ '&order_id=' + encodeURIComponent(status.dataset.order)
 				+ '&key=' + encodeURIComponent(status.dataset.key);
 

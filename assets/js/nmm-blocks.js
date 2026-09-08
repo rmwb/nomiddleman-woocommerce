@@ -12,7 +12,7 @@
 	var useEffect = window.wp.element.useEffect;
 	var decodeEntities = window.wp.htmlEntities.decodeEntities;
 
-	var settings = getSetting('nmmpro_gateway_data', {});
+	var settings = getSetting('nmm_gateway_data', {});
 	var i18n = settings.i18n || {};
 	var cryptos = settings.cryptos || [];
 	var defaultCrypto = cryptos.length > 0 ? cryptos[0].id : '';
@@ -39,7 +39,7 @@
 						type: responseTypes.SUCCESS,
 						meta: {
 							paymentMethodData: {
-								nmm_currency_id: selected
+								nmmpro_currency_id: selected
 							}
 						}
 					};
@@ -55,13 +55,13 @@
 			{ className: 'nmm-blocks-payment-method' },
 			el(
 				'label',
-				{ htmlFor: 'nmm_currency_id', style: { display: 'block', marginBottom: '4px' } },
+				{ htmlFor: 'nmmpro_currency_id', style: { display: 'block', marginBottom: '4px' } },
 				i18n.chooseLabel || 'Choose a cryptocurrency'
 			),
 			el(
 				'select',
 				{
-					id: 'nmm_currency_id',
+					id: 'nmmpro_currency_id',
 					value: selected,
 					style: { width: '100%' },
 					onChange: function (event) {
@@ -76,7 +76,7 @@
 	}
 
 	registerPaymentMethod({
-		name: 'nmmpro_gateway',
+		name: 'nmm_gateway',
 		label: label,
 		ariaLabel: label,
 		content: el(Content, null),

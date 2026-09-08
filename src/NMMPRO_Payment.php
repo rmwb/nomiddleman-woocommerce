@@ -4,15 +4,44 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Payment {
+class NMMPRO_Payment {
 
 	// How far before an order's creation time a matching transaction may be dated
 	// and still be accepted, absorbing block-timestamp clock skew while rejecting
 	// genuinely pre-order transactions on reused addresses.
 	const TX_ORDER_SKEW_GRACE_SEC = 3600;
 
+    public static function resume_verified_orders() {
+        global $wpdb;
+        $table = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
+        $cursor = (int) NMMPRO_Compat::get_option('nmmpro_completion_cursor', 0);
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM `$table` WHERE status='completing' AND id>%d ORDER BY id LIMIT 25", $cursor), ARRAY_A);
+        // Advance even when a hook repeatedly fails, so later orders are not starved.
+        NMMPRO_Compat::update_option('nmmpro_completion_cursor', count((array) $rows) === 25 ? (int) end($rows)['id'] : 0, false);
+        foreach ((array) $rows as $row) {
+            $coin = $row['cryptocurrency']; $address = $row['address'];
+            if (NMMPRO_Util::acquire_address_match_lock($coin, $address) !== '1') { continue; }
+            try {
+                $status = $wpdb->get_var($wpdb->prepare("SELECT status FROM `$table` WHERE id=%d", $row['id']));
+                if ($status !== 'completing') { continue; }
+                $order = wc_get_order($row['order_id']);
+                if (!$order || $order->has_status(array('cancelled','failed','refunded','trash'))) {
+                    if ($order) { $order->add_order_note(__('A verified cryptocurrency payment requires manual reconciliation.', 'nomiddleman-crypto-payments-for-woocommerce')); }
+                    (new NMMPRO_Payment_Repo())->set_status($row['order_id'], $row['order_amount'], 'review');
+                    continue;
+                }
+                if (!$order->is_paid()) {
+                    $order->update_meta_data('transaction_hash', $row['tx_hash']);
+                    $order->payment_complete();
+                }
+                if ($order->is_paid()) { (new NMMPRO_Payment_Repo())->set_status($row['order_id'], $row['order_amount'], 'paid'); }
+            } catch (\Throwable $e) { NMMPRO_Util::log(__FILE__, __LINE__, 'Verified payment completion will retry: ' . $e->getMessage(), 'error'); }
+            finally { NMMPRO_Util::release_address_match_lock($coin, $address); }
+        }
+    }
+
 	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
-		$paymentRepo = new NMM_Payment_Repo();
+		$paymentRepo = new NMMPRO_Payment_Repo();
 
 		// Observe the cron cadence FIRST, on every tick INCLUDING empty ones.
 		// The gap since the previous run feeds scan_plan below: budget math uses
@@ -25,8 +54,8 @@ class NMM_Payment {
 		// mid-tick crash degrades to the nominal 60s assumption on the next run
 		// instead of compounding its budget.
 		$now = time();
-		$lastRun = (int) get_option('nmm_autopay_scan_last_run', 0);
-		update_option('nmm_autopay_scan_last_run', $now, false);
+		$lastRun = (int) NMMPRO_Compat::get_option('nmmpro_autopay_scan_last_run', 0);
+		NMMPRO_Compat::update_option('nmmpro_autopay_scan_last_run', $now, false);
 		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
 
 		// Count only (a single scalar) so a large backlog is never loaded into PHP
@@ -37,15 +66,15 @@ class NMM_Payment {
 			// and keep the sweep-start fresh - an empty backlog is a trivially
 			// complete sweep, so the first sweep over newly arriving rows must
 			// not inherit a start time from before the idle stretch.
-			if (get_option('nmm_autopay_scan_retry', array())) {
-				update_option('nmm_autopay_scan_retry', array(), false);
+			if (NMMPRO_Compat::get_option('nmmpro_autopay_scan_retry', array())) {
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry', array(), false);
 			}
-			update_option('nmm_autopay_scan_sweep_start', $now, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $now, false);
 			return;
 		}
 
-		$cryptos = NMM_Cryptocurrencies::get();
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$cryptos = NMMPRO_Cryptocurrencies::get();
+		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
 		// The sweep must also finish before an order can be cancelled, or an order
 		// inserted just behind the cursor could reach cancel_expired_payments()
@@ -65,16 +94,16 @@ class NMM_Payment {
 		// a large backlog raises it so the sweep stays fast; and the matching window
 		// is widened by the sweep period so a payment seen still-unconfirmed on one
 		// visit is not rejected as too old before its address next comes round.
-		$baseBudget = (int) apply_filters('nmm_autopay_scan_budget', 50);
+		$baseBudget = (int) NMMPRO_Compat::filter('nmmpro_autopay_scan_budget', 50);
 
 		// When the current multi-tick sweep began (the tick that fetched the
 		// head of the address list). Initialized here on the very first run;
 		// thereafter reset by the wrap handling at the bottom. The coverage
 		// stamp uses this START time, never the wrap time - see below.
-		$sweepStart = (int) get_option('nmm_autopay_scan_sweep_start', 0);
+		$sweepStart = (int) NMMPRO_Compat::get_option('nmmpro_autopay_scan_sweep_start', 0);
 		if ($sweepStart < 1) {
 			$sweepStart = $now;
-			update_option('nmm_autopay_scan_sweep_start', $sweepStart, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $sweepStart, false);
 		}
 
 		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec, $cronIntervalSec);
@@ -115,7 +144,7 @@ class NMM_Payment {
 		// between ticks simply advances to the next one - no restart-at-top that
 		// could starve later addresses. With $take <= $total the after/head pages
 		// never overlap, so no address is processed twice in a tick.
-		$cursor = get_option('nmm_autopay_scan_cursor', '');
+		$cursor = NMMPRO_Compat::get_option('nmmpro_autopay_scan_cursor', '');
 		$cursorParts = ($cursor !== '') ? explode('|', $cursor, 2) : array('', '');
 		$cursorCrypto = $cursorParts[0];
 		$cursorAddress = isset($cursorParts[1]) ? $cursorParts[1] : '';
@@ -132,7 +161,7 @@ class NMM_Payment {
 		// a transient explorer/RPC error is retried on the very next tick rather
 		// than waiting a whole sweep (by which time a payment could age out). The
 		// retry set is bounded, and only the fair-sweep batch advances the cursor.
-		$retrySet = get_option('nmm_autopay_scan_retry', array());
+		$retrySet = NMMPRO_Compat::get_option('nmmpro_autopay_scan_retry', array());
 		if (!is_array($retrySet)) {
 			$retrySet = array();
 		}
@@ -170,7 +199,7 @@ class NMM_Payment {
 		// tick is one baseline's worth. The lane never advances the cursor: it
 		// is not part of the fair sweep, and an address in both the lane and
 		// the sweep page is scanned only once ($seen).
-		$priorityWindow = (int) apply_filters('nmm_autopay_priority_window', 30 * MINUTE_IN_SECONDS);
+		$priorityWindow = (int) NMMPRO_Compat::filter('nmmpro_autopay_priority_window', 30 * MINUTE_IN_SECONDS);
 		if ($priorityWindow > 0) {
 			foreach ($paymentRepo->get_recent_unpaid_addresses($priorityWindow, $baseBudget) as $record) {
 				$key = self::scan_key($record);
@@ -221,11 +250,11 @@ class NMM_Payment {
 			// This coin's window, widened past its own oldest unpaid order.
 			$cryptoLifetime = isset($lifetimeByCrypto[$cryptoId]) ? $lifetimeByCrypto[$cryptoId] : $effectiveLifetime;
 
-			do_action('nmm_autopay_address_checked', $cryptoId, $address);
+			NMMPRO_Compat::action('nmmpro_autopay_address_checked', $cryptoId, $address);
 
 			if ($cryptoId === 'XMR') {
 				if (!$xmrFetched) {
-					$xmrBatch = NMM_Monero::get_account_transactions($cryptoLifetime);
+					$xmrBatch = NMMPRO_Monero::get_account_transactions($cryptoLifetime);
 					$xmrOk = (isset($xmrBatch['result']) && $xmrBatch['result'] === 'success');
 					$xmrByAddress = ($xmrOk && isset($xmrBatch['by_address'])) ? $xmrBatch['by_address'] : array();
 					$xmrFetched = true;
@@ -247,7 +276,7 @@ class NMM_Payment {
 				if ($fetched === false) {
 					$newFailed[] = self::scan_key($record);
 				}
-				elseif ($cryptoId === 'SOL' && !NMM_Blockchain::sol_address_fully_swept($address)) {
+				elseif ($cryptoId === 'SOL' && !NMMPRO_Blockchain::sol_address_fully_swept($address)) {
 					// The bounded Solana sweep made durable progress but has
 					// not yet inspected this address's whole matching window
 					// (a busy or dusted address spans several ticks). Not a
@@ -284,7 +313,7 @@ class NMM_Payment {
 		// again). Without this, an endpoint recovering after drops would let a
 		// later clean wrap certify coverage for addresses that were never
 		// successfully checked, and an aged paid order could be cancelled.
-		$retryCap = max(1, (int) apply_filters('nmm_autopay_scan_retry_cap', 200));
+		$retryCap = max(1, (int) NMMPRO_Compat::filter('nmmpro_autopay_scan_retry_cap', 200));
 		$newFailed = array_values(array_unique($newFailed));
 		if (count($newFailed) > $retryCap) {
 			// Dropped keys will not be retried, so their addresses stay
@@ -303,7 +332,7 @@ class NMM_Payment {
 		// the cap we can no longer track addresses individually, so the
 		// overflow's coins fall back to the coarse coin-level dirty marker.
 		if (!empty($incompleteKeys)) {
-			$builder = get_option('nmm_autopay_scan_incomplete_next', array());
+			$builder = NMMPRO_Compat::get_option('nmmpro_autopay_scan_incomplete_next', array());
 			if (!is_array($builder)) {
 				$builder = array();
 			}
@@ -315,21 +344,21 @@ class NMM_Payment {
 				}
 				$builder[$incompleteKey] = true;
 			}
-			update_option('nmm_autopay_scan_incomplete_next', $builder, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_incomplete_next', $builder, false);
 		}
 
 		if (!empty($coinDirty)) {
-			$dirty = get_option('nmm_autopay_scan_dirty', array());
+			$dirty = NMMPRO_Compat::get_option('nmmpro_autopay_scan_dirty', array());
 			if (!is_array($dirty)) {
 				$dirty = array();
 			}
 			foreach (array_keys($coinDirty) as $dirtyCryptoId) {
 				$dirty[$dirtyCryptoId] = true;
 			}
-			update_option('nmm_autopay_scan_dirty', $dirty, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_dirty', $dirty, false);
 		}
-		update_option('nmm_autopay_scan_retry', $newFailed, false);
-		update_option('nmm_autopay_scan_cursor', $lastKey, false);
+		NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry', $newFailed, false);
+		NMMPRO_Compat::update_option('nmmpro_autopay_scan_cursor', $lastKey, false);
 
 		// A full sweep has just completed: either this tick's page wrapped past
 		// the end of the address list, or the budget covered the whole backlog
@@ -373,16 +402,16 @@ class NMM_Payment {
 			// overflow. Cleared after use - the sweep now starting re-marks
 			// them for as long as their rows exist.
 			$excludedCryptos = array();
-			$dirty = get_option('nmm_autopay_scan_dirty', array());
+			$dirty = NMMPRO_Compat::get_option('nmmpro_autopay_scan_dirty', array());
 			if (is_array($dirty) && !empty($dirty)) {
 				foreach (array_keys($dirty) as $dirtyCryptoId) {
 					$excludedCryptos[$dirtyCryptoId] = true;
 				}
-				update_option('nmm_autopay_scan_dirty', array(), false);
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_dirty', array(), false);
 			}
 
 			$stampAt = ($take >= $total) ? $now : $sweepStart;
-			$coveredMap = get_option('nmm_autopay_scan_covered_at', array());
+			$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
 			if (!is_array($coveredMap)) {
 				$coveredMap = array();
 			}
@@ -391,25 +420,25 @@ class NMM_Payment {
 					$coveredMap[$sweptCryptoId] = $stampAt;
 				}
 			}
-			update_option('nmm_autopay_scan_covered_at', $coveredMap, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_covered_at', $coveredMap, false);
 
 			// Promote the completed sweep's incomplete addresses to the ACTIVE
 			// exclusion set cancel_expired_payments() consults, adding the
 			// keys still failing in the retry set (they were visited but never
 			// verified). The builder resets: the sweep now starting revisits
 			// every address, and a still-incomplete one re-enters the builder.
-			$promoted = get_option('nmm_autopay_scan_incomplete_next', array());
+			$promoted = NMMPRO_Compat::get_option('nmmpro_autopay_scan_incomplete_next', array());
 			if (!is_array($promoted)) {
 				$promoted = array();
 			}
 			foreach ($newFailed as $failedKey) {
 				$promoted[$failedKey] = true;
 			}
-			update_option('nmm_autopay_scan_incomplete', $promoted, false);
-			update_option('nmm_autopay_scan_incomplete_next', array(), false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_incomplete', $promoted, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_incomplete_next', array(), false);
 
 			// The next sweep begins with the head rows this tick just fetched.
-			update_option('nmm_autopay_scan_sweep_start', $now, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $now, false);
 		}
 	}
 
@@ -479,7 +508,7 @@ class NMM_Payment {
 	}
 
 	// Fetches and matches the address's transactions. Returns
-	// array('transactions' => NMM_Transaction[], 'page' => rawPageMeta|null)
+	// array('transactions' => NMMPRO_Transaction[], 'page' => rawPageMeta|null)
 	// on success - so the sweep can inspect the served page for possible
 	// truncation before certifying coverage - or false if the fetch failed,
 	// so the sweep can retry a transient failure on the next tick instead of
@@ -487,12 +516,12 @@ class NMM_Payment {
 	private static function check_address_transactions_for_matching_payments($crypto, $address, $transactionLifetime) {
 		$cryptoId = $crypto->get_id();
 
-		NMM_Util::log(__FILE__, __LINE__, '===========================================================================');
-		NMM_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
+		NMMPRO_Util::log(__FILE__, __LINE__, '===========================================================================');
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Starting payment verification for: ' . $cryptoId . ' - ' . $address);
 
 		// Clear any stale raw-page note so the meta read after this fetch can
 		// only belong to this fetch.
-		NMM_Blockchain::take_raw_page_meta();
+		NMMPRO_Blockchain::take_raw_page_meta();
 
 		try {
 			$transactions = self::get_address_transactions($cryptoId, $address, $transactionLifetime);
@@ -503,13 +532,13 @@ class NMM_Payment {
 			// uncaught one would abort the whole sweep BEFORE the cursor and
 			// retry state persist - the same bad address would then terminate
 			// every cron run. A throw here is just a failed fetch: retry it.
-			NMM_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId . ': ' . $e->getMessage(), 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Unable to get transactions for ' . $cryptoId . ': ' . $e->getMessage(), 'warning');
 			return false;
 		}
 
-		$pageMeta = NMM_Blockchain::take_raw_page_meta();
+		$pageMeta = NMMPRO_Blockchain::take_raw_page_meta();
 
-		NMM_Util::log(__FILE__, __LINE__, 'Transcations found for ' . $cryptoId . ' - ' . $address . ': ' . print_r($transactions, true));
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Transactions found for ' . $cryptoId . ': ' . count((array) $transactions));
 
 		if (self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime) === false) {
 			// Another verifier holds this address; we did not examine it. Treat
@@ -540,7 +569,7 @@ class NMM_Payment {
 	 * page proves there is nothing below.
 	 *
 	 * Fullness is judged on the RAW page the explorer served (reported by the
-	 * adapter via NMM_Blockchain::note_raw_page BEFORE its incoming-only
+	 * adapter via NMMPRO_Blockchain::note_raw_page BEFORE its incoming-only
 	 * filtering), never on the filtered result: a 25-entry page of 24
 	 * outgoing transfers and one payment filters down to a single entry, but
 	 * an older in-window payment may still be hidden below the full raw page.
@@ -549,7 +578,7 @@ class NMM_Payment {
 	 * instrumenting an adapter strictly tightens the check.
 	 */
 	public static function page_possibly_truncated($cryptoId, $fetchResult, $transactionLifetime, $now) {
-		$cap = NMM_Blockchain::adapter_page_cap($cryptoId);
+		$cap = NMMPRO_Blockchain::adapter_page_cap($cryptoId);
 		if ($cap < 1) {
 			return false;
 		}
@@ -592,16 +621,16 @@ class NMM_Payment {
 	 * Match already-fetched transactions for one address against its unpaid
 	 * orders, then claim/complete or reconcile. Split out from the network fetch
 	 * so the matching, race-claim and consumed-tx logic can be exercised directly
-	 * in tests with injected NMM_Transaction objects (no external calls).
+	 * in tests with injected NMMPRO_Transaction objects (no external calls).
 	 *
-	 * @param NMM_Cryptocurrency $crypto
+	 * @param NMMPRO_Cryptocurrency $crypto
 	 * @param string             $address
-	 * @param NMM_Transaction[]  $transactions
+	 * @param NMMPRO_Transaction[]  $transactions
 	 * @param int                $transactionLifetime
 	 */
 	public static function process_address_transactions($crypto, $address, $transactions, $transactionLifetime) {
-		$paymentRepo = new NMM_Payment_Repo();
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$paymentRepo = new NMMPRO_Payment_Repo();
+		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
 		$cryptoId = $crypto->get_id();
 
@@ -612,44 +641,32 @@ class NMM_Payment {
 		// same address in that window can credit one transaction to a sibling
 		// order - two units on chain settling three units of orders. The cron
 		// normally guarantees one verifier per site, but it degrades to
-		// running unlocked when GET_LOCK is unavailable (see NMM_Cron), which
+		// running unlocked when GET_LOCK is unavailable (see NMMPRO_Cron), which
 		// is exactly when this matters. Serializing per address also removes
 		// the lost-update risk in the read-modify-write consumed-tx option,
 		// since every writer for an address is now single-file.
-		$matchLock = NMM_Util::acquire_address_match_lock($cryptoId, $address);
+		$matchLock = NMMPRO_Util::acquire_address_match_lock($cryptoId, $address);
 
-		if ($matchLock === '0') {
+		if ($matchLock !== '1') {
 			// Another worker is mid-flight on this exact address. Nothing to
 			// wait for; the sweep revisits it next tick. Returning false marks
 			// the visit INCOMPLETE: certifying an address we never examined
 			// would let the coverage stamp advance past it, and expiry could
 			// then cancel an order whose payment we simply never looked at.
-			NMM_Util::log(__FILE__, __LINE__, 'Address match lock busy for ' . $cryptoId . ' ' . $address . '; another verifier is processing it. Skipping this tick.');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Address match lock busy for ' . $cryptoId . ' ' . $address . '; another verifier is processing it. Skipping this tick.');
 			return false;
-		}
-
-		// null: advisory locks unavailable on this host. Single-transaction
-		// matching still runs - that path predates this release and its
-		// (much narrower) exposure needs two same-amount orders on one
-		// address - but split-payment AGGREGATION is withheld, because it can
-		// combine arbitrary subsets of transactions and so turns that narrow
-		// race into a broad one. Payments still settle here; only split
-		// payments wait for a host that can serialize.
-		$aggregationSafe = ($matchLock === '1');
-		if (!$aggregationSafe) {
-			NMM_Util::log(__FILE__, __LINE__, 'Advisory locks unavailable on this host; split-payment aggregation is disabled for ' . $cryptoId . ' ' . $address . ' (single-transaction matching continues).', 'warning');
 		}
 
 		try {
 
 		foreach ($transactions as $transaction) {
 			$txHash = $transaction->get_hash();
-			$transactionAmount = $transaction->get_amount();
+			$transactionAmount = NMMPRO_Amount::to_units($transaction->get_amount(), 0);
 
 			$requiredConfirmations = $nmmSettings->get_autopay_required_confirmations($cryptoId);
 			$txConfirmations = $transaction->get_confirmations();
 
-			NMM_Util::log(__FILE__, __LINE__, '---confirmations: ' . $txConfirmations . ' Required: ' . $requiredConfirmations);
+			NMMPRO_Util::log(__FILE__, __LINE__, '---confirmations: ' . $txConfirmations . ' Required: ' . $requiredConfirmations);
 			if ($txConfirmations < $requiredConfirmations) {
 				continue;
 			}
@@ -657,14 +674,14 @@ class NMM_Payment {
 			$txTimeStamp = $transaction->get_time_stamp();
 			$timeSinceTx = time() - $txTimeStamp;
 
-			NMM_Util::log(__FILE__, __LINE__, '---time since transaction: ' . $timeSinceTx . ' TX Lifetime: ' . $transactionLifetime);
+			NMMPRO_Util::log(__FILE__, __LINE__, '---time since transaction: ' . $timeSinceTx . ' TX Lifetime: ' . $transactionLifetime);
 			if ($timeSinceTx > $transactionLifetime) {
 				continue;
 			}
 
 			if ($nmmSettings->tx_already_consumed($cryptoId, $address, $txHash)) {
 				// Ordinary: we have already processed this tx. Expected, not a warning.
-				NMM_Util::log(__FILE__, __LINE__, 'Already-consumed transaction skipped: ' . $txHash);
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Already-consumed transaction skipped: ' . $txHash);
 				continue;
 			}
 
@@ -685,9 +702,9 @@ class NMM_Payment {
 				}
 
 				$paymentAmount = $record['order_amount'];
-				$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());
+				$paymentAmountSmallestUnit = NMMPRO_Amount::to_units($paymentAmount, $crypto->get_round_precision());
 
-				$autoPaymentPercent = apply_filters('nmm_autopay_percent', $nmmSettings->get_autopay_processing_percent($cryptoId), $paymentAmount, $cryptoId, $address);
+				$autoPaymentPercent = NMMPRO_Compat::filter('nmmpro_autopay_percent', $nmmSettings->get_autopay_processing_percent($cryptoId), $paymentAmount, $cryptoId, $address);
 
 				// Guard against a zero (or unparseable) expected amount so we
 				// never divide by zero, and treat any overpayment as a match:
@@ -696,18 +713,11 @@ class NMM_Payment {
 					continue;
 				}
 
-				if ($transactionAmount >= $paymentAmountSmallestUnit) {
+				if (NMMPRO_Amount::clears($transactionAmount, $paymentAmountSmallestUnit, $autoPaymentPercent)) {
 					$matchingPaymentRecords[] = $record;
 				}
-				else {
-					$percentShortfall = ($paymentAmountSmallestUnit - $transactionAmount) / $paymentAmountSmallestUnit;
 
-					if ($percentShortfall <= (1 - $autoPaymentPercent)) {
-						$matchingPaymentRecords[] = $record;
-					}
-				}
-
-				NMM_Util::log(__FILE__, __LINE__, '---CryptoId, paymentAmount, paymentAmountSmallestUnit, transactionAmount:' . $cryptoId . ',' . $paymentAmount .',' . $paymentAmountSmallestUnit . ',' .  $transactionAmount);
+				NMMPRO_Util::log(__FILE__, __LINE__, '---CryptoId, paymentAmount, paymentAmountSmallestUnit, transactionAmount:' . $cryptoId . ',' . $paymentAmount .',' . $paymentAmountSmallestUnit . ',' .  $transactionAmount);
 			}
 
 			// Transaction does not match any order payment
@@ -731,7 +741,7 @@ class NMM_Payment {
 				// A genuine payment collision needs a human: surface it as a
 				// warning naming the affected orders and the tx that could not
 				// be auto-assigned. (Ordinary already-consumed skips stay debug.)
-				NMM_Util::log(__FILE__, __LINE__, 'Autopay collision: ' . $cryptoId . ' transaction ' . $txHash . ' matches multiple unpaid orders (' . implode(', ', $collidingOrderIds) . '); left for manual reconciliation.', 'warning');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay collision: ' . $cryptoId . ' transaction ' . $txHash . ' matches multiple unpaid orders (' . implode(', ', $collidingOrderIds) . '); left for manual reconciliation.', 'warning');
 
 				$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 			}
@@ -744,25 +754,25 @@ class NMM_Payment {
 				// conditional claim below is designed to close. Integrations - and
 				// the concurrency test - can observe or, in a race, complete/cancel
 				// the order here.
-				do_action('nmm_before_autopay_complete', $orderId, $cryptoId, $address, $txHash);
+				NMMPRO_Compat::action('nmmpro_before_autopay_complete', $orderId, $cryptoId, $address, $txHash);
 
 				// Atomically claim the row for payment. The expiry cron races us
 				// with the opposite claim (unpaid -> cancelled); because both sides
 				// go through the same conditional update, exactly one wins. The
 				// claim is tri-state so we never confuse a genuine race loss with a
 				// transient DB error.
-				$claim = $paymentRepo->claim_for_payment($orderId, $orderAmount);
+				$claim = NMMPRO_Consumed_Repo::claim($paymentRepo, $cryptoId, $address, $orderId, $orderAmount, array($txHash));
 
-				if ($claim === NMM_Payment_Repo::CLAIM_DB_ERROR) {
+				if ($claim === NMMPRO_Payment_Repo::CLAIM_DB_ERROR) {
 					// The UPDATE failed, so the row state is unknown - it may well
 					// still be unpaid. Do NOT consume the tx (that would permanently
 					// ignore a valid payment) and do NOT complete the order; leave
 					// everything untouched so a later tick retries this transaction.
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving the transaction unconsumed for retry. Transaction Hash: ' . $txHash, 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving the transaction unconsumed for retry. Transaction Hash: ' . $txHash, 'error');
 					continue;
 				}
 
-				if ($claim === NMM_Payment_Repo::CLAIM_ALREADY) {
+				if ($claim === NMMPRO_Payment_Repo::CLAIM_ALREADY) {
 					// The row was conclusively transitioned out of 'unpaid' by
 					// another worker (expiry cron cancelled it, or another verifier
 					// paid it). Do NOT complete the order. But DO consume the tx:
@@ -773,7 +783,7 @@ class NMM_Payment {
 					// row too, for manual reconciliation.
 					$nmmSettings->add_consumed_tx($cryptoId, $address, $txHash);
 					$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $txHash);
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded the transaction as consumed to prevent reuse on a recycled address. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded the transaction as consumed to prevent reuse on a recycled address. Transaction Hash: ' . $txHash . '. Please reconcile manually.', 'warning');
 					continue;
 				}
 
@@ -782,7 +792,7 @@ class NMM_Payment {
 				// Consume the hash NOW, before payment_complete(). The claim has
 				// already taken this order out of the unpaid set, so a verifier
 				// running concurrently (possible when GET_LOCK is unavailable and
-				// the cron degrades to running unlocked, see NMM_Cron) would see
+				// the cron degrades to running unlocked, see NMMPRO_Cron) would see
 				// only the remaining sibling on this shared address. If the hash
 				// were still unconsumed it could be pooled into that sibling's
 				// aggregate and credited twice - one 1 BTC transaction settling
@@ -797,28 +807,27 @@ class NMM_Payment {
 				if (!$order) {
 					// Row is claimed 'paid' (so it stops matching), but the order is
 					// gone - nothing to complete. The tx is already consumed above.
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hash: ' . $txHash, 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: verified ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hash: ' . $txHash, 'warning');
 					continue;
 				}
 				$orderNote = sprintf(
 						/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time, 4: transaction hash */
 						__('Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
-						NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $transactionAmount / (10**$crypto->get_round_precision())),
+						NMMPRO_Cryptocurrencies::get_price_string($crypto->get_id(), NMMPRO_Amount::from_units($transactionAmount, $crypto->get_round_precision())),
 						$cryptoId,
 						wp_date('Y-m-d H:i:s'),
-						apply_filters('nmm_order_txhash', $txHash, $cryptoId));
+						NMMPRO_Compat::filter('nmmpro_order_txhash', $txHash, $cryptoId));
 
+                if ($order->has_status(array('cancelled', 'failed', 'refunded', 'trash'))) {
+                    $paymentRepo->set_status($orderId, $orderAmount, 'review');
+                    $order->add_order_note(__('A verified cryptocurrency payment requires manual reconciliation.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                    continue;
+                }
 				$order->update_meta_data('transaction_hash', $txHash);
 				$order->payment_complete();
 				$order->add_order_note($orderNote);
+                if ($order->is_paid()) { $paymentRepo->set_status($orderId, $orderAmount, 'paid'); }
 			}
-		}
-
-		if (!$aggregationSafe) {
-			// Single-tx matching did run, so the address WAS examined; only the
-			// aggregate pass is withheld. That is a complete visit as far as
-			// coverage is concerned.
-			return true;
 		}
 
 		// Second pass: a customer who pays in SEVERAL transactions (exchange
@@ -840,9 +849,7 @@ class NMM_Payment {
 			// above without holding it, and on null we never had one. The lock is
 			// also released automatically if this process dies, so a crash mid-
 			// match cannot wedge the address.
-			if ($matchLock === '1') {
-				NMM_Util::release_address_match_lock($cryptoId, $address);
-			}
+			NMMPRO_Util::release_address_match_lock($cryptoId, $address);
 		}
 	}
 
@@ -856,20 +863,20 @@ class NMM_Payment {
 	 * help pay a NEWER order). Consumed state is re-read here because the
 	 * single-tx pass may have consumed hashes earlier in this same tick.
 	 *
-	 * Several UTXO adapters emit one NMM_Transaction per matching OUTPUT, so a
+	 * Several UTXO adapters emit one NMMPRO_Transaction per matching OUTPUT, so a
 	 * single on-chain transaction paying the address across two outputs shows
 	 * up as two entries sharing one hash. Their amounts are SUMMED - all
 	 * outputs pay the order - while the hash appears once in 'hashes' so it is
 	 * consumed exactly once. Eligibility is judged per entry; outputs of one
 	 * transaction share its confirmations and timestamp, so they always agree.
-	 * 'entries' counts eligible NMM_Transaction OBJECTS (not distinct hashes)
+	 * 'entries' counts eligible NMMPRO_Transaction OBJECTS (not distinct hashes)
 	 * for the caller's split gate.
 	 *
 	 * @return array ['sum' => float (smallest units), 'hashes' => string[],
 	 *                'entries' => int]
 	 */
 	private static function split_payment_contributions($record, $transactions, $transactionLifetime, $cryptoId, $address, $nmmSettings, $requiredConfirmations, $now) {
-		$sum = 0;
+		$sum = '0';
 		$entries = 0;
 		$hashTs = array();
 		$orderedAt = isset($record['ordered_at']) ? (int) $record['ordered_at'] : 0;
@@ -884,7 +891,7 @@ class NMM_Payment {
 			if ($orderedAt > 0 && $txTimeStamp < $orderedAt - self::TX_ORDER_SKEW_GRACE_SEC) {
 				continue;
 			}
-			$transactionAmount = $transaction->get_amount();
+			$transactionAmount = NMMPRO_Amount::to_units($transaction->get_amount(), 0);
 			if ($transactionAmount <= 0) {
 				// Adds nothing to the sum; consuming its hash would only lose
 				// information. The single-tx pass never matches it either.
@@ -900,7 +907,7 @@ class NMM_Payment {
 				continue;
 			}
 
-			$sum += $transactionAmount;
+			$sum = NMMPRO_Amount::add($sum, $transactionAmount);
 			$entries++;
 			if (!isset($hashTs[$txHash])) {
 				$hashTs[$txHash] = $txTimeStamp;
@@ -924,10 +931,10 @@ class NMM_Payment {
 	 * not from the store clock. So aggregation is confined to addresses that
 	 * are minted per order and never re-issued.
 	 *
-	 * In the Autopay payments table that means Monero: NMM_Gateway mints a
+	 * In the Autopay payments table that means Monero: NMMPRO_Gateway mints a
 	 * fresh subaddress per order for XMR, while static and carousel addresses
 	 * are reused by design. Privacy Mode (HD) never reaches this code - it
-	 * verifies through NMM_Hd against a cumulative balance, which already
+	 * verifies through NMMPRO_Hd against a cumulative balance, which already
 	 * credits split payments correctly, and retires any address that receives
 	 * funds instead of recycling it.
 	 *
@@ -946,7 +953,7 @@ class NMM_Payment {
 	 * ordinary expiry from working.
 	 */
 	private static function address_verifiable_for_expiry($cryptoId, $address) {
-		if (!class_exists('NMM_Address')) {
+		if (!class_exists('NMMPRO_Address')) {
 			return true;
 		}
 
@@ -961,11 +968,11 @@ class NMM_Payment {
 		// those as unverifiable too would quietly stop expiry for every order
 		// a store issued under the older, looser address rules, leaving unpaid
 		// orders to accumulate forever.
-		if (!NMM_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
+		if (!NMMPRO_Cryptocurrencies::is_valid_wallet_address($cryptoId, $address)) {
 			return true;
 		}
 
-		return NMM_Address::is_autopay_verifiable_form($cryptoId, $address);
+		return NMMPRO_Address::is_autopay_verifiable_form($cryptoId, $address);
 	}
 
 	private static function address_is_per_order($cryptoId) {
@@ -980,20 +987,14 @@ class NMM_Payment {
 	 */
 	private static function split_payment_sum_clears($record, $sumSmallestUnit, $crypto, $cryptoId, $address, $nmmSettings) {
 		$paymentAmount = $record['order_amount'];
-		$paymentAmountSmallestUnit = $paymentAmount * (10**$crypto->get_round_precision());
+		$paymentAmountSmallestUnit = NMMPRO_Amount::to_units($paymentAmount, $crypto->get_round_precision());
 
 		if ($paymentAmountSmallestUnit <= 0) {
 			return false;
 		}
 
-		if ($sumSmallestUnit >= $paymentAmountSmallestUnit) {
-			return true;
-		}
-
-		$autoPaymentPercent = apply_filters('nmm_autopay_percent', $nmmSettings->get_autopay_processing_percent($cryptoId), $paymentAmount, $cryptoId, $address);
-		$percentShortfall = ($paymentAmountSmallestUnit - $sumSmallestUnit) / $paymentAmountSmallestUnit;
-
-		return $percentShortfall <= (1 - $autoPaymentPercent);
+		$autoPaymentPercent = NMMPRO_Compat::filter('nmmpro_autopay_percent', $nmmSettings->get_autopay_processing_percent($cryptoId), $paymentAmount, $cryptoId, $address);
+		return NMMPRO_Amount::clears($sumSmallestUnit, $paymentAmountSmallestUnit, $autoPaymentPercent);
 	}
 
 	/**
@@ -1016,14 +1017,14 @@ class NMM_Payment {
 
 		// Belt and braces for the rule above. address_is_per_order() infers the
 		// property from the coin, but the fact that makes it true lives in
-		// NMM_Gateway, in another class: if anyone ever adds a fallback there
+		// NMMPRO_Gateway, in another class: if anyone ever adds a fallback there
 		// ("wallet RPC down, use the static address"), aggregation would
 		// silently become unsafe with no test failing. This asks the data
 		// instead - an address that has EVER carried more than one order,
 		// whatever their statuses, is by definition reused.
 		$rowsForAddress = $paymentRepo->count_rows_for_address($cryptoId, $address);
 		if ($rowsForAddress === null || $rowsForAddress > 1) {
-			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ($rowsForAddress === null ? ' could not be confirmed as per-order (count query failed)' : ' has served more than one order, so it is not per-order after all') . '; not aggregating.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ($rowsForAddress === null ? ' could not be confirmed as per-order (count query failed)' : ' has served more than one order, so it is not per-order after all') . '; not aggregating.', 'warning');
 			return;
 		}
 
@@ -1042,7 +1043,7 @@ class NMM_Payment {
 		// If one somehow does, attribution is ambiguous - surface it for a
 		// human and leave every transaction unconsumed for a later clean tick.
 		if (count($paymentRecords) > 1) {
-			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' unexpectedly has ' . count($paymentRecords) . ' unpaid orders; not aggregating - please reconcile manually.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' unexpectedly has ' . count($paymentRecords) . ' unpaid orders; not aggregating - please reconcile manually.', 'warning');
 			return;
 		}
 
@@ -1051,7 +1052,7 @@ class NMM_Payment {
 		$contributingHashes = $contrib['hashes'];
 
 		// The split gate counts transaction ENTRIES, not distinct hashes:
-		// several UTXO adapters emit one NMM_Transaction per matching output,
+		// several UTXO adapters emit one NMMPRO_Transaction per matching output,
 		// and a single transaction paying the order across two outputs is
 		// exactly the split-funds case this pass exists for - the single-tx
 		// loop compares each output individually and can never match it. A
@@ -1064,7 +1065,7 @@ class NMM_Payment {
 		}
 
 		if (!self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
-			NMM_Util::log(__FILE__, __LINE__, '---split-payment sum below threshold: ' . $cryptoId . ',' . $address . ',' . $contrib['sum']);
+			NMMPRO_Util::log(__FILE__, __LINE__, '---split-payment sum below threshold: ' . $cryptoId . ',' . $address . ',' . $contrib['sum']);
 			return;
 		}
 
@@ -1081,19 +1082,19 @@ class NMM_Payment {
 		// Same pre-claim hook, same claim, same tri-state handling as the
 		// single-tx path - see the comments there. Integrations receive the
 		// combined comma-separated hash list where a single hash would go.
-		do_action('nmm_before_autopay_complete', $orderId, $cryptoId, $address, $hashList);
+		NMMPRO_Compat::action('nmmpro_before_autopay_complete', $orderId, $cryptoId, $address, $hashList);
 
-		$claim = $paymentRepo->claim_for_payment($orderId, $orderAmount);
+		$claim = NMMPRO_Consumed_Repo::claim($paymentRepo, $cryptoId, $address, $orderId, $orderAmount, $contributingHashes);
 
-		if ($claim === NMM_Payment_Repo::CLAIM_DB_ERROR) {
+		if ($claim === NMMPRO_Payment_Repo::CLAIM_DB_ERROR) {
 			// Row state unknown - consume NOTHING and touch nothing, so every
 			// contributing transaction is still eligible when a later tick
 			// retries the whole aggregate.
-			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving all transactions unconsumed for retry. Transaction Hashes: ' . $hashList, 'error');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving all transactions unconsumed for retry. Transaction Hashes: ' . $hashList, 'error');
 			return;
 		}
 
-		if ($claim === NMM_Payment_Repo::CLAIM_ALREADY) {
+		if ($claim === NMMPRO_Payment_Repo::CLAIM_ALREADY) {
 			// Conclusively transitioned elsewhere (expired and cancelled, or
 			// paid by another worker). Do NOT complete the order - but DO
 			// consume EVERY contributing tx and persist the hashes on the
@@ -1105,7 +1106,7 @@ class NMM_Payment {
 				$nmmSettings->add_consumed_tx($cryptoId, $address, $consumedHash);
 			}
 			$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $storedHashList);
-			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded all transactions as consumed to prevent reuse on a recycled address. Transaction Hashes: ' . $hashList . '. Please reconcile manually.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded all transactions as consumed to prevent reuse on a recycled address. Transaction Hashes: ' . $hashList . '. Please reconcile manually.', 'warning');
 			return;
 		}
 
@@ -1126,159 +1127,165 @@ class NMM_Payment {
 		if (!$order) {
 			// Row is claimed 'paid' (so it stops matching), but the order is
 			// gone - nothing to complete. The txs are already consumed above.
-			NMM_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hashes: ' . $hashList, 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hashes: ' . $hashList, 'warning');
 			return;
 		}
 
 		$displayHashes = array();
 		foreach ($contributingHashes as $noteHash) {
-			$displayHashes[] = apply_filters('nmm_order_txhash', $noteHash, $cryptoId);
+			$displayHashes[] = NMMPRO_Compat::filter('nmmpro_order_txhash', $noteHash, $cryptoId);
 		}
 		$orderNote = sprintf(
 				/* translators: 1: amount, 2: cryptocurrency ticker, 3: number of transactions, 4: date/time, 5: transaction hashes */
 				__('Order payment of %1$s %2$s verified across %3$d transactions at %4$s. Transaction Hashes: %5$s', 'nomiddleman-crypto-payments-for-woocommerce'),
-				NMM_Cryptocurrencies::get_price_string($crypto->get_id(), $contrib['sum'] / (10**$crypto->get_round_precision())),
+				NMMPRO_Cryptocurrencies::get_price_string($crypto->get_id(), NMMPRO_Amount::from_units($contrib['sum'], $crypto->get_round_precision())),
 				$cryptoId,
 				count($contributingHashes),
 				wp_date('Y-m-d H:i:s'),
 				implode(', ', $displayHashes));
 
+        if ($order->has_status(array('cancelled', 'failed', 'refunded', 'trash'))) {
+            $paymentRepo->set_status($orderId, $orderAmount, 'review');
+            $order->add_order_note(__('A verified cryptocurrency payment requires manual reconciliation.', 'nomiddleman-crypto-payments-for-woocommerce'));
+            return;
+        }
 		$order->update_meta_data('transaction_hash', $storedHashList);
 		$order->payment_complete();
 		$order->add_order_note($orderNote);
+                if ($order->is_paid()) { $paymentRepo->set_status($orderId, $orderAmount, 'paid'); }
 	}
 
 	private static function get_address_transactions($cryptoId, $address, $transactionLifetime = null) {
 		if ($cryptoId === 'ETH') {
-			$result = NMM_Blockchain::get_eth_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_eth_address_transactions($address);
 		}
 		if ($cryptoId === 'BCH') {
-			$result = NMM_Blockchain::get_bch_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_bch_address_transactions($address);
 		}
 		if ($cryptoId === 'DOGE') {
-			$result = NMM_Blockchain::get_doge_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_doge_address_transactions($address);
 		}
 		if ($cryptoId === 'ZEC') {
-			$result = NMM_Blockchain::get_zec_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_zec_address_transactions($address);
 		}
 		if ($cryptoId === 'DASH') {
-			$result = NMM_Blockchain::get_dash_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_dash_address_transactions($address);
 		}
 		if ($cryptoId === 'XRP') {
-			$result = NMM_Blockchain::get_xrp_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_xrp_address_transactions($address);
 		}
 		if ($cryptoId === 'ETC') {
-			$result = NMM_Blockchain::get_etc_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_etc_address_transactions($address);
 		}
 		if ($cryptoId === 'XLM') {
-			$result = NMM_Blockchain::get_xlm_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_xlm_address_transactions($address);
 		}
 		if ($cryptoId === 'BSV') {
-			$result = NMM_Blockchain::get_bsv_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_bsv_address_transactions($address);
 		}
 		if ($cryptoId === 'EOS') {
-			$result = NMM_Blockchain::get_eos_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_eos_address_transactions($address);
 		}
 		if ($cryptoId === 'TRX') {
-			$result = NMM_Blockchain::get_trx_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_trx_address_transactions($address);
 		}
 		if ($cryptoId === 'BLK') {
-			$result = NMM_Blockchain::get_blk_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_blk_address_transactions($address);
 		}
 		if ($cryptoId === 'ADA') {
-			$result = NMM_Blockchain::get_ada_address_transactions($address);	
+			$result = NMMPRO_Blockchain::get_ada_address_transactions($address);
 		}
 		if ($cryptoId === 'XTZ') {
-			$result = NMM_Blockchain::get_xtz_address_transactions($address);	
+			$result = NMMPRO_Blockchain::get_xtz_address_transactions($address);
 		}
 		if ($cryptoId === 'REP') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('REP', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('REP', $address);
 		}
 		if ($cryptoId === 'MLN') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('MLN', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('MLN', $address);
 		}
 		if ($cryptoId === 'GNO') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('GNO', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GNO', $address);
 		}
 		if ($cryptoId === 'LTC') {
-			$result = NMM_Blockchain::get_ltc_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_ltc_address_transactions($address);
 		}
 		if ($cryptoId === 'BTC') {
-			$result = NMM_Blockchain::get_btc_address_transactions($address);	
+			$result = NMMPRO_Blockchain::get_btc_address_transactions($address);
 		}
 		if ($cryptoId === 'BAT') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('BAT', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BAT', $address);
 		}
 		if ($cryptoId === 'BNB') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('BNB', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BNB', $address);
 		}
 		if ($cryptoId === 'HOT') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('HOT', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('HOT', $address);
 		}
 		if ($cryptoId === 'LINK') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('LINK', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('LINK', $address);
 		}
 		if ($cryptoId === 'OMG') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('OMG', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('OMG', $address);
 		}
 		if ($cryptoId === 'ZRX') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('ZRX', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('ZRX', $address);
 		}
 		if ($cryptoId === 'GUSD') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('GUSD', $address);	
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GUSD', $address);
 		}
 		if ($cryptoId === 'WAVES') {
-			$result = NMM_Blockchain::get_waves_address_transactions($address);	
+			$result = NMMPRO_Blockchain::get_waves_address_transactions($address);
 		}
 		if ($cryptoId === 'DCR') {
-			$result = NMM_Blockchain::get_dcr_address_transactions($address);	
+			$result = NMMPRO_Blockchain::get_dcr_address_transactions($address);
 		}
 		if ($cryptoId === 'GRS') {
-			$result = NMM_Blockchain::get_grs_address_transactions($address);	
+			$result = NMMPRO_Blockchain::get_grs_address_transactions($address);
 		}
         if ($cryptoId === 'DGB') {
-            $result = NMM_Blockchain::get_dgb_address_transactions($address);
+            $result = NMMPRO_Blockchain::get_dgb_address_transactions($address);
         }
         if ($cryptoId === 'USDC') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('USDC', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDC', $address);
 		}
 		if ($cryptoId === 'USDT') {
-			$result = NMM_Blockchain::get_erc20_address_transactions('USDT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDT', $address);
 		}
 		if ($cryptoId === 'USDTTRX') {
-			$result = NMM_Blockchain::get_trc20_usdt_address_transactions($address);
+			$result = NMMPRO_Blockchain::get_trc20_usdt_address_transactions($address);
 		}
 		if ($cryptoId === 'SOL') {
-			$result = NMM_Blockchain::get_sol_address_transactions($address, $transactionLifetime);
+			$result = NMMPRO_Blockchain::get_sol_address_transactions($address, $transactionLifetime);
 		}
-		
+
 		if ($cryptoId === 'XMR') {
-			$result = NMM_Monero::get_address_transactions($address);
+			$result = NMMPRO_Monero::get_address_transactions($address);
 		}
 		// any registered ERC-20 token without an explicit branch above
 		if (!isset($result)) {
-			$cryptos = NMM_Cryptocurrencies::get();
+			$cryptos = NMMPRO_Cryptocurrencies::get();
 			if (isset($cryptos[$cryptoId]) && $cryptos[$cryptoId]->is_erc20_token()) {
-				$result = NMM_Blockchain::get_erc20_address_transactions($cryptoId, $address);
+				$result = NMMPRO_Blockchain::get_erc20_address_transactions($cryptoId, $address);
 			}
 			else {
 				$result = array('result' => 'error', 'message' => 'No verification available');
 			}
 		}
 
-		if ($result['result'] === 'error') {			
-			NMM_Util::log(__FILE__, __LINE__, 'BAD API CALL');
+		if ($result['result'] === 'error') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'BAD API CALL');
 			throw new \Exception(esc_html__('Could not reach external service to do auto payment processing.', 'nomiddleman-crypto-payments-for-woocommerce'));
-		}		
+		}
 
 		return $result['transactions'];
 	}
 
 	public static function cancel_expired_payments() {
 		global $woocommerce;
-		$nmmSettings = new NMM_Settings(get_option(NMM_REDUX_ID));
+		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
-		$paymentRepo = new NMM_Payment_Repo();
+		$paymentRepo = new NMMPRO_Payment_Repo();
 
 		// Single real-time clock for the whole pass. Each row's effective
 		// expiry clock is additionally capped at ITS currency's last
@@ -1293,7 +1300,7 @@ class NMM_Payment {
 		// the shortest window) - late, never wrong. min() with real time keeps
 		// a fresh stamp from ever loosening the real-time expiry check.
 		$nowReal = time();
-		$coveredMap = get_option('nmm_autopay_scan_covered_at', array());
+		$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
 		if (!is_array($coveredMap)) {
 			$coveredMap = array(); // unknown format: treat as no coverage (defer, never cancel unverified)
 		}
@@ -1302,7 +1309,7 @@ class NMM_Payment {
 		// (failing endpoint, possibly-truncated page, mid-window Solana sweep,
 		// dropped retry). Their rows defer - only theirs; the coin's other
 		// orders expire normally against the coin's stamp.
-		$incompleteAddrs = get_option('nmm_autopay_scan_incomplete', array());
+		$incompleteAddrs = NMMPRO_Compat::get_option('nmmpro_autopay_scan_incomplete', array());
 		if (!is_array($incompleteAddrs)) {
 			$incompleteAddrs = array();
 		}
@@ -1348,7 +1355,7 @@ class NMM_Payment {
 			$paymentCancellationTimeHr = $nmmSettings->get_autopay_cancellation_time($cryptoId);
 			$paymentCancellationTimeSec = $paymentCancellationTimeHr * 60 * 60;
 			$timeSinceOrder = $cancelClock - $orderTime;
-			NMM_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
+			NMMPRO_Util::log(__FILE__, __LINE__, 'cryptoID: ' . $cryptoId . ' payment cancellation time sec: ' . $paymentCancellationTimeSec . ' time since order: ' . $timeSinceOrder);
 
 			if ($timeSinceOrder > $paymentCancellationTimeSec) {
 				if (isset($incompleteAddrs[$cryptoId . '|' . $paymentRecord['address']])) {
@@ -1357,7 +1364,7 @@ class NMM_Payment {
 					// its rows must not expire yet. The exclusion refreshes at
 					// every wrap: once a sweep verifies the address cleanly,
 					// expiry resumes on the next cancellation pass.
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: deferring expiry for ' . $cryptoId . ' address ' . $paymentRecord['address'] . ' (not conclusively verified by the last sweep).');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: deferring expiry for ' . $cryptoId . ' address ' . $paymentRecord['address'] . ' (not conclusively verified by the last sweep).');
 					continue;
 				}
 
@@ -1375,7 +1382,7 @@ class NMM_Payment {
 					// Order deleted - retire the orphaned payment record. Claim it
 					// conditionally so a concurrent verifier still wins the row.
 					$paymentRepo->claim_for_cancellation($orderId, $orderAmount);
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is gone; retiring its payment record.');
 					continue;
 				}
 
@@ -1405,7 +1412,7 @@ class NMM_Payment {
 				// GENUINELY PAID order. Leave it for the merchant, who can see the
 				// payment in their own wallet.
 				if (!self::address_verifiable_for_expiry($cryptoId, $address)) {
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: not cancelling ' . $cryptoId . ' order ' . $orderId . ' - its payment address (' . $address . ') cannot be checked on a public explorer, so an actual payment would be invisible to us. Please confirm this order in your own wallet and complete or cancel it by hand.', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: not cancelling ' . $cryptoId . ' order ' . $orderId . ' - its payment address (' . $address . ') cannot be checked on a public explorer, so an actual payment would be invisible to us. Please confirm this order in your own wallet and complete or cancel it by hand.', 'warning');
 					continue;
 				}
 
@@ -1415,35 +1422,35 @@ class NMM_Payment {
 				// and may cancel: on CLAIM_ALREADY the verifier already took the row,
 				// and on CLAIM_DB_ERROR the outcome is unknown - in both cases leave
 				// the order alone (a real error is retried next tick).
-				if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) !== NMM_Payment_Repo::CLAIM_CLAIMED) {
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
+				if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) !== NMMPRO_Payment_Repo::CLAIM_CLAIMED) {
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
 					continue;
 				}
 
 				// Hook point immediately before the final transition. Integrations
 				// (and the concurrency test) can observe - or, in a genuine race,
 				// complete - the order here; the re-fetch below then reconciles.
-				do_action('nmm_before_autopay_cancel', $orderId, $cryptoId, $address);
+				NMMPRO_Compat::action('nmmpro_before_autopay_cancel', $orderId, $cryptoId, $address);
 
 				// Final re-fetch after the claim to close the order-side window as
 				// far as WooCommerce allows. If the order was paid or advanced
 				// out-of-band after we claimed the row, reconcile the record and
 				// leave the order alone rather than cancelling a paid order.
-				$order = wc_get_order($orderId);
+				$order = WC_Order_Factory::get_order($orderId);
 
 				if (!$order) {
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' vanished after cancellation claim; record already retired.');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' vanished after cancellation claim; record already retired.');
 					continue;
 				}
 
 				if ($order->is_paid()) {
 					$paymentRepo->set_status($orderId, $orderAmount, 'paid');
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' was paid after cancellation claim; reconciled record to paid, not cancelling.');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' was paid after cancellation claim; reconciled record to paid, not cancelling.');
 					continue;
 				}
 
 				if (!$order->has_status(array('pending', 'on-hold'))) {
-					NMM_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' advanced to ' . $order->get_status() . ' after cancellation claim; leaving order, record cancelled.');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' advanced to ' . $order->get_status() . ' after cancellation claim; leaving order, record cancelled.');
 					continue;
 				}
 
@@ -1453,13 +1460,13 @@ class NMM_Payment {
 					$cryptoId,
 					round($paymentCancellationTimeSec/3600, 1));
 
-				add_filter('woocommerce_email_subject_customer_note', 'NMM_change_cancelled_email_note_subject_line', 1, 2);
-	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);
+				add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_cancelled_email_note_subject_line', 1, 2);
+			add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_cancelled_email_heading', 1, 2);
 
 				$order->update_status('wc-cancelled');
 				$order->add_order_note($orderNote, true);
 
-				NMM_Util::log(__FILE__, __LINE__, 'Cancelled ' . $cryptoId . ' payment: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Cancelled ' . $cryptoId . ' payment: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
 			}
 		}
 	}

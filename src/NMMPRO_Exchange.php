@@ -5,7 +5,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Class that communicates with various exchanges via HTTP
-class NMM_Exchange {
+class NMMPRO_Exchange {
 
     // Maps plugin crypto IDs (ticker symbols) to CoinGecko coin IDs
     private static $coingeckoIds = array(
@@ -76,7 +76,7 @@ class NMM_Exchange {
             return $total;
         }
 
-        $transientKey = 'nmm_fx_' . strtolower($fromCurr) . '_to_usd';
+        $transientKey = 'nmmpro_fx_' . strtolower($fromCurr) . '_to_usd';
         $conversionRate = get_transient( $transientKey );
 
         if ($conversionRate !== false && is_numeric($conversionRate)) {
@@ -247,7 +247,7 @@ class NMM_Exchange {
     /**
      * USD price for one unit of $cryptoId, agreed across the merchant's
      * selected exchange APIs. Shared entry point for both callers: the checkout
-     * page (NMM_Gateway) and the background cache warmer (NMM_warm_price_caches).
+     * page (NMMPRO_Gateway) and the background cache warmer (NMMPRO_warm_price_caches).
      *
      * The name is historical - this is no longer an arithmetic mean, because a
      * mean lets a single wrong-but-nonzero source drag the price the customer is
@@ -264,21 +264,21 @@ class NMM_Exchange {
     public static function get_average_usd_price($cryptoId, $updateInterval, $selectedPriceApis) {
         $candidates = self::collect_prices($cryptoId, $updateInterval, $selectedPriceApis);
 
-        $maxStale = self::filtered_seconds('nmm_rate_max_stale_seconds', self::RATE_MAX_STALE_SECONDS, $cryptoId, 0, self::RATE_STALE_HARD_CAP);
-        $refWindow = self::filtered_seconds('nmm_rate_reference_window_seconds', self::RATE_REFERENCE_WINDOW_SECONDS, $cryptoId, HOUR_IN_SECONDS, 7 * 24 * HOUR_IN_SECONDS);
+        $maxStale = self::filtered_seconds('nmmpro_rate_max_stale_seconds', self::RATE_MAX_STALE_SECONDS, $cryptoId, 0, self::RATE_STALE_HARD_CAP);
+        $refWindow = self::filtered_seconds('nmmpro_rate_reference_window_seconds', self::RATE_REFERENCE_WINDOW_SECONDS, $cryptoId, HOUR_IN_SECONDS, 7 * 24 * HOUR_IN_SECONDS);
         $options = array(
-            'tolerance'        => self::filtered_fraction('nmm_rate_outlier_tolerance', self::RATE_OUTLIER_TOLERANCE, $cryptoId),
-            'jump'             => self::filtered_fraction('nmm_rate_jump_threshold', self::RATE_JUMP_THRESHOLD, $cryptoId),
+            'tolerance'        => self::filtered_fraction('nmmpro_rate_outlier_tolerance', self::RATE_OUTLIER_TOLERANCE, $cryptoId),
+            'jump'             => self::filtered_fraction('nmmpro_rate_jump_threshold', self::RATE_JUMP_THRESHOLD, $cryptoId),
             'max_stale'        => $maxStale,
-            'corroboration'    => self::filtered_seconds('nmm_rate_jump_corroboration_seconds', self::RATE_JUMP_CORROBORATION_SECONDS, $cryptoId, 60, self::RATE_STALE_HARD_CAP),
-            'max_price'        => self::filtered_price('nmm_rate_max_plausible_price', self::RATE_MAX_PLAUSIBLE_PRICE, $cryptoId),
-            'drift'            => self::filtered_fraction('nmm_rate_reference_drift_limit', self::RATE_REFERENCE_DRIFT_LIMIT, $cryptoId),
+            'corroboration'    => self::filtered_seconds('nmmpro_rate_jump_corroboration_seconds', self::RATE_JUMP_CORROBORATION_SECONDS, $cryptoId, 60, self::RATE_STALE_HARD_CAP),
+            'max_price'        => self::filtered_price('nmmpro_rate_max_plausible_price', self::RATE_MAX_PLAUSIBLE_PRICE, $cryptoId),
+            'drift'            => self::filtered_fraction('nmmpro_rate_reference_drift_limit', self::RATE_REFERENCE_DRIFT_LIMIT, $cryptoId),
             'reference_window' => $refWindow,
         );
 
-        $goodKey = 'nmm_rate_good_' . $cryptoId;
-        $pendingKey = 'nmm_rate_pending_' . $cryptoId;
-        $referenceKey = 'nmm_rate_reference_' . $cryptoId;
+        $goodKey = 'nmmpro_rate_good_' . $cryptoId;
+        $pendingKey = 'nmmpro_rate_pending_' . $cryptoId;
+        $referenceKey = 'nmmpro_rate_reference_' . $cryptoId;
 
         $lastGood = get_transient($goodKey);
         $lastGood = is_array($lastGood) ? $lastGood : null;
@@ -325,7 +325,7 @@ class NMM_Exchange {
         if ($maxStale > 0 && $lastGood !== null && isset($lastGood['price'], $lastGood['time'])
             && (float) $lastGood['price'] > 0 && ($now - (int) $lastGood['time']) <= $maxStale) {
 
-            NMM_Util::log(__FILE__, __LINE__, 'Serving last-known-good ' . $cryptoId . ' rate '
+            NMMPRO_Util::log(__FILE__, __LINE__, 'Serving last-known-good ' . $cryptoId . ' rate '
                 . ($now - (int) $lastGood['time']) . 's old: no trusted live price (' . $state['status'] . ').', 'warning');
 
             return (float) $lastGood['price'];
@@ -835,7 +835,7 @@ class NMM_Exchange {
         $message = $cryptoId . ': ' . $warning['message'];
 
         if ($warning['code'] === 'single_source') {
-            $throttleKey = 'nmm_rate_single_warned_' . $cryptoId;
+            $throttleKey = 'nmmpro_rate_single_warned_' . $cryptoId;
 
             if (get_transient($throttleKey) !== false) {
                 return;
@@ -844,14 +844,14 @@ class NMM_Exchange {
             set_transient($throttleKey, 1, HOUR_IN_SECONDS);
         }
 
-        NMM_Util::log(__FILE__, __LINE__, $message, 'warning');
+        NMMPRO_Util::log(__FILE__, __LINE__, $message, 'warning');
     }
 
     // Filtered fraction, clamped so a bad filter cannot disable the guard it
     // configures (a 0 tolerance would reject every source, a 5.0 jump threshold
     // would wave through anything).
     private static function filtered_fraction($filter, $default, $cryptoId) {
-        $value = (float) apply_filters($filter, $default, $cryptoId);
+        $value = (float) NMMPRO_Compat::filter($filter, $default, $cryptoId);
 
         if (!is_finite($value) || $value < 0.001) {
             return 0.001;
@@ -865,7 +865,7 @@ class NMM_Exchange {
     // rounds the amount owed to zero, and at the bottom to a cent so a filter
     // returning 0, a negative or NaN cannot reject every source in existence.
     private static function filtered_price($filter, $default, $cryptoId) {
-        $value = (float) apply_filters($filter, $default, $cryptoId);
+        $value = (float) NMMPRO_Compat::filter($filter, $default, $cryptoId);
 
         if (!is_finite($value) || $value < 0.01) {
             return 0.01;
@@ -875,7 +875,7 @@ class NMM_Exchange {
     }
 
     private static function filtered_seconds($filter, $default, $cryptoId, $min, $max) {
-        $value = (int) apply_filters($filter, $default, $cryptoId);
+        $value = (int) NMMPRO_Compat::filter($filter, $default, $cryptoId);
 
         if ($value < $min) {
             return $min;
@@ -886,7 +886,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_coingecko_price($cryptoId, $updateInterval) {
-        $transientKey = 'nmm_rate_coingecko_' . $cryptoId;
+        $transientKey = 'nmmpro_rate_coingecko_' . $cryptoId;
         $coingeckoPrice = get_transient($transientKey);
 
         // if transient is found in database just return it
@@ -899,14 +899,14 @@ class NMM_Exchange {
         $response = wp_remote_get('https://api.coingecko.com/api/v3/simple/price?ids=' . rawurlencode($geckoId) . '&vs_currencies=usd', array('timeout' => 3));
 
         if ( is_wp_error( $response ) || $response['response']['code'] !== 200) {
-            NMM_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( coingecko simple/price ): ' . NMM_Util::summarize_response($response));
+            NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( coingecko simple/price ): ' . NMMPRO_Util::summarize_response($response));
             return 0;
         }
 
         $responseBody = json_decode( $response['body'] );
 
         if (!isset($responseBody->{$geckoId}->usd)) {
-            NMM_Util::log(__FILE__, __LINE__, 'CoinGecko returned no USD price for ' . $geckoId);
+            NMMPRO_Util::log(__FILE__, __LINE__, 'CoinGecko returned no USD price for ' . $geckoId);
             return 0;
         }
 
@@ -926,7 +926,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_hitbtc_price($cryptoId, $updateInterval) {
-        $transientKey = 'nmm_rate_hitbtc_' . $cryptoId;
+        $transientKey = 'nmmpro_rate_hitbtc_' . $cryptoId;
         $hitbtcPrice = get_transient($transientKey);
 
         if ($hitbtcPrice !== false) {
@@ -954,7 +954,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_gateio_price($cryptoId, $updateInterval) {
-        $transientKey = 'nmm_rate_gateio_' . $cryptoId;
+        $transientKey = 'nmmpro_rate_gateio_' . $cryptoId;
         $gateioPrice = get_transient($transientKey);
 
         if ($gateioPrice !== false) {
@@ -983,7 +983,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_binance_price($cryptoId, $updateInterval) {
-        $transientKey = 'nmm_rate_binance_' . $cryptoId;
+        $transientKey = 'nmmpro_rate_binance_' . $cryptoId;
         $binancePrice = get_transient($transientKey);
 
         if ($binancePrice !== false) {
@@ -1011,7 +1011,7 @@ class NMM_Exchange {
 
     // gets crypto to USD conversion from an API
     public static function get_poloniex_price($cryptoId, $updateInterval) {
-        $transientKey = 'nmm_rate_poloniex_' . $cryptoId;
+        $transientKey = 'nmmpro_rate_poloniex_' . $cryptoId;
         $poloniexPrice = get_transient($transientKey);
 
         if ($poloniexPrice !== false) {

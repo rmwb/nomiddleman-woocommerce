@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class NMM_Hd {
+class NMMPRO_Hd {
 
 	// On-chain totals the verifier observed during THIS cron run. The expiry
 	// pass consults this instead of making its own explorer calls: the verifier
@@ -20,14 +20,14 @@ class NMM_Hd {
 	// backlog the verifier's observation can be minutes old by the time the
 	// expiry pass runs, and a payment landing in that window must not be missed
 	// - so a stale entry falls back to a fresh fetch (safe: by then any short
-	// per-host cooldown has lapsed too). NMM_Cron resets the cache at the start
+	// per-host cooldown has lapsed too). NMMPRO_Cron resets the cache at the start
 	// of every acquired cycle, so a long-lived process (CLI cron runner,
 	// multisite loop) can never act on a previous cycle's observations.
 	const OBSERVATION_MAX_AGE_SEC = 120;
 
 	private static $observedTotals = array();
 
-	// A fresh cron run starts with no observations. Called by NMM_Cron at the
+	// A fresh cron run starts with no observations. Called by NMMPRO_Cron at the
 	// top of every acquired cycle (and by tests).
 	public static function reset_observed_totals() {
 		self::$observedTotals = array();
@@ -74,25 +74,25 @@ class NMM_Hd {
 	}
 
 	public static function buffer_ready_addresses($cryptoId, $mpk, $amount, $hdMode) {
-		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
-		$readyCount = $hdRepo->count_ready();		
-		
+		$hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
+		$readyCount = $hdRepo->count_ready();
+
 		$neededAddresses = $amount - $readyCount;
-		
+
 		for ($i = 0; $i < $neededAddresses; $i++) {
-			
+
 			try {
 				self::force_new_address($cryptoId, $mpk, $hdMode);
 			}
 			catch ( \Exception $e ) {
-				NMM_Util::log(__FILE__, __LINE__, $e->getMessage());
+				NMMPRO_Util::log(__FILE__, __LINE__, $e->getMessage());
 			}
 		}
 	}
 
 	public static function check_all_pending_addresses_for_payment($cryptoId, $mpk, $requiredConfirmations, $percentToVerify, $hdMode) {
 		global $woocommerce;
-		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
+		$hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
 
 		$pendingRecords = $hdRepo->get_pending();
 
@@ -133,14 +133,15 @@ class NMM_Hd {
 			// it, so we resume without re-claiming.
 			$isResuming = $record['status'] === 'completing';
 
-			$amountToVerify = ((float) $orderAmount) * $percentToVerify;
+			$precision = NMMPRO_Cryptocurrencies::get()[$cryptoId]->get_round_precision();
+			$expectedUnits = NMMPRO_Amount::to_units($orderAmount, $precision);
 			// Last line of defence against a zero-amount order: >= would make a
 			// zero expected amount satisfied by zero received, completing an
 			// order that was never paid. Checkout refuses to create such an
 			// order, but a row could already exist from an older release or a
 			// hand-edited amount, so never treat a non-positive expectation as
 			// payable here either.
-			$paymentAmountVerified = $amountToVerify > 0 && $blockchainTotalReceived >= $amountToVerify;
+			$paymentAmountVerified = NMMPRO_Amount::clears(NMMPRO_Amount::to_units($blockchainTotalReceived, $precision), $expectedUnits, $percentToVerify);
 
 			// Nothing to act on: no new funds, no fully-funded order still awaiting
 			// completion, and no interrupted completion to resume.
@@ -149,7 +150,7 @@ class NMM_Hd {
 			}
 
 			if ($hasNewPayment) {
-				NMM_Util::log(__FILE__, __LINE__, 'Address ' . $address . ' received a new payment of ' . NMM_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount) . ' ' . $cryptoId);
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Address ' . $address . ' received a new payment of ' . NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount) . ' ' . $cryptoId);
 			}
 
 			// The order's LIVE status governs everything below. The row was read at
@@ -179,7 +180,7 @@ class NMM_Hd {
 				// also re-checks the chain before cancelling, so even here a funded
 				// order is not cancelled.)
 				if (!$hdRepo->set_total_received($address, $blockchainTotalReceived)) {
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not record the received total for ' . $cryptoId . ' address ' . $address . '; deferring completion to the next sweep.', 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not record the received total for ' . $cryptoId . ' address ' . $address . '; deferring completion to the next sweep.', 'error');
 					continue;
 				}
 
@@ -189,7 +190,7 @@ class NMM_Hd {
 					// different order. A resuming row is left 'completing', which
 					// get_reconcilable() also covers.
 					if ($hasNewPayment) {
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received ' . NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived) . ' ' . $cryptoId . ' but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
+						NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received ' . NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived) . ' ' . $cryptoId . ' but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
 					}
 					continue;
 				}
@@ -216,11 +217,11 @@ class NMM_Hd {
 						$hdRepo->release_claim($address);
 					}
 					if ($hasNewPayment) {
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but the order is ' . $order->get_status() . ' - not completing it. Please reconcile manually.', 'warning');
+						NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: verified ' . $cryptoId . ' payment for order ' . $orderId . ' but the order is ' . $order->get_status() . ' - not completing it. Please reconcile manually.', 'warning');
 						$order->add_order_note(sprintf(
 							/* translators: 1: amount, 2: cryptocurrency ticker, 3: wallet address, 4: order status */
 							__('Late payment of %1$s %2$s received at Privacy Mode address %3$s after this order became %4$s. The order has NOT been completed automatically - please reconcile this payment manually.', 'nomiddleman-crypto-payments-for-woocommerce'),
-							NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
+							NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 							$cryptoId,
 							$address,
 							$order->get_status()));
@@ -238,19 +239,19 @@ class NMM_Hd {
 				// the claim and the completion is picked up by a later sweep.
 				$claim = $hdRepo->claim_for_complete($address);
 
-				if ($claim === NMM_Hd_Repo::CLAIM_DB_ERROR) {
+				if ($claim === NMMPRO_Hd_Repo::CLAIM_DB_ERROR) {
 					// Row state unknown; the funds are cached, and the next sweep
 					// re-evaluates (still verified, still payable) and retries.
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: database error claiming ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . '; leaving it for retry.', 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: database error claiming ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . '; leaving it for retry.', 'error');
 					continue;
 				}
 
-				if ($claim === NMM_Hd_Repo::CLAIM_ALREADY) {
+				if ($claim === NMMPRO_Hd_Repo::CLAIM_ALREADY) {
 					// Either a concurrent run holds a live claim (only possible
 					// without the cron advisory lock), or the row was moved out of a
 					// claimable state between get_pending() and here. If a holder
 					// fails to complete, it releases the row for a later retry.
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' is already being completed by another run; not completing it here.', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' for order ' . $orderId . ' is already being completed by another run; not completing it here.', 'warning');
 					continue;
 				}
 
@@ -271,7 +272,7 @@ class NMM_Hd {
 					$completed = $order->payment_complete();
 				}
 				catch ( \Throwable $t ) {
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: completing order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . ' raised: ' . $t->getMessage(), 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: completing order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . ' raised: ' . $t->getMessage(), 'error');
 					$completed = false;
 				}
 
@@ -283,7 +284,7 @@ class NMM_Hd {
 				// a paid-but-never-transitioned order forever, so require the order
 				// to actually BE paid before settling.
 				if ($completed && !$order->is_paid()) {
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: payment_complete() did not transition order ' . $orderId . ' (status ' . $order->get_status() . ' is payable but not completable); releasing the claim. Please reconcile manually.', 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: payment_complete() did not transition order ' . $orderId . ' (status ' . $order->get_status() . ' is payable but not completable); releasing the claim. Please reconcile manually.', 'error');
 					$completed = false;
 				}
 
@@ -295,7 +296,7 @@ class NMM_Hd {
 					// If even this write fails, the row stays 'completing', which is
 					// also still swept - so the payment is never stranded either way.
 					$hdRepo->release_claim($address);
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not complete order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . '; released the claim for retry.', 'error');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not complete order ' . $orderId . ' for ' . $cryptoId . ' address ' . $address . '; released the claim for retry.', 'error');
 					continue;
 				}
 
@@ -303,7 +304,7 @@ class NMM_Hd {
 				$order->add_order_note(sprintf(
 					/* translators: 1: amount, 2: cryptocurrency ticker, 3: date/time */
 					__('Order payment of %1$s %2$s verified at %3$s.', 'nomiddleman-crypto-payments-for-woocommerce'),
-					NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
+					NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 					$cryptoId,
 					wp_date('Y-m-d H:i:s')));
 			}
@@ -326,7 +327,7 @@ class NMM_Hd {
 				$hdRepo->set_total_received($address, $blockchainTotalReceived);
 
 				if (!$order) {
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received an underpayment but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received an underpayment but order ' . $orderId . ' no longer exists. Please reconcile manually.', 'warning');
 					continue;
 				}
 
@@ -340,11 +341,11 @@ class NMM_Hd {
 					if ($isResuming) {
 						$hdRepo->release_claim($address);
 					}
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received a partial ' . $cryptoId . ' payment but order ' . $orderId . ' is ' . $order->get_status() . ' - not soliciting further payment. Please reconcile manually.', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: address ' . $address . ' received a partial ' . $cryptoId . ' payment but order ' . $orderId . ' is ' . $order->get_status() . ' - not soliciting further payment. Please reconcile manually.', 'warning');
 					$order->add_order_note(sprintf(
 						/* translators: 1: amount received, 2: cryptocurrency ticker, 3: wallet address, 4: order status */
 						__('Late partial payment of %1$s %2$s received at Privacy Mode address %3$s after this order became %4$s. The customer has NOT been asked for further payment and the order has NOT been changed - please reconcile this payment manually.', 'nomiddleman-crypto-payments-for-woocommerce'),
-						NMM_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount),
+						NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount),
 						$cryptoId,
 						$address,
 						$order->get_status()));
@@ -356,30 +357,30 @@ class NMM_Hd {
 						$orderNote = sprintf(
 							/* translators: 1: amount received, 2: cryptocurrency ticker, 3: remaining amount, 4: wallet address */
 							__('New payment was received but is still under order total. Received payment of %1$s %2$s.<br>Remaining payment required: %3$s<br>Wallet Address: %4$s', 'nomiddleman-crypto-payments-for-woocommerce'),
-							NMM_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount),
+							NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $newPaymentAmount),
 							$cryptoId,
-							NMM_Cryptocurrencies::get_price_string($cryptoId, ((float) $orderAmount) - $blockchainTotalReceived),
+							NMMPRO_Cryptocurrencies::get_price_string($cryptoId, ((float) $orderAmount) - $blockchainTotalReceived),
 							$address);
 
-						add_filter('woocommerce_email_subject_customer_note', 'NMM_change_partial_email_note_subject_line', 1, 2);
-	    				add_filter('woocommerce_email_heading_customer_note', 'NMM_change_partial_email_heading', 1, 2);
+						add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_partial_email_note_subject_line', 1, 2);
+					add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_partial_email_heading', 1, 2);
 
 						$order->add_order_note($orderNote, true);
 					}
 					// handle first underpayment, update status to pending payment (since we use on-hold for orders with no payment yet)
-					else {						
+					else {
 						$orderNote = sprintf(
 							/* translators: 1: amount received, 2: cryptocurrency ticker, 3: date/time, 4: remaining amount, 5: wallet address */
 							__('Payment of %1$s %2$s received at %3$s. This is under the amount required to process this order.<br>Remaining payment required: %4$s<br>Wallet Address: %5$s', 'nomiddleman-crypto-payments-for-woocommerce'),
-							NMM_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
+							NMMPRO_Cryptocurrencies::get_price_string($cryptoId, $blockchainTotalReceived),
 							$cryptoId,
 							wp_date('m/d/Y g:i a'),
-							NMM_Cryptocurrencies::get_price_string($cryptoId, $amountToVerify - $blockchainTotalReceived),
+							NMMPRO_Cryptocurrencies::get_price_string($cryptoId, max(0, (float) $orderAmount * $percentToVerify - $blockchainTotalReceived)),
 							$address);
-						
-						add_filter('woocommerce_email_subject_customer_note', 'NMM_change_partial_email_note_subject_line', 1, 2);
-	    				add_filter('woocommerce_email_heading_customer_note', 'NMM_change_partial_email_heading', 1, 2);
-						
+
+						add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_partial_email_note_subject_line', 1, 2);
+					add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_partial_email_heading', 1, 2);
+
 						$order->add_order_note($orderNote, true);
 						$hdRepo->set_status($address, 'underpaid');
 					}
@@ -415,9 +416,9 @@ class NMM_Hd {
 	}
 
 	private static function get_total_received_for_bitcoin_address($address, $requiredConfirmations) {
-		
-		$primaryResult = NMM_Blockchain::get_blockchaininfo_total_received_for_btc_address($address, $requiredConfirmations);
-		
+
+		$primaryResult = NMMPRO_Blockchain::get_blockchaininfo_total_received_for_btc_address($address, $requiredConfirmations);
+
 		if ($primaryResult['result'] === 'success') {
 			return $primaryResult['total_received'];
 		}
@@ -430,13 +431,13 @@ class NMM_Hd {
 		// order the merchant considers paid - and a zero observation is what
 		// lets the expiry pass cancel. Wait for the primary source instead.
 		if ((int) $requiredConfirmations === 1) {
-			$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
+			$secondaryResult = NMMPRO_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 			if ($secondaryResult['result'] === 'success') {
 				return $secondaryResult['total_received'];
 			}
 
-			$fallbackResult = NMM_Blockchain::get_blockstream_total_received_for_btc_address($address);
+			$fallbackResult = NMMPRO_Blockchain::get_blockstream_total_received_for_btc_address($address);
 
 			if ($fallbackResult['result'] === 'success') {
 				return $fallbackResult['total_received'];
@@ -447,7 +448,7 @@ class NMM_Hd {
 	}
 
 	private static function get_total_received_for_litecoin_address($address, $requiredConfirmations) {
-		$primaryResult = NMM_Blockchain::get_blockcypher_total_received_for_ltc_address($address, $requiredConfirmations);
+		$primaryResult = NMMPRO_Blockchain::get_blockcypher_total_received_for_ltc_address($address, $requiredConfirmations);
 
 		if ($primaryResult['result'] === 'success') {
 			return $primaryResult['total_received'];
@@ -459,7 +460,7 @@ class NMM_Hd {
 		// zero-confirmation requirement must not fall through to a source that
 		// cannot see unconfirmed payments).
 		if ((int) $requiredConfirmations === 1) {
-			$secondaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
+			$secondaryResult = NMMPRO_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
 
 			if ($secondaryResult['result'] === 'success') {
 				return $secondaryResult['total_received'];
@@ -470,31 +471,31 @@ class NMM_Hd {
 	}
 
 	private static function get_total_received_for_qtum_address($address) {
-		$result = NMM_Blockchain::get_qtuminfo_total_received_for_qtum_address($address);
+		$result = NMMPRO_Blockchain::get_qtuminfo_total_received_for_qtum_address($address);
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];
-		}		
+		}
 
 		throw new \Exception("Unable to get QTUM HD address information from external sources.");
 	}
 
 	private static function get_total_received_for_dash_address($address) {
-		$result = NMM_Blockchain::get_dashblockexplorer_total_received_for_dash_address($address);
+		$result = NMMPRO_Blockchain::get_dashblockexplorer_total_received_for_dash_address($address);
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];
-		}		
+		}
 
 		throw new \Exception("Unable to get DASH HD address information from external sources.");
 	}
 
 	private static function get_total_received_for_doge_address($address) {
-		$result = NMM_Blockchain::get_blockcypher_total_received_for_doge_address($address);
+		$result = NMMPRO_Blockchain::get_blockcypher_total_received_for_doge_address($address);
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];
-		}		
+		}
 
 		throw new \Exception("Unable to get DOGE HD address information from external sources.");
 	}
@@ -502,14 +503,14 @@ class NMM_Hd {
 	private static function get_total_received_for_xmy_address($address) {
 		// Myriad's last public balance API (blockbook.myralicious.com) is gone and
 		// no replacement carries the chain, so there is nothing left to query.
-		// XMY is listed in NMM_Cryptocurrencies::$hdUnverifiable, which keeps
+		// XMY is listed in NMMPRO_Cryptocurrencies::$hdUnverifiable, which keeps
 		// Privacy Mode off the settings screen for it; this guard covers a site
 		// that had it enabled before the endpoint died.
 		throw new \Exception("Unable to get XMY HD address information: Myriad has no working balance API.");
 	}
-	
+
 	private static function get_total_received_for_bitcore_address($address) {
-		$result = NMM_Blockchain::get_chainz_total_received_for_btx_address($address);
+		$result = NMMPRO_Blockchain::get_chainz_total_received_for_btx_address($address);
 
 		if ($result['result'] === 'success') {
 			return $result['total_received'];
@@ -520,12 +521,12 @@ class NMM_Hd {
 
 	public static function cancel_expired_addresses($cryptoId, $mpk, $orderCancellationTimeSec, $hdMode) {
 		global $woocommerce;
-		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
+		$hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
 
 		$assignedRecords = $hdRepo->get_reconcilable();
 
 		foreach ($assignedRecords as $record) {
-			
+
 			$assignedAt = $record['assigned_at'];
 			$totalReceived = $record['total_received'];
 			$address = $record['address'];
@@ -572,7 +573,7 @@ class NMM_Hd {
 			}
 
 			$assignedFor = time() - $assignedAt;
-			NMM_Util::log(__FILE__, __LINE__, 'address ' . $address . ' has been assigned for ' . $assignedFor . '... cancel time: ' . $orderCancellationTimeSec);
+			NMMPRO_Util::log(__FILE__, __LINE__, 'address ' . $address . ' has been assigned for ' . $assignedFor . '... cancel time: ' . $orderCancellationTimeSec);
 			if ($assignedFor > $orderCancellationTimeSec && $totalReceived == 0) {
 				// The row's cached balance is zero and its window has passed. Before
 				// cancelling, confirm a zero balance against a FRESH observation: a
@@ -615,7 +616,7 @@ class NMM_Hd {
 						$freshTotal = self::get_total_received_for_address($cryptoId, $address, 0);
 					}
 					catch ( \Exception $e ) {
-						NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not re-check ' . $cryptoId . ' address ' . $address . ' before expiry; leaving the order for the next cycle.', 'warning');
+						NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: could not re-check ' . $cryptoId . ' address ' . $address . ' before expiry; leaving the order for the next cycle.', 'warning');
 						continue;
 					}
 				}
@@ -624,7 +625,7 @@ class NMM_Hd {
 					// Funds are present after all. Record them and let the verifier
 					// handle the order; never cancel it.
 					$hdRepo->set_total_received($address, $freshTotal);
-					NMM_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' has an on-chain balance at expiry time; not cancelling order ' . $orderId . '.', 'warning');
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode: ' . $cryptoId . ' address ' . $address . ' has an on-chain balance at expiry time; not cancelling order ' . $orderId . '.', 'warning');
 					continue;
 				}
 
@@ -638,13 +639,13 @@ class NMM_Hd {
 					$cryptoId,
 					round($orderCancellationTimeSec/3600, 1));
 
-				add_filter('woocommerce_email_subject_customer_note', 'NMM_change_cancelled_email_note_subject_line', 1, 2);
-	    		add_filter('woocommerce_email_heading_customer_note', 'NMM_change_cancelled_email_heading', 1, 2);
-				
-				$order->update_status('wc-cancelled');				
+				add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_cancelled_email_note_subject_line', 1, 2);
+			add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_cancelled_email_heading', 1, 2);
+
+				$order->update_status('wc-cancelled');
 				$order->add_order_note($orderNote, true);
-				
-				NMM_Util::log(__FILE__, __LINE__, 'Cancelled order: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
+
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Cancelled order: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
 			}
 		}
 	}
@@ -662,11 +663,11 @@ class NMM_Hd {
 	private static function quarantine_or_retire_hd_address($hdRepo, $address, $totalReceived, $reason) {
 		if ((float) $totalReceived > 0) {
 			$hdRepo->set_status($address, 'dirty');
-			NMM_Util::log(__FILE__, __LINE__, 'Retiring HD address ' . $address . ' (dirty): ' . $reason . ', received ' . $totalReceived . '.');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Retiring HD address ' . $address . ' (dirty): ' . $reason . ', received ' . $totalReceived . '.');
 		}
 		else {
 			$hdRepo->set_quarantine($address, 'quarantine', time());
-			NMM_Util::log(__FILE__, __LINE__, 'Quarantining HD address ' . $address . ': ' . $reason . ' (fresh explorer checks will decide reuse).');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Quarantining HD address ' . $address . ': ' . $reason . ' (fresh explorer checks will decide reuse).');
 		}
 	}
 
@@ -679,7 +680,7 @@ class NMM_Hd {
 	 * cannot be verified stays quarantined.
 	 */
 	public static function process_quarantined_addresses($cryptoId, $mpk, $requiredConfirmations, $hdMode, $quarantinePeriodSec, $batchLimit = 25) {
-		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
+		$hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
 
 		foreach ($hdRepo->get_quarantined($batchLimit) as $record) {
 			$address = $record['address'];
@@ -708,7 +709,7 @@ class NMM_Hd {
 			if ($freshReceived > 0) {
 				// It received funds after all - retire permanently, never reuse.
 				$hdRepo->set_status($address, 'dirty');
-				NMM_Util::log(__FILE__, __LINE__, 'Quarantine: retiring ' . $address . ' (fresh check found ' . $freshReceived . ' received).');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Quarantine: retiring ' . $address . ' (fresh check found ' . $freshReceived . ' received).');
 				continue;
 			}
 
@@ -721,7 +722,7 @@ class NMM_Hd {
 				// address the instant it becomes ready cannot have its new order
 				// amount clobbered by a second write.
 				$hdRepo->recycle_quarantined($address);
-				NMM_Util::log(__FILE__, __LINE__, 'Quarantine: recycling pristine unused address ' . $address . ' after two clean fresh checks.');
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Quarantine: recycling pristine unused address ' . $address . ' after two clean fresh checks.');
 			}
 		}
 	}
@@ -734,13 +735,13 @@ class NMM_Hd {
 			return self::is_dirty_ltc_address($address);
 		}
 		if ($cryptoId === 'QTUM') {
-			return self::is_dirty_qtum_address($address);	
+			return self::is_dirty_qtum_address($address);
 		}
 		if ($cryptoId === 'DASH') {
-			return self::is_dirty_dash_address($address);	
+			return self::is_dirty_dash_address($address);
 		}
 		if ($cryptoId === 'DOGE') {
-			return self::is_dirty_doge_address($address);	
+			return self::is_dirty_doge_address($address);
 		}
 		if ($cryptoId === 'XMY') {
 			return self::is_dirty_xmy_address($address);
@@ -751,18 +752,18 @@ class NMM_Hd {
 	}
 
 	private static function is_dirty_btc_address($address) {
-		$primaryResult = NMM_Blockchain::get_blockchaininfo_total_received_for_btc_address($address, 0);
+		$primaryResult = NMMPRO_Blockchain::get_blockchaininfo_total_received_for_btc_address($address, 0);
 
 		if ($primaryResult['result'] === 'success') {
 			// if we get a non zero balance from first source then address is dirty
-			if ($primaryResult['total_received'] >= 0.00000001) {				
+			if ($primaryResult['total_received'] >= 0.00000001) {
 				return true;
 			}
 			else {
-				$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
+				$secondaryResult = NMMPRO_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 				// we have a primary resource saying address is clean and backup source failed, so return clean
-				if ($secondaryResult['result'] === 'error') {					
+				if ($secondaryResult['result'] === 'error') {
 					return false;
 				}
 				// backup source gave us data
@@ -779,14 +780,14 @@ class NMM_Hd {
 			}
 		}
 		else {
-			$secondaryResult = NMM_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
+			$secondaryResult = NMMPRO_Blockchain::get_mempoolspace_total_received_for_btc_address($address);
 
 			if ($secondaryResult['result'] === 'success') {
 				return $secondaryResult['total_received'] >= 0.00000001;
 			}
 		}
 
-		$fallbackResult = NMM_Blockchain::get_blockstream_total_received_for_btc_address($address);
+		$fallbackResult = NMMPRO_Blockchain::get_blockstream_total_received_for_btc_address($address);
 		if ($fallbackResult['result'] === 'success') {
 				return $fallbackResult['total_received'] >= 0.00000001;
 			}
@@ -794,18 +795,18 @@ class NMM_Hd {
 	}
 
 	private static function is_dirty_ltc_address($address) {
-		$primaryResult = NMM_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);		
+		$primaryResult = NMMPRO_Blockchain::get_litecoinspace_total_received_for_ltc_address($address);
 
 		if ($primaryResult['result'] === 'success') {
 			// if we get a non zero balance from first source then address is dirty
-			if ($primaryResult['total_received'] >= 0.00000001) {				
+			if ($primaryResult['total_received'] >= 0.00000001) {
 				return true;
 			}
 			else {
-				$secondaryResult = NMM_Blockchain::get_blockcypher_total_received_for_ltc_address($address, 0);
+				$secondaryResult = NMMPRO_Blockchain::get_blockcypher_total_received_for_ltc_address($address, 0);
 
 				// we have a primary resource saying address is clean and backup source failed, so return clean
-				if ($secondaryResult['result'] === 'error') {					
+				if ($secondaryResult['result'] === 'error') {
 					return false;
 				}
 				// backup source gave us data
@@ -822,20 +823,20 @@ class NMM_Hd {
 			}
 		}
 		else {
-			$secondaryResult = NMM_Blockchain::get_blockcypher_total_received_for_ltc_address($address, 0);
+			$secondaryResult = NMMPRO_Blockchain::get_blockcypher_total_received_for_ltc_address($address, 0);
 
 			if ($secondaryResult['result'] === 'success') {
 				return $secondaryResult['total_received'] >= 0.00000001;
 			}
 		}
-		
+
 		throw new \Exception("Unable to get LTC address total amount received to verify is address is unused.");
 	}
 
 	private static function is_dirty_qtum_address($address) {
 		return self::get_total_received_for_qtum_address($address) >= 0.00000001;
 	}
-	
+
 	private static function is_dirty_dash_address($address) {
 		return self::get_total_received_for_dash_address($address) >= 0.00000001;
 	}
@@ -847,16 +848,16 @@ class NMM_Hd {
 	private static function is_dirty_xmy_address($address) {
 		return self::get_total_received_for_xmy_address($address) >= 0.00000001;
 	}
-	
+
 	private static function is_dirty_btx_address($address) {
 		return self::get_total_received_for_bitcore_address($address) >= 0.00000001;
 	}
-	
-	public static function force_new_address($cryptoId, $mpk, $hdMode) {
-		
-		$hdRepo = new NMM_Hd_Repo($cryptoId, $mpk, $hdMode);
 
-		$startIndex = $hdRepo->get_next_index();	
+	public static function force_new_address($cryptoId, $mpk, $hdMode) {
+
+		$hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
+
+		$startIndex = $hdRepo->get_next_index();
 
 		$address = self::create_hd_address($cryptoId, $mpk, $startIndex, $hdMode);
 
@@ -890,7 +891,7 @@ class NMM_Hd {
 			}
 		}
 		catch ( \Exception $e ) {
-			NMM_Util::log(__FILE__, __LINE__, 'Could not create new addresses: ' . $e->getMessage());
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Could not create new addresses: ' . $e->getMessage());
 			throw new \Exception(esc_html($e->getMessage()));
 		}
 
@@ -907,16 +908,16 @@ class NMM_Hd {
 	}
 
 	public static function create_hd_address($cryptoId, $mpk, $index, $hdMode) {
-		
+
 		try {
-			if (!NMM_Util::p_enabled()) {
+			if (!NMMPRO_Util::p_enabled()) {
 				if (self::is_valid_xpub($mpk)) {
 					return HdHelper::mpk_to_bc_address($cryptoId, $mpk, $index, 2, false);
 				}
 			}
 			else {
 				if (self::is_valid_mpk($cryptoId, $mpk)) {
-					return apply_filters('nmm_get_hd_address', $cryptoId, $mpk, $index, $hdMode);
+					return NMMPRO_Compat::filter('nmmpro_get_hd_address', $cryptoId, $mpk, $index, $hdMode);
 				}
 			}
 		}
@@ -960,10 +961,10 @@ class NMM_Hd {
 			return self::is_valid_xpub($mpk);
 		}
 		if ($cryptoId === 'XMY') {
-			return self::is_valid_xpub($mpk);	
-		}	
+			return self::is_valid_xpub($mpk);
+		}
 		if ($cryptoId === 'BTX') {
-			return self::is_valid_xpub($mpk);	
+			return self::is_valid_xpub($mpk);
 		}
 	}
 }

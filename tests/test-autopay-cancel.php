@@ -1,6 +1,6 @@
 <?php
 /**
- * Live-DB test: NMM_Payment::cancel_expired_payments() must never cancel an
+ * Live-DB test: NMMPRO_Payment::cancel_expired_payments() must never cancel an
  * order that has been paid or is no longer awaiting payment (the legacy Autopay
  * analogue of the HD cancellation race). Requires WordPress + WooCommerce + a
  * database. Skips cleanly standalone.
@@ -14,14 +14,14 @@ if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !function_exists
 }
 
 $wpdb = $GLOBALS['wpdb'];
-$pt = $wpdb->prefix . NMM_PAYMENT_TABLE;
+$pt = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
 $wpdb->query("DELETE FROM `$pt`");
 
 // The verifier's per-currency coverage stamp gates cancellation: a row only
 // counts as expired once a sweep has completed after its window closed (see
 // the dedicated sections at the end). Seed a fresh BTC stamp so the sections
 // below exercise pure expiry logic.
-update_option('nmm_autopay_scan_covered_at', array('BTC' => time()), false);
+update_option('nmmpro_autopay_scan_covered_at', array('BTC' => time()), false);
 
 // NOTE: wp eval-file runs this file in function scope, so a plain top-level
 // `$pass` is NOT the same variable a `global $pass` inside aok() would write.
@@ -34,7 +34,7 @@ $crypto = 'BTC';                 // default autopay cancellation window is 24h
 $expired = time() - (25 * 3600); // past the window
 $fresh   = time();               // within the window
 
-function mkorder($status) { $o = wc_create_order(); $o->set_payment_method('nmmpro_gateway'); $o->set_status($status); $o->save(); return $o->get_id(); }
+function mkorder($status) { $o = wc_create_order(); $o->set_payment_method('nmm_gateway'); $o->set_status($status); $o->save(); return $o->get_id(); }
 $ins = function($orderId, $orderedAt) use ($wpdb, $pt, $crypto) {
 	$wpdb->query($wpdb->prepare(
 		"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
@@ -52,7 +52,7 @@ $oFresh      = mkorder('pending');     $ins($oFresh, $fresh);        // not expi
 $oExpPending = mkorder('pending');     $ins($oExpPending, $expired); // expired, awaiting payment
 $oExpOnHold  = mkorder('on-hold');     $ins($oExpOnHold, $expired);  // expired, awaiting payment
 
-NMM_Payment::cancel_expired_payments();
+NMMPRO_Payment::cancel_expired_payments();
 
 // Paid orders: never cancelled; record reconciled to paid.
 aok('paid (processing) order NOT cancelled',   ord_status($oProcessing) === 'processing');
@@ -78,7 +78,7 @@ aok('expired on-hold order cancelled',         ord_status($oExpOnHold) === 'canc
 aok('  its record cancelled',                  rec_status($wpdb,$pt,$oExpOnHold) === 'cancelled');
 
 // --- Concurrency: order completes AFTER the claim, right before cancellation ---
-// The nmm_before_autopay_cancel hook fires immediately after the row is claimed
+// The nmmpro_before_autopay_cancel hook fires immediately after the row is claimed
 // and before the final re-fetch. Completing the order there simulates a merchant
 // or verifier winning the race in that window; the re-fetch must catch it and
 // reconcile to paid instead of cancelling a now-paid order.
@@ -92,9 +92,9 @@ $raceHook = function($orderId, $cryptoId, $address) use ($oRace, &$raceFired) {
 	$o->payment_complete();
 	$o->save();
 };
-add_action('nmm_before_autopay_cancel', $raceHook, 10, 3);
-NMM_Payment::cancel_expired_payments();
-remove_action('nmm_before_autopay_cancel', $raceHook, 10);
+add_action('nmmpro_before_autopay_cancel', $raceHook, 10, 3);
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('nmmpro_before_autopay_cancel', $raceHook, 10);
 
 aok('race hook fired for claimed order',        $raceFired === 1, 'fired=' . $raceFired);
 aok('order paid mid-transition NOT cancelled',  ord_status($oRace) !== 'cancelled', 'status=' . ord_status($oRace));
@@ -106,9 +106,9 @@ aok('  its record reconciled to paid',          rec_status($wpdb,$pt,$oRace) ===
 $wpdb->query("DELETE FROM `$pt`");
 $oClaimed = mkorder('pending'); $ins($oClaimed, $expired);
 $wpdb->query($wpdb->prepare("UPDATE `$pt` SET status='paid' WHERE order_id=%d", $oClaimed));
-$repo = new NMM_Payment_Repo();
-aok('claim on already-paid row -> CLAIM_ALREADY', $repo->claim_for_cancellation($oClaimed, '0.00100000') === NMM_Payment_Repo::CLAIM_ALREADY);
-NMM_Payment::cancel_expired_payments(); // no unpaid rows -> order stays pending
+$repo = new NMMPRO_Payment_Repo();
+aok('claim on already-paid row -> CLAIM_ALREADY', $repo->claim_for_cancellation($oClaimed, '0.00100000') === NMMPRO_Payment_Repo::CLAIM_ALREADY);
+NMMPRO_Payment::cancel_expired_payments(); // no unpaid rows -> order stays pending
 aok('order left pending (claim lost)',          ord_status($oClaimed) === 'pending');
 aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) === 'paid');
 
@@ -117,10 +117,10 @@ aok('  record still paid, not cancelled',       rec_status($wpdb,$pt,$oClaimed) 
 // transition only WHERE status='unpaid'. Exactly one can win a given row.
 $wpdb->query("DELETE FROM `$pt`");
 $oRow = mkorder('pending'); $ins($oRow, $expired);
-$rp = new NMM_Payment_Repo();
-aok('verifier claim_for_payment -> CLAIM_CLAIMED', $rp->claim_for_payment($oRow, '0.00100000') === NMM_Payment_Repo::CLAIM_CLAIMED);
+$rp = new NMMPRO_Payment_Repo();
+aok('verifier claim_for_payment -> CLAIM_CLAIMED', $rp->claim_for_payment($oRow, '0.00100000') === NMMPRO_Payment_Repo::CLAIM_CLAIMED);
 aok('  row is now paid',                          rec_status($wpdb,$pt,$oRow) === 'paid');
-aok('cron claim then loses -> CLAIM_ALREADY',     $rp->claim_for_cancellation($oRow, '0.00100000') === NMM_Payment_Repo::CLAIM_ALREADY);
+aok('cron claim then loses -> CLAIM_ALREADY',     $rp->claim_for_cancellation($oRow, '0.00100000') === NMMPRO_Payment_Repo::CLAIM_ALREADY);
 
 // A transient DB failure must be distinguishable from a race loss (CLAIM_DB_ERROR
 // != CLAIM_ALREADY), so the caller can retry instead of burning the payment.
@@ -129,14 +129,14 @@ $wpdb->suppress_errors(true);
 $claimErr = $rp->claim_for_payment($oRow, '0.00100000'); // table missing -> UPDATE fails
 $wpdb->suppress_errors(false);
 $wpdb->query("RENAME TABLE `{$pt}_bak` TO `$pt`");
-aok('claim on DB error -> CLAIM_DB_ERROR',        $claimErr === NMM_Payment_Repo::CLAIM_DB_ERROR, 'got=' . $claimErr);
+aok('claim on DB error -> CLAIM_DB_ERROR',        $claimErr === NMMPRO_Payment_Repo::CLAIM_DB_ERROR, 'got=' . $claimErr);
 
 // Opposite order: cron wins first, verifier must lose and would abort completion.
 $wpdb->query("DELETE FROM `$pt`");
 $oRow2 = mkorder('pending'); $ins($oRow2, $expired);
-aok('cron claim_for_cancellation -> CLAIM_CLAIMED', $rp->claim_for_cancellation($oRow2, '0.00100000') === NMM_Payment_Repo::CLAIM_CLAIMED);
+aok('cron claim_for_cancellation -> CLAIM_CLAIMED', $rp->claim_for_cancellation($oRow2, '0.00100000') === NMMPRO_Payment_Repo::CLAIM_CLAIMED);
 aok('  row is now cancelled',                      rec_status($wpdb,$pt,$oRow2) === 'cancelled');
-aok('verifier then loses -> CLAIM_ALREADY',        $rp->claim_for_payment($oRow2, '0.00100000') === NMM_Payment_Repo::CLAIM_ALREADY);
+aok('verifier then loses -> CLAIM_ALREADY',        $rp->claim_for_payment($oRow2, '0.00100000') === NMMPRO_Payment_Repo::CLAIM_ALREADY);
 
 // --- Index: the expiry query must range-scan unpaid_expiry, not read every row ---
 // Seed a realistic distribution - many recent unpaid checkouts, a few old ones -
@@ -166,7 +166,7 @@ aok('  as a range scan',                       $planType === 'range', 'type=' . 
 aok('  examines far fewer than 412 rows',      $planRows > 0 && $planRows <= 100, 'rows=' . $planRows);
 
 // And the cutoff query itself returns only the old rows (correctness of the filter).
-$repo2 = new NMM_Payment_Repo();
+$repo2 = new NMMPRO_Payment_Repo();
 aok('cutoff returns only the 12 expired rows', count($repo2->get_unpaid($cutoff)) === 12, 'got=' . count($repo2->get_unpaid($cutoff)));
 aok('no-cutoff still returns all 412 rows',    count($repo2->get_unpaid()) === 412, 'got=' . count($repo2->get_unpaid()));
 
@@ -177,16 +177,16 @@ aok('no-cutoff still returns all 412 rows',    count($repo2->get_unpaid()) === 4
 // consumed, or the same still-in-window tx could later complete a *new* order on
 // the reused static/carousel address (payment misattribution).
 $wpdb->query("DELETE FROM `$pt`");
-$cryptos = NMM_Cryptocurrencies::get();
+$cryptos = NMMPRO_Cryptocurrencies::get();
 $btc = $cryptos['BTC'];
 $reuseAddr = 'addr_reuse_e2e';
 $reuseAmt  = '0.00100000';
 $txHash    = 'TXREUSEe2e';
 $lifetime  = 3600;
 $txUnits   = $reuseAmt * (10 ** $btc->get_round_precision()); // smallest-unit amount
-$tx = new NMM_Transaction($txUnits, 999 /*confirmations*/, time() /*in window*/, $txHash);
-$rpe = new NMM_Payment_Repo();
-$stg = new NMM_Settings(get_option(NMM_REDUX_ID));
+$tx = new NMMPRO_Transaction($txUnits, 999 /*confirmations*/, time() /*in window*/, $txHash);
+$rpe = new NMMPRO_Payment_Repo();
+$stg = new NMMPRO_Settings(get_option(NMMPRO_REDUX_ID));
 // Consumed-tx state lives in a per-address option that outlives the table wipe;
 // clear it so this test is deterministic across repeated runs.
 delete_option('nmmpro_BTC_transactions_consumed_for_' . $reuseAddr);
@@ -200,9 +200,9 @@ $wpdb->query($wpdb->prepare(
 $loseHook = function($orderId, $cryptoId, $address, $hash) use ($oA, $reuseAmt, $rpe) {
 	if ($orderId == $oA) { $rpe->claim_for_cancellation($oA, $reuseAmt); } // cron wins the row
 };
-add_action('nmm_before_autopay_complete', $loseHook, 10, 4);
-NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetime);
-remove_action('nmm_before_autopay_complete', $loseHook, 10);
+add_action('nmmpro_before_autopay_complete', $loseHook, 10, 4);
+NMMPRO_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetime);
+remove_action('nmmpro_before_autopay_complete', $loseHook, 10);
 
 aok('lost race: order A record cancelled',      rec_status($wpdb,$pt,$oA) === 'cancelled');
 aok('lost race: order A not completed',         !wc_get_order($oA)->has_status(array('processing','completed')), 'status=' . ord_status($oA));
@@ -214,7 +214,7 @@ $oB = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
 	$reuseAddr, time(), $oB, $reuseAmt));
-NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetime);
+NMMPRO_Payment::process_address_transactions($btc, $reuseAddr, array($tx), $lifetime);
 
 aok('reused address: new order B NOT paid',     rec_status($wpdb,$pt,$oB) === 'unpaid');
 aok('reused address: order B still pending',    ord_status($oB) === 'pending');
@@ -230,13 +230,13 @@ $oErr = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
 	$reuseAddr, time(), $oErr, $reuseAmt));
-$txErr = new NMM_Transaction($txUnits, 999, time(), 'TXDBERRe2e');
+$txErr = new NMMPRO_Transaction($txUnits, 999, time(), 'TXDBERRe2e');
 $errHook = function($orderId, $cryptoId, $address, $hash) use ($oErr, $pt, $wpdb) {
 	if ($orderId == $oErr) { $wpdb->suppress_errors(true); $wpdb->query("RENAME TABLE `$pt` TO `{$pt}_bak`"); }
 };
-add_action('nmm_before_autopay_complete', $errHook, 10, 4);
-NMM_Payment::process_address_transactions($btc, $reuseAddr, array($txErr), $lifetime);
-remove_action('nmm_before_autopay_complete', $errHook, 10);
+add_action('nmmpro_before_autopay_complete', $errHook, 10, 4);
+NMMPRO_Payment::process_address_transactions($btc, $reuseAddr, array($txErr), $lifetime);
+remove_action('nmmpro_before_autopay_complete', $errHook, 10);
 $wpdb->query("RENAME TABLE `{$pt}_bak` TO `$pt`"); // restore; row is still unpaid
 $wpdb->suppress_errors(false);
 
@@ -253,8 +253,8 @@ $oC = mkorder('pending');
 $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
 	$reuseAddr, time(), $oC, $reuseAmt));
-$tx2 = new NMM_Transaction($txUnits, 999, time(), 'TXFRESHe2e');
-NMM_Payment::process_address_transactions($btc, $reuseAddr, array($tx2), $lifetime);
+$tx2 = new NMMPRO_Transaction($txUnits, 999, time(), 'TXFRESHe2e');
+NMMPRO_Payment::process_address_transactions($btc, $reuseAddr, array($tx2), $lifetime);
 aok('control: fresh tx DOES pay a new order',   rec_status($wpdb,$pt,$oC) === 'paid');
 
 // Order-relative lower bound: a transaction dated well before the order existed
@@ -268,11 +268,11 @@ $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,%s,0)",
 	$reuseAddr, $ordTime, $oOrd, $reuseAmt));
 $wideLife = 6 * 3600; // wide, so age is not the reason for any rejection
-$preTx = new NMM_Transaction($txUnits, 999, $ordTime - 2 * 3600, 'TXPREORDER'); // 2h before the order
-NMM_Payment::process_address_transactions($btc, $reuseAddr, array($preTx), $wideLife);
+$preTx = new NMMPRO_Transaction($txUnits, 999, $ordTime - 2 * 3600, 'TXPREORDER'); // 2h before the order
+NMMPRO_Payment::process_address_transactions($btc, $reuseAddr, array($preTx), $wideLife);
 aok('pre-order tx does NOT pay the order',      rec_status($wpdb,$pt,$oOrd) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oOrd));
-$postTx = new NMM_Transaction($txUnits, 999, $ordTime + 60, 'TXPOSTORDER'); // just after the order
-NMM_Payment::process_address_transactions($btc, $reuseAddr, array($postTx), $wideLife);
+$postTx = new NMMPRO_Transaction($txUnits, 999, $ordTime + 60, 'TXPOSTORDER'); // just after the order
+NMMPRO_Payment::process_address_transactions($btc, $reuseAddr, array($postTx), $wideLife);
 aok('post-order tx DOES pay the order',         rec_status($wpdb,$pt,$oOrd) === 'paid', 'status=' . rec_status($wpdb,$pt,$oOrd));
 
 // Coverage gate: a row that pre-dates the scan cursor (plugin upgrade with an
@@ -281,10 +281,10 @@ aok('post-order tx DOES pay the order',         rec_status($wpdb,$pt,$oOrd) === 
 // - it may have been paid on-chain all along. Once one full sweep completes,
 // normal expiry resumes.
 $wpdb->query("DELETE FROM `$pt`");
-delete_option('nmm_autopay_scan_cursor');
-delete_option('nmm_autopay_scan_retry');
-delete_option('nmm_autopay_scan_covered_at');
-delete_option('nmm_autopay_scan_sweep_start');
+delete_option('nmmpro_autopay_scan_cursor');
+delete_option('nmmpro_autopay_scan_retry');
+delete_option('nmmpro_autopay_scan_covered_at');
+delete_option('nmmpro_autopay_scan_sweep_start');
 $agedTime = time() - 3 * 24 * 3600;
 delete_option('nmmpro_XMR_transactions_consumed_for_xmr_aged');
 delete_option('nmmpro_XMR_transactions_consumed_for_xmr_agedpaid');
@@ -303,37 +303,37 @@ $wpdb->query($wpdb->prepare(
 	"INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address)
 	 VALUES ('xmr_agedpaid','XMR','unpaid',%d,%d,'0.00200000',0)",
 	$agedTime, $oAgedPaid));
-$xmrCrypto = NMM_Cryptocurrencies::get()['XMR'];
+$xmrCrypto = NMMPRO_Cryptocurrencies::get()['XMR'];
 $agedUnits = 0.002 * (10 ** $xmrCrypto->get_round_precision());
-$agedTx = new NMM_Transaction($agedUnits, 999, $agedTime + 120, 'TXAGEDPAY');
-NMM_Payment::cancel_expired_payments();
+$agedTx = new NMMPRO_Transaction($agedUnits, 999, $agedTime + 120, 'TXAGEDPAY');
+NMMPRO_Payment::cancel_expired_payments();
 aok('aged pre-scan row NOT cancelled unchecked', rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
 aok('  its order still pending',                ord_status($oAged) === 'pending');
 
 // A sweep whose fetch FAILED must not stamp coverage either - the address was
 // visited but never actually verified (transient explorer/RPC outage), and
 // stamping would let the cancellation below kill a possibly-paid order.
-add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'error'); });
-NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
-remove_all_filters('nmm_xmr_account_transactions');
-$covMap = get_option('nmm_autopay_scan_covered_at', array());
-$exclMap = get_option('nmm_autopay_scan_incomplete', array());
+add_filter('nmmpro_xmr_account_transactions', function () { return array('result' => 'error'); });
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+remove_all_filters('nmmpro_xmr_account_transactions');
+$covMap = get_option('nmmpro_autopay_scan_covered_at', array());
+$exclMap = get_option('nmmpro_autopay_scan_incomplete', array());
 aok('failed addresses excluded from certification', is_array($exclMap) && isset($exclMap['XMR|xmr_aged']), 'excl=' . (is_array($exclMap) ? implode(',', array_keys($exclMap)) : '(scalar)'));
-NMM_Payment::cancel_expired_payments();
+NMMPRO_Payment::cancel_expired_payments();
 aok('aged row survives a failed check',          rec_status($wpdb,$pt,$oAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oAged));
 
 // One SUCCESSFUL bounded sweep tick covers the backlog and stamps coverage;
 // the Monero seam keeps the tick offline (no wallet RPC in CI) and serves the
 // aged payment for xmr_agedpaid.
-add_filter('nmm_xmr_account_transactions', function () use ($agedTx) {
+add_filter('nmmpro_xmr_account_transactions', function () use ($agedTx) {
 	return array('result' => 'success', 'by_address' => array('xmr_agedpaid' => array($agedTx)));
 });
-NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
-remove_all_filters('nmm_xmr_account_transactions');
-$covMap = get_option('nmm_autopay_scan_covered_at', array());
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+remove_all_filters('nmmpro_xmr_account_transactions');
+$covMap = get_option('nmmpro_autopay_scan_covered_at', array());
 aok('coverage stamped after a full sweep',       is_array($covMap) && isset($covMap['XMR']) && (int) $covMap['XMR'] > 0);
 aok('aged payment matched via widened window',   rec_status($wpdb,$pt,$oAgedPaid) === 'paid', 'status=' . rec_status($wpdb,$pt,$oAgedPaid));
-NMM_Payment::cancel_expired_payments();
+NMMPRO_Payment::cancel_expired_payments();
 aok('aged row cancelled once checked',           rec_status($wpdb,$pt,$oAged) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oAged));
 aok('  its order cancelled',                    ord_status($oAged) === 'cancelled');
 aok('aged PAID order not cancelled',             ord_status($oAgedPaid) !== 'cancelled', 'order=' . ord_status($oAgedPaid));
@@ -345,10 +345,10 @@ aok('  its record stays paid',                  rec_status($wpdb,$pt,$oAgedPaid)
 // pre_http_request with an empty transaction list, the repo's established
 // offline-explorer technique.
 $wpdb->query("DELETE FROM `$pt`");
-delete_option('nmm_autopay_scan_cursor');
-delete_option('nmm_autopay_scan_retry');
-delete_option('nmm_autopay_scan_covered_at');
-delete_option('nmm_autopay_scan_sweep_start');
+delete_option('nmmpro_autopay_scan_cursor');
+delete_option('nmmpro_autopay_scan_retry');
+delete_option('nmmpro_autopay_scan_covered_at');
+delete_option('nmmpro_autopay_scan_sweep_start');
 $oBtcAged = mkorder('pending');
 $oXmrAged = mkorder('pending');
 $wpdb->query($wpdb->prepare(
@@ -356,20 +356,20 @@ $wpdb->query($wpdb->prepare(
 	 VALUES ('btc_aged','BTC','unpaid',%d,%d,'0.00100000',0), ('xmr_aged2','XMR','unpaid',%d,%d,'0.00200000',0)",
 	time() - 3 * 24 * 3600, $oBtcAged, time() - 3 * 24 * 3600, $oXmrAged));
 
-add_filter('nmm_xmr_account_transactions', function () { return array('result' => 'error'); });
+add_filter('nmmpro_xmr_account_transactions', function () { return array('result' => 'error'); });
 $btcMock = function ($pre, $args, $url) {
 	return array('response' => array('code' => 200, 'message' => 'OK'), 'body' => '[]', 'headers' => array(), 'cookies' => array());
 };
 add_filter('pre_http_request', $btcMock, 10, 3);
-NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600);
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * 3600);
 remove_filter('pre_http_request', $btcMock, 10);
-remove_all_filters('nmm_xmr_account_transactions');
+remove_all_filters('nmmpro_xmr_account_transactions');
 
-$covMap = get_option('nmm_autopay_scan_covered_at', array());
-$exclMap = get_option('nmm_autopay_scan_incomplete', array());
+$covMap = get_option('nmmpro_autopay_scan_covered_at', array());
+$exclMap = get_option('nmmpro_autopay_scan_incomplete', array());
 aok('healthy coin stamped while other coin fails', is_array($covMap) && isset($covMap['BTC']), 'map=' . (is_array($covMap) ? implode(',', array_keys($covMap)) : '(scalar)'));
 aok('failing coin address excluded',               is_array($exclMap) && isset($exclMap['XMR|xmr_aged2']), 'excl=' . (is_array($exclMap) ? implode(',', array_keys($exclMap)) : '(scalar)'));
-NMM_Payment::cancel_expired_payments();
+NMMPRO_Payment::cancel_expired_payments();
 aok('healthy coin: aged row expires normally',    rec_status($wpdb,$pt,$oBtcAged) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oBtcAged));
 aok('failing coin: aged row stays protected',     rec_status($wpdb,$pt,$oXmrAged) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oXmrAged));
 
@@ -378,13 +378,13 @@ aok('failing coin: aged row stays protected',     rec_status($wpdb,$pt,$oXmrAged
 // This is the whole-coin-freeze regression: previously one dusted carousel
 // address marked BTC dirty on every sweep and NO BTC order ever auto-cancelled.
 $wpdb->query("DELETE FROM `$pt`");
-delete_option('nmm_autopay_scan_cursor');
-delete_option('nmm_autopay_scan_retry');
-delete_option('nmm_autopay_scan_covered_at');
-delete_option('nmm_autopay_scan_dirty');
-delete_option('nmm_autopay_scan_incomplete');
-delete_option('nmm_autopay_scan_incomplete_next');
-delete_option('nmm_autopay_scan_sweep_start');
+delete_option('nmmpro_autopay_scan_cursor');
+delete_option('nmmpro_autopay_scan_retry');
+delete_option('nmmpro_autopay_scan_covered_at');
+delete_option('nmmpro_autopay_scan_dirty');
+delete_option('nmmpro_autopay_scan_incomplete');
+delete_option('nmmpro_autopay_scan_incomplete_next');
+delete_option('nmmpro_autopay_scan_sweep_start');
 $oBusy = mkorder('pending');
 $oQuiet = mkorder('pending');
 $agedTime2 = time() - 3 * 24 * 3600;
@@ -411,21 +411,21 @@ $btcAddrMock = function ($pre, $args, $url) {
 	return $pre;
 };
 add_filter('pre_http_request', $btcAddrMock, 10, 3);
-NMM_Payment::check_all_addresses_for_matching_payment(3 * 3600); // one page: wrap
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * 3600); // one page: wrap
 remove_filter('pre_http_request', $btcAddrMock, 10);
-NMM_Payment::cancel_expired_payments();
+NMMPRO_Payment::cancel_expired_payments();
 aok('quiet address: aged row expires normally',   rec_status($wpdb,$pt,$oQuiet) === 'cancelled', 'status=' . rec_status($wpdb,$pt,$oQuiet));
 aok('busy (dusted) address: its rows defer',      rec_status($wpdb,$pt,$oBusy) === 'unpaid', 'status=' . rec_status($wpdb,$pt,$oBusy));
-$covMap = get_option('nmm_autopay_scan_covered_at', array());
+$covMap = get_option('nmmpro_autopay_scan_covered_at', array());
 aok('  coin stamp still advanced',                is_array($covMap) && isset($covMap['BTC']), 'map=' . (is_array($covMap) ? implode(',', array_keys($covMap)) : '(scalar)'));
 
 $wpdb->query("DELETE FROM `$pt`");
-delete_option('nmm_autopay_scan_cursor');
-delete_option('nmm_autopay_scan_retry');
-delete_option('nmm_autopay_scan_covered_at');
-delete_option('nmm_autopay_scan_last_run');
-delete_option('nmm_autopay_scan_sweep_start');
-delete_option('nmm_autopay_scan_dirty');
-delete_option('nmm_autopay_scan_incomplete');
-delete_option('nmm_autopay_scan_incomplete_next');
+delete_option('nmmpro_autopay_scan_cursor');
+delete_option('nmmpro_autopay_scan_retry');
+delete_option('nmmpro_autopay_scan_covered_at');
+delete_option('nmmpro_autopay_scan_last_run');
+delete_option('nmmpro_autopay_scan_sweep_start');
+delete_option('nmmpro_autopay_scan_dirty');
+delete_option('nmmpro_autopay_scan_incomplete');
+delete_option('nmmpro_autopay_scan_incomplete_next');
 echo $GLOBALS['ac_ok'] ? "\nAUTOPAY-CANCEL CHECKS PASSED\n" : "\nAUTOPAY-CANCEL CHECKS FAILED\n";

@@ -8,7 +8,7 @@
  * regard for its live status: a late payment to an order the customer or the
  * merchant had already cancelled would quietly resurrect it, because the
  * verifier runs BEFORE the pass that reconciles cancelled addresses. Autopay
- * has guarded against this for some time (NMM_Payment::process_address_
+ * has guarded against this for some time (NMMPRO_Payment::process_address_
  * transactions); this is the same contract for HD.
  *
  * BTC's explorer is answered offline via pre_http_request, the repo's
@@ -18,7 +18,7 @@
  *   Run:  wp eval-file tests/test-hd-verify.php
  */
 
-if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !defined('NMM_HD_TABLE') || !function_exists('wc_create_order')) {
+if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !defined('NMMPRO_HD_TABLE') || !function_exists('wc_create_order')) {
 	echo "test-hd-verify: skipped (needs WordPress + WooCommerce + DB)\n";
 	return;
 }
@@ -28,7 +28,7 @@ if (!isset($GLOBALS['wpdb']) || !is_object($GLOBALS['wpdb']) || !defined('NMM_HD
 $GLOBALS['hd_ok']    = true;
 $GLOBALS['hd_mpk']   = 'test_mpk_hd_verify';
 $GLOBALS['hd_mode']  = 0;
-$GLOBALS['hd_table'] = $GLOBALS['wpdb']->prefix . NMM_HD_TABLE;
+$GLOBALS['hd_table'] = $GLOBALS['wpdb']->prefix . NMMPRO_HD_TABLE;
 
 $wpdb = $GLOBALS['wpdb'];
 $ht = $GLOBALS['hd_table'];
@@ -85,7 +85,7 @@ function hd_notes($orderId) {
 
 function hd_sweep($mock, $confs = 1) {
 	add_filter('pre_http_request', $mock, 10, 3);
-	NMM_Hd::check_all_pending_addresses_for_payment('BTC', $GLOBALS['hd_mpk'], $confs, 0.99, $GLOBALS['hd_mode']);
+	NMMPRO_Hd::check_all_pending_addresses_for_payment('BTC', $GLOBALS['hd_mpk'], $confs, 0.99, $GLOBALS['hd_mode']);
 	remove_filter('pre_http_request', $mock, 10);
 }
 
@@ -93,7 +93,7 @@ function hd_sweep($mock, $confs = 1) {
 // expired row, so it makes an explorer call too - mock it.
 function hd_cancel_expired($mock, $cancelSec) {
 	add_filter('pre_http_request', $mock, 10, 3);
-	NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], $cancelSec, $GLOBALS['hd_mode']);
+	NMMPRO_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], $cancelSec, $GLOBALS['hd_mode']);
 	remove_filter('pre_http_request', $mock, 10);
 }
 
@@ -193,7 +193,7 @@ hd_row('hd_addr_refunded_held', $refundedHeld, 'assigned', '1.00000000');
 $liveOnHold = hd_mkorder('on-hold');
 hd_row('hd_addr_live_onhold', $liveOnHold, 'underpaid', '0.10000000');
 
-NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+NMMPRO_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
 
 hok('an underpaid row on a cancelled order is retired',   hd_status('hd_addr_under_cancelled') === 'dirty', 'row=' . hd_status('hd_addr_under_cancelled'));
 hok('an assigned row on a cancelled order is quarantined', hd_status('hd_addr_assigned_cancelled') === 'quarantine', 'row=' . hd_status('hd_addr_assigned_cancelled'));
@@ -224,7 +224,7 @@ hd_sweep($paidMock);
 hok('a custom payable status is not completed by the lying return value', hd_order_status($customOrder) === 'custom-await', 'status=' . hd_order_status($customOrder));
 hok('  its row is released, not stranded as complete',     hd_status('hd_addr_custom_status') === 'assigned', 'row=' . hd_status('hd_addr_custom_status'));
 hok('  and the funds are cached',                          hd_total('hd_addr_custom_status') === 1.0, 'total=' . hd_total('hd_addr_custom_status'));
-NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+NMMPRO_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
 hok('  the reconcile pass does not retire the awaiting row', hd_status('hd_addr_custom_status') === 'assigned', 'row=' . hd_status('hd_addr_custom_status'));
 remove_filter('woocommerce_valid_order_statuses_for_payment', $payableFilter, 10);
 remove_filter('wc_order_statuses', $statusFilter, 10);
@@ -252,7 +252,7 @@ hok('  and the order is still awaiting payment',           hd_order_status($boom
 // The critical same-cron interaction (this was a real regression): the expiry
 // pass runs right after the verifier. With the total left cached it must NOT
 // cancel this order, even though its assignment is long expired.
-NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+NMMPRO_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
 hok('the expiry pass does NOT cancel the just-verified order', hd_order_status($boomOrder) === 'on-hold', 'status=' . hd_order_status($boomOrder));
 hok('  and does not retire its address',                   hd_status('hd_addr_boom') === 'assigned', 'row=' . hd_status('hd_addr_boom'));
 
@@ -273,7 +273,7 @@ hok('  and its order is completed',                        in_array(hd_order_sta
 // reconcile pass, not polled forever.
 $stuckDead = hd_mkorder('cancelled');
 hd_row('hd_addr_stuck_dead', $stuckDead, 'completing', '1.00000000');
-NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+NMMPRO_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
 hok('a completing row on a dead order is retired',         hd_status('hd_addr_stuck_dead') === 'dirty', 'row=' . hd_status('hd_addr_stuck_dead'));
 
 // --- the expiry pass re-checks the chain before cancelling ---
@@ -282,7 +282,7 @@ hok('a completing row on a dead order is retired',         hd_status('hd_addr_st
 // or a payment the verifier could not record - must abort the cancellation.
 // Reset the per-run observation cache so these first tests exercise the
 // fetch-it-ourselves path (no verifier observation available).
-NMM_Hd::reset_observed_totals();
+NMMPRO_Hd::reset_observed_totals();
 $expiredZero = hd_mkorder('on-hold');
 hd_row('hd_addr_expired_zero', $expiredZero, 'assigned', '0.00000000');
 hd_backdate_assigned('hd_addr_expired_zero', 48 * 3600);
@@ -313,12 +313,12 @@ $downMock = function ($pre, $args, $url) {
 hd_cancel_expired($downMock, 3600);
 hok('an expired order is NOT cancelled when the re-check fails', hd_order_status($expiredExplorerDown) === 'on-hold', 'status=' . hd_order_status($expiredExplorerDown));
 
-// The 500s above trip NMM_Blockchain's per-host backoff (nmm_backoff_/nmm_apifail_/
-// nmm_cooldown_ transients). Those persist in the shared test DB and would
+// The 500s above trip NMMPRO_Blockchain's per-host backoff (nmmpro_backoff_/nmmpro_apifail_/
+// nmmpro_cooldown_ transients). Those persist in the shared test DB and would
 // short-circuit later suites' real explorer calls (mempool/blockcypher), so a
 // full front-to-back run would see autopay-cancel/scan misfire. Clear them here
 // so this suite leaves no backoff pollution behind.
-$wpdb->query("DELETE FROM `{$wpdb->prefix}options` WHERE `option_name` LIKE '%nmm_backoff%' OR `option_name` LIKE '%nmm_apifail%' OR `option_name` LIKE '%nmm_cooldown%'");
+$wpdb->query("DELETE FROM `{$wpdb->prefix}options` WHERE `option_name` LIKE '%nmmpro_backoff%' OR `option_name` LIKE '%nmmpro_apifail%' OR `option_name` LIKE '%nmmpro_cooldown%'");
 // The SQL delete alone is not enough WITHIN this process: get_transient()
 // serves from the in-memory object cache, which still holds the tripped
 // backoffs and would make every later explorer call in this suite return a
@@ -335,7 +335,7 @@ wp_cache_flush();
 // having the verifier observe ZERO and then answering any (wrong) re-fetch at
 // expiry time with a full balance: cancellation must happen anyway, because the
 // cached zero observation - not the fetch - is what the pass consults.
-NMM_Hd::reset_observed_totals();
+NMMPRO_Hd::reset_observed_totals();
 $sameRun = hd_mkorder('on-hold');
 hd_row('hd_addr_same_run', $sameRun, 'assigned', '0.00000000');
 hd_backdate_assigned('hd_addr_same_run', 48 * 3600);
@@ -345,7 +345,7 @@ hd_backdate_assigned('hd_addr_same_run', 48 * 3600);
 hd_sweep($zeroMock, 0); // verifier observes 0-at-0-conf in this "cron run"
 hd_cancel_expired($paidMock, 3600); // a re-fetch would see 1.0 and refuse to cancel
 hok('expiry uses the verifier\'s same-run observation',   hd_order_status($sameRun) === 'cancelled', 'status=' . hd_order_status($sameRun));
-NMM_Hd::reset_observed_totals();
+NMMPRO_Hd::reset_observed_totals();
 
 // --- funds below the merchant's confirmation threshold must not be cancelled ---
 // The merchant requires 6 confirmations. A real payment with fewer reads as
@@ -367,7 +367,7 @@ hd_sweep($confMock, 6); // verifier sees zero at the 6-conf threshold
 hd_cancel_expired($confMock, 3600);
 hok('a payment below the confirmation threshold is not cancelled', hd_order_status($pendingConf) === 'on-hold', 'status=' . hd_order_status($pendingConf));
 hok('  and the any-funds total is cached for the verifier', hd_total('hd_addr_pending_conf') === 1.0, 'total=' . hd_total('hd_addr_pending_conf'));
-NMM_Hd::reset_observed_totals();
+NMMPRO_Hd::reset_observed_totals();
 
 // --- a late PARTIAL payment must not solicit more funds from a dead order ---
 $lateCancelled = hd_mkorder('cancelled');
@@ -378,23 +378,23 @@ hok('  the customer is NOT asked for the remaining amount', strpos(hd_notes($lat
 hok('  the merchant gets a reconciliation note instead',    strpos(hd_notes($lateCancelled), 'Late partial payment') !== false);
 hok('  the order stays cancelled',                          hd_order_status($lateCancelled) === 'cancelled', 'status=' . hd_order_status($lateCancelled));
 hok('  and the funds are cached',                           hd_total('hd_addr_late_partial') === 0.1, 'total=' . hd_total('hd_addr_late_partial'));
-NMM_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
+NMMPRO_Hd::cancel_expired_addresses('BTC', $GLOBALS['hd_mpk'], 3600, $GLOBALS['hd_mode']);
 hok('  the reconcile pass then retires the address',        hd_status('hd_addr_late_partial') === 'dirty', 'row=' . hd_status('hd_addr_late_partial'));
 
 // --- the completion lease (crash recovery vs. a live concurrent worker) ---
-$repoLease = new NMM_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
+$repoLease = new NMMPRO_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
 
 // A 'completing' row a live worker is holding right now (fresh lease) must NOT
 // be stolen by another run - that would double-fire completion.
 hd_row('hd_addr_lease_fresh', hd_mkorder('on-hold'), 'completing', '1.00000000');
 hd_set_last_checked('hd_addr_lease_fresh', time());
-hok('a fresh completing claim is not stealable',          $repoLease->claim_for_complete('hd_addr_lease_fresh') === NMM_Hd_Repo::CLAIM_ALREADY);
+hok('a fresh completing claim is not stealable',          $repoLease->claim_for_complete('hd_addr_lease_fresh') === NMMPRO_Hd_Repo::CLAIM_ALREADY);
 
 // A 'completing' row abandoned by a crashed run (lease long expired) IS taken
 // over, so the order is recovered rather than stranded.
 hd_row('hd_addr_lease_stale', hd_mkorder('on-hold'), 'completing', '1.00000000');
-hd_set_last_checked('hd_addr_lease_stale', time() - (NMM_Hd_Repo::COMPLETING_LEASE_SEC + 60));
-hok('an abandoned completing claim is taken over',        $repoLease->claim_for_complete('hd_addr_lease_stale') === NMM_Hd_Repo::CLAIM_CLAIMED);
+hd_set_last_checked('hd_addr_lease_stale', time() - (NMMPRO_Hd_Repo::COMPLETING_LEASE_SEC + 60));
+hok('an abandoned completing claim is taken over',        $repoLease->claim_for_complete('hd_addr_lease_stale') === NMMPRO_Hd_Repo::CLAIM_CLAIMED);
 
 // set_total_received reports success so the verifier can trust the funds landed.
 hd_row('hd_addr_settot', hd_mkorder('on-hold'));
@@ -402,30 +402,30 @@ hok('set_total_received reports success',                 $repoLease->set_total_
 hok('  and the value is stored',                          hd_total('hd_addr_settot') === 0.5, 'total=' . hd_total('hd_addr_settot'));
 
 // --- the claim itself ---
-$repo = new NMM_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
+$repo = new NMMPRO_Hd_Repo('BTC', $GLOBALS['hd_mpk'], $GLOBALS['hd_mode']);
 
 hd_row('hd_addr_claim', hd_mkorder('on-hold'));
 $first  = $repo->claim_for_complete('hd_addr_claim');
 $second = $repo->claim_for_complete('hd_addr_claim');
-hok('the first worker claims the row',                     $first === NMM_Hd_Repo::CLAIM_CLAIMED, 'got=' . $first);
-hok('a second worker is refused - no double completion',   $second === NMM_Hd_Repo::CLAIM_ALREADY, 'got=' . $second);
+hok('the first worker claims the row',                     $first === NMMPRO_Hd_Repo::CLAIM_CLAIMED, 'got=' . $first);
+hok('a second worker is refused - no double completion',   $second === NMMPRO_Hd_Repo::CLAIM_ALREADY, 'got=' . $second);
 hok('  the claim moves the row to the intermediate state', hd_status('hd_addr_claim') === 'completing', 'row=' . hd_status('hd_addr_claim'));
 hok('  release_claim hands it back to assigned',           (function () use ($repo) { $repo->release_claim('hd_addr_claim'); return hd_status('hd_addr_claim'); })() === 'assigned');
 
 // An underpaid row is still payable once topped up; a retired one is not.
 hd_row('hd_addr_underpaid_claim', hd_mkorder('on-hold'), 'underpaid', '0.10000000');
-hok('an underpaid row is claimable once topped up',        $repo->claim_for_complete('hd_addr_underpaid_claim') === NMM_Hd_Repo::CLAIM_CLAIMED);
+hok('an underpaid row is claimable once topped up',        $repo->claim_for_complete('hd_addr_underpaid_claim') === NMMPRO_Hd_Repo::CLAIM_CLAIMED);
 
 hd_row('hd_addr_dirty_claim', hd_mkorder('on-hold'), 'dirty', '1.00000000');
-hok('a retired row cannot be claimed',                     $repo->claim_for_complete('hd_addr_dirty_claim') === NMM_Hd_Repo::CLAIM_ALREADY);
+hok('a retired row cannot be claimed',                     $repo->claim_for_complete('hd_addr_dirty_claim') === NMMPRO_Hd_Repo::CLAIM_ALREADY);
 
 hd_row('hd_addr_quarantined_claim', hd_mkorder('on-hold'), 'quarantined');
-hok('a quarantined row cannot be claimed',                 $repo->claim_for_complete('hd_addr_quarantined_claim') === NMM_Hd_Repo::CLAIM_ALREADY);
+hok('a quarantined row cannot be claimed',                 $repo->claim_for_complete('hd_addr_quarantined_claim') === NMMPRO_Hd_Repo::CLAIM_ALREADY);
 
 // HD rows are scoped by wallet: another mpk's repo must not touch this one.
 hd_row('hd_addr_other_wallet', hd_mkorder('on-hold'));
-$otherRepo = new NMM_Hd_Repo('BTC', 'a_different_mpk', $GLOBALS['hd_mode']);
-hok('another wallet\'s row is not claimable',              $otherRepo->claim_for_complete('hd_addr_other_wallet') === NMM_Hd_Repo::CLAIM_ALREADY);
+$otherRepo = new NMMPRO_Hd_Repo('BTC', 'a_different_mpk', $GLOBALS['hd_mode']);
+hok('another wallet\'s row is not claimable',              $otherRepo->claim_for_complete('hd_addr_other_wallet') === NMMPRO_Hd_Repo::CLAIM_ALREADY);
 hok('  and it is left untouched',                          hd_status('hd_addr_other_wallet') === 'assigned');
 
 $wpdb->query($wpdb->prepare("DELETE FROM `$ht` WHERE `mpk` IN (%s, %s)", $GLOBALS['hd_mpk'], 'a_different_mpk'));
