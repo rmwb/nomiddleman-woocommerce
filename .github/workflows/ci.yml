@@ -266,3 +266,9 @@ jobs:
             echo "$OUT"
             echo "$OUT" | grep -q "$marker" || { echo "::error::$script did not pass"; exit 1; }
           done
+      - name: QR output escaping with WordPress
+        run: |
+          set -e
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-output-escaping.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "OUTPUT-ESCAPING CHECKS PASSED"
