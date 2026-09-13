@@ -2,13 +2,15 @@
 
 ## Round 3 update — 14 September 2026
 
+Poloniex follow-up: https://www.poloniex.com/support/privacy was verified in Chrome after the maintainer supplied the working URL. JavaScript rendering exposes the full Poloniex Privacy Policy (displayed revision date: 4 May 2020), covering its site and provision of services and describing automatic IP/request logging. The earlier text-only fetch returned an empty application shell; that was a retrieval limitation, not evidence of a missing policy. README now links the verified page. Poloniex is removed from the missing-privacy-document list.
+
 WordPress.org's 13 September review rejected inaccessible Blockchair/Waves policy links and missing terms/privacy documentation for several hosted endpoints. All payment modes remain enabled at the maintainer's request while operator policies are pursued. This revision is not ready for resubmission.
 
 - Frankfurter's official https://frankfurter.dev/#faq now explicitly describes commercial use and the API's privacy behavior. README links to those statements as an API FAQ, not as separate legal documents. Underlying data-provider terms still apply.
 - https://www.exchangerate-api.com/terms includes both terms and a Privacy Policy section, and explicitly covers er-api.com and its subdomains. README now labels both links explicitly. Its open-access documentation at https://www.exchangerate-api.com/docs/free also requires attribution on pages using its rates; attribution placement remains to be resolved before submission.
 - Blockchair publishes its privacy policy at https://github.com/Blockchair/Blockchair.Support/blob/master/PRIVACY.md. That document explicitly identifies the repository as a publication location and discusses short-term IP storage for API rate limiting. README uses this accessible official privacy link; the terms URL still returned 401 and requires operator follow-up.
 - Waves website terms do not establish applicability to nodes.wavesnodes.com. README now states that limitation rather than implying verified endpoint coverage.
-- Hosted endpoint policy questions remain for EOSRIO Hyperion, TzKT, LitecoinSpace, dcrdata, DigiExplorer, Qtum.info, BlackCoin, Greymass, Groestlsight, Poloniex and the Solana public RPC default. TzKT API attribution requirements also need confirmation for background payment verification.
+- Hosted endpoint policy questions remain for EOSRIO Hyperion, TzKT, LitecoinSpace, dcrdata, DigiExplorer, Qtum.info, BlackCoin, Greymass, Groestlsight and the Solana public RPC default. TzKT API attribution requirements also need confirmation for background payment verification.
 
 The local round-3 bundle contains the source-linked research, published contact routes and unsent operator enquiries. No operator confirmation has yet been received. Historic findings below are evidence of earlier checks, not a claim that every link currently works or applies to its endpoint.
 
