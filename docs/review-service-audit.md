@@ -2,7 +2,7 @@
 
 ## Complete Chrome pass — 14–15 September 2026
 
-See [the per-URL Chrome audit](chrome-policy-audit.md) for 54 rendered checks plus three discovered links. mempool and Waves policy content is now verified; HTTP 201 did not prevent Waves from serving its policies. Automated Chrome still encountered access controls on CoinGecko, HitBTC, Gate, Blockchair and TronScan. Binance terms remained a navigation-only capture. These access limitations are not evidence that policies are missing.
+See [the per-URL Chrome audit](chrome-policy-audit.md) for 54 rendered checks plus three discovered links. mempool and Waves policy content is now verified; HTTP 201 did not prevent Waves from serving its policies. Automated Chrome still encountered access controls on CoinGecko, HitBTC, Gate, Blockchair and TronScan. Binance terms initially appeared as navigation only; subsequent iframe inspection verified the embedded 73-page Terms of Use PDF, effective 21 July 2026 (see the linked audit). These access limitations are not evidence that policies are missing.
 
 TzKT website policies explicitly exclude APIs; endpoint policies still need to be supplied. Poloniex privacy is no longer missing, but its User Agreement restricts API use to trading on Poloniex and disallows other commercial use. Clarify merchant price-query permission with the operator. All payment modes remain enabled.
 
