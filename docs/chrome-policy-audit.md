@@ -5,7 +5,7 @@ Checked 54 URLs in local Google Chrome using automated headless browser sessions
 ## Findings
 
 - Full content now renders for mempool, Waves, Blockstream and Poloniex. Waves returns HTTP 201 but still serves substantive terms and privacy text.
-- CoinGecko, HitBTC, Gate, Blockchair and TronScan still show challenge/restriction/denial pages. Binance privacy portal renders. Its terms were subsequently verified as an embedded PDF; the initial navigation-only capture missed the iframe. The linked full privacy notice still needs embedded-document inspection.
+- CoinGecko still shows a human-verification screen in automated Chrome, but the maintainer confirmed both policy links work in normal Chrome on 15 September. HitBTC, Gate, Blockchair and TronScan showed restriction/denial pages in the automated check. Binance privacy portal renders. Its terms were subsequently verified as an embedded PDF; the initial navigation-only capture missed the iframe. The linked full privacy notice still needs embedded-document inspection.
 - TzKT footer links to Baking Bad terms/privacy. Both expressly exclude API services and say those have separate policies; they cannot substitute for the API policies.
 - No terms/privacy links were exposed in the captured LitecoinSpace, EOS Rio, dcrdata, Qtum or BlackCoin pages. DigiExplorer rendered blank. These captures do not establish policy absence.
 - Poloniex privacy is verified, but its current User Agreement limits API use to trading on Poloniex and restricts other commercial use. Operator clarification is needed for merchant price lookups; this is a use-permission question, not a missing-policy question.
@@ -15,8 +15,8 @@ Checked 54 URLs in local Google Chrome using automated headless browser sessions
 
 | URL | HTTP | Rendered result |
 |---|---|---|
-| https://www.coingecko.com/en/terms | 403 | Human-verification screen |
-| https://www.coingecko.com/en/privacy | 403 | Human-verification screen |
+| https://www.coingecko.com/en/terms | 403 (automated session) | Maintainer confirms working in Chrome; automated recheck receives human-verification screen |
+| https://www.coingecko.com/en/privacy | 403 (automated session) | Maintainer confirms working in Chrome; automated recheck receives human-verification screen |
 | https://hitbtc.com/terms-of-use | 403 | Regional restriction |
 | https://hitbtc.com/privacy-policy | 403 | Regional restriction |
 | https://www.gate.io/user-agreement | 403 | Access denied |
@@ -83,3 +83,7 @@ Rendered source captures are retained locally in `.verification/logs/round3/chro
 The maintainer identified the PDF embedded within the terms page. Chrome iframe and response inspection confirmed a publicly accessible PDF (HTTP 200, application/pdf), and document extraction confirmed 73 pages headed Terms of Use, effective 21 July 2026. The earlier top-level body-text capture missed the PDF viewer; it did not establish missing or inaccessible terms. Keep the stable https://www.binance.com/en/terms link in README. This resolves document availability, not every product-specific use condition.
 
 Verified embedded document: https://bin.bnbstatic.com/static/cms/cg08ou2ak0tn7mcplvfg/file/bf4879710c904b991848972ec4818ba2cf9e4ce314c09adae84fa2750d3477f7.pdf
+
+## CoinGecko maintainer confirmation — 15 September 2026
+
+The maintainer confirmed that both https://www.coingecko.com/en/terms and https://www.coingecko.com/en/privacy work in their Chrome browser. A fresh automated Chrome recheck returned HTTP 403 with a human-verification screen for both pages. Retain the existing README links: this is an automated-access limitation, not a broken-link finding. Current policy content was not independently reverified by that automated session.
