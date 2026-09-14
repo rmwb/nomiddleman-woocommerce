@@ -2,6 +2,8 @@
 
 ## Round 3 update — 14 September 2026
 
+Blockstream follow-up: both https://blockstream.com/terms/ and https://blockstream.com/privacy/ rendered their full policy content in Chrome after the maintainer confirmed they worked. The terms cover Blockstream websites and services/resources enabled through them; the privacy policy covers Blockstream-owned and operated sites and describes automatic IP/access-time logging. Both display an effective/update date of 16 January 2018. The privacy policy's example domain list does not explicitly name blockstream.info; this check establishes readable operator policies, not a separate API-specific agreement. Existing README links are retained. The historical SSL errors below describe the earlier fetch method, not broken policy pages.
+
 Poloniex follow-up: https://www.poloniex.com/support/privacy was verified in Chrome after the maintainer supplied the working URL. JavaScript rendering exposes the full Poloniex Privacy Policy (displayed revision date: 4 May 2020), covering its site and provision of services and describing automatic IP/request logging. The earlier text-only fetch returned an empty application shell; that was a retrieval limitation, not evidence of a missing policy. README now links the verified page. Poloniex is removed from the missing-privacy-document list.
 
 WordPress.org's 13 September review rejected inaccessible Blockchair/Waves policy links and missing terms/privacy documentation for several hosted endpoints. All payment modes remain enabled at the maintainer's request while operator policies are pursued. This revision is not ready for resubmission.
