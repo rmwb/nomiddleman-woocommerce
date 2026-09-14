@@ -1,5 +1,11 @@
 # External-service documentation audit
 
+## Complete Chrome pass — 14–15 September 2026
+
+See [the per-URL Chrome audit](chrome-policy-audit.md) for 54 rendered checks plus three discovered links. mempool and Waves policy content is now verified; HTTP 201 did not prevent Waves from serving its policies. Automated Chrome still encountered access controls on CoinGecko, HitBTC, Gate, Blockchair and TronScan. Binance terms remained a navigation-only capture. These access limitations are not evidence that policies are missing.
+
+TzKT website policies explicitly exclude APIs; endpoint policies still need to be supplied. Poloniex privacy is no longer missing, but its User Agreement restricts API use to trading on Poloniex and disallows other commercial use. Clarify merchant price-query permission with the operator. All payment modes remain enabled.
+
 ## Round 3 update — 14 September 2026
 
 Blockstream follow-up: both https://blockstream.com/terms/ and https://blockstream.com/privacy/ rendered their full policy content in Chrome after the maintainer confirmed they worked. The terms cover Blockstream websites and services/resources enabled through them; the privacy policy covers Blockstream-owned and operated sites and describes automatic IP/access-time logging. Both display an effective/update date of 16 January 2018. The privacy policy's example domain list does not explicitly name blockstream.info; this check establishes readable operator policies, not a separate API-specific agreement. Existing README links are retained. The historical SSL errors below describe the earlier fetch method, not broken policy pages.

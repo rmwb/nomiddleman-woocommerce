@@ -157,10 +157,10 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * Blockchair (api.blockchair.com) - Zcash. Terms: https://blockchair.com/terms (returned HTTP 401 during review; a publicly accessible terms document is being sought). Privacy policy, published in the operator's official support repository: https://github.com/Blockchair/Blockchair.Support/blob/master/PRIVACY.md - this policy describes short-term IP storage for API rate limiting.
 * chainz.cryptoid.info - Bitcore balance checks in Privacy Mode. Terms and privacy policy (one document): https://chainz.cryptoid.info/terms.dws
 * Stellar Horizon (horizon.stellar.org) - Stellar. Terms: https://stellar.org/terms-of-service - Privacy: https://stellar.org/privacy-policy
-* Waves public nodes (nodes.wavesnodes.com) - Waves. Website terms: https://waves.tech/docs/terms - Website privacy policy: https://waves.tech/docs/privacy-policy (not independently content-verified in this review). The website terms do not clearly establish coverage for the separate public-node API; endpoint policy confirmation is being sought.
+* Waves public nodes (nodes.wavesnodes.com) - Waves. Website terms: https://waves.tech/docs/terms - Website privacy policy: https://waves.tech/docs/privacy-policy (both website policies were verified in Chrome; the pages return HTTP 201). The website terms do not clearly establish coverage for the separate public-node API; endpoint policy confirmation is being sought.
 * Greymass (eos.greymass.com) - EOS. Privacy: https://greymass.com/privacy_policy - separate terms of service were not located in this review.
 * Groestlsight (groestlsight.groestlcoin.org) - Groestlcoin. Privacy: https://groestlcoin.org/privacy - separate terms of service were not located in this review.
-* TzKT (api.tzkt.io) - Tezos. Terms and a privacy policy were not located in this review.
+* TzKT (api.tzkt.io) - Tezos. API-specific terms and privacy policy links remain unverified. The website links to https://bakingbad.dev/terms/ and https://bakingbad.dev/privacy/ but both explicitly exclude API services, so they are not presented as the policies governing these requests.
 * TronScan (apilist.tronscan.org) - Tron and USDT on Tron. Terms: https://tronscan.org/contracts/terms - Privacy: https://tronscan.org/aboutUs/privacyPolicy
 * EOSRIO Hyperion (eos.hyperion.eosrio.io) - EOS, as a fallback. Terms and a privacy policy were not located in this review.
 * dcrdata (explorer.dcrdata.org) - Decred. Terms and a privacy policy were not located in this review.
