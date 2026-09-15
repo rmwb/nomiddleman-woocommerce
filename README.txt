@@ -134,7 +134,7 @@ Used to convert your store's prices into cryptocurrency. Only a coin ticker or a
 
 * CoinGecko (api.coingecko.com) - cryptocurrency to USD prices. Terms: https://www.coingecko.com/en/terms - Privacy: https://www.coingecko.com/en/privacy
 * HitBTC (api.hitbtc.com) - cryptocurrency to USD prices. Terms: https://hitbtc.com/terms-of-use - Privacy: https://hitbtc.com/privacy-policy
-* Gate.io (data.gate.io) - cryptocurrency to USD prices. Terms: https://www.gate.io/user-agreement - Privacy: https://www.gate.io/privacy-policy
+* Gate.io (data.gate.io) - cryptocurrency to USD prices. Terms: https://www.gate.com/legal/user-agreement - Privacy: https://www.gate.com/legal/privacy-policy
 * Binance (api.binance.com) - cryptocurrency to USD prices. Terms: https://www.binance.com/en/terms - Privacy: https://www.binance.com/en/about-legal/privacy-portal
 * Poloniex (api.poloniex.com) - cryptocurrency to USD prices. Terms: https://poloniex.com/terms - Privacy: https://www.poloniex.com/support/privacy
 * Frankfurter (api.frankfurter.dev) - fiat exchange rates (European Central Bank reference rates) when your store currency is not USD. Requests send the store currency code and USD as the target currency. Usage terms: https://frankfurter.dev/#faq - the operator permits commercial use, subject to the underlying data providers' terms. Privacy policy: https://frankfurter.dev/#faq - the API FAQ states that the service does not log personal data, IP addresses or request URLs, and uses Cloudflare for caching and DDoS protection with aggregate traffic statistics. These statements are published in the operator's API FAQ rather than separate legal documents.

@@ -1,4 +1,8 @@
 # External-service documentation audit
+## Gate replacement links — 15 September 2026
+
+The maintainer supplied https://www.gate.com/legal/privacy-policy and https://www.gate.com/legal/user-agreement. Both documents were readable through the web reader, with substantive privacy and user-agreement content. Their opening sections explicitly include Gate APIs in the described services. Automated local Chrome still returned HTTP 403 Access Denied for both, so browser access may vary. README now uses these gate.com legal URLs in place of the older gate.io links. This verifies policy content and corrects the links; it is not a blanket approval of all API uses or a change to the configured price endpoint.
+
 
 ## Complete Chrome pass — 14–15 September 2026
 
