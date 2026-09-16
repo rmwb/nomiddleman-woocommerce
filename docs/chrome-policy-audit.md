@@ -5,7 +5,7 @@ Checked 54 URLs in local Google Chrome using automated headless browser sessions
 ## Findings
 
 - Full content now renders for mempool, Waves, Blockstream and Poloniex. Waves returns HTTP 201 but still serves substantive terms and privacy text.
-- CoinGecko still shows a human-verification screen in automated Chrome, but the maintainer confirmed both policy links work in normal Chrome on 15 September. HitBTC, Blockchair and TronScan showed restriction/denial pages in the automated check. Gate replacement legal URLs were subsequently content-verified through the web reader, although automated Chrome still denied access. Binance privacy portal renders. Its terms were subsequently verified as an embedded PDF; the initial navigation-only capture missed the iframe. The linked full privacy notice still needs embedded-document inspection.
+- CoinGecko still shows a human-verification screen in automated Chrome, but the maintainer confirmed both policy links work in normal Chrome on 15 September. HitBTC, Blockchair and TronScan showed restriction/denial pages in the automated check. Gate replacement legal URLs were subsequently content-verified through the web reader, although automated Chrome still denied access. Binance privacy portal renders. Its terms were subsequently verified as an embedded PDF; the initial navigation-only capture missed the iframe. The linked full privacy notice was subsequently verified as a 22-page embedded PDF on 16 September.
 - TzKT footer links to Baking Bad terms/privacy. Both expressly exclude API services and say those have separate policies; they cannot substitute for the API policies.
 - No terms/privacy links were exposed in the captured LitecoinSpace, EOS Rio, dcrdata, Qtum or BlackCoin pages. DigiExplorer rendered blank. These captures do not establish policy absence.
 - Poloniex privacy is verified, but its current User Agreement limits API use to trading on Poloniex and restricts other commercial use. Operator clarification is needed for merchant price lookups; this is a use-permission question, not a missing-policy question.
@@ -74,7 +74,7 @@ Checked 54 URLs in local Google Chrome using automated headless browser sessions
 
 - https://bakingbad.dev/terms/ — substantive; explicitly excludes API services.
 - https://bakingbad.dev/privacy/ — substantive; explicitly excludes API services.
-- https://www.binance.com/en/about-legal/New-Privacy-Notice-05January2026 — navigation-only capture; content not verified.
+- https://www.binance.com/en/about-legal/New-Privacy-Notice-05January2026 — embedded 22-page privacy notice verified on 16 September; API services explicitly included.
 
 Rendered source captures are retained locally in `.verification/logs/round3/chrome-policies/`. Only these findings, not full third-party policy text or diagnostic IP data, are included in the repository.
 
@@ -91,3 +91,9 @@ The maintainer confirmed that both https://www.coingecko.com/en/terms and https:
 ## Gate replacement links — 15 September 2026
 
 The maintainer supplied https://www.gate.com/legal/privacy-policy and https://www.gate.com/legal/user-agreement. Both documents were readable through the web reader, with substantive privacy and user-agreement content. Their opening sections explicitly include Gate APIs in the described services. Automated local Chrome still returned HTTP 403 Access Denied for both, so browser access may vary. README now uses these gate.com legal URLs in place of the older gate.io links. This verifies policy content and corrects the links; it is not a blanket approval of all API uses or a change to the configured price endpoint.
+
+## Binance privacy PDF — 16 September 2026
+
+Iframe inspection of https://www.binance.com/en/about-legal/New-Privacy-Notice-05January2026 revealed a 22-page Privacy Notice, updated 8 December 2025 and effective 5 January 2026. Its opening definition of the Binance Platform expressly includes Binance API. The document was retrieved and read directly; the earlier navigation-only capture missed the embedded viewer. README now links to the notice page as well as the regional privacy portal.
+
+Embedded PDF: https://bin.bnbstatic.com/static/cms/cg08ou2ak0tn7mcplvfg/file/e65b60eef16f1dbb14597ca88917a11819d922d22c19f2c90d140e76f98b9539.pdf
