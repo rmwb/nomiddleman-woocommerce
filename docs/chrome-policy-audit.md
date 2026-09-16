@@ -97,3 +97,9 @@ The maintainer supplied https://www.gate.com/legal/privacy-policy and https://ww
 Iframe inspection of https://www.binance.com/en/about-legal/New-Privacy-Notice-05January2026 revealed a 22-page Privacy Notice, updated 8 December 2025 and effective 5 January 2026. Its opening definition of the Binance Platform expressly includes Binance API. The document was retrieved and read directly; the earlier navigation-only capture missed the embedded viewer. README now links to the notice page as well as the regional privacy portal.
 
 Embedded PDF: https://bin.bnbstatic.com/static/cms/cg08ou2ak0tn7mcplvfg/file/e65b60eef16f1dbb14597ca88917a11819d922d22c19f2c90d140e76f98b9539.pdf
+
+## Litecoin Foundation response — recorded 16 September 2026
+
+The maintainer received a direct response from the Litecoin Foundation confirming that it maintains Litecoin Space and permits commercial use provided the service is not abused. The reply gives the same non-abuse condition for request limits, with no numerical quota. It states nginx logs are retained for one week and no further logs/data are kept. It suggests a donation if useful; it does not make donation or attribution a condition of use.
+
+Operator identity and commercial permission are now confirmed by direct correspondence. The reply supplies logging-retention information but does not specify the nginx log fields or provide public terms/privacy URLs. README records the confirmation as correspondence rather than implying a published policy exists. The remaining directory-review task is to obtain a public statement/link covering the API or seek the Plugins Team's acceptance of the operator confirmation. No API behavior or payment mode has changed.

@@ -147,7 +147,7 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * mempool.space - Bitcoin. Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
 * Blockstream (blockstream.info) - Bitcoin, as a fallback. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
 * Blockchain.com (blockchain.info, api.blockchain.info) - Bitcoin and Bitcoin Cash. Terms: https://www.blockchain.com/legal/terms - Privacy: https://www.blockchain.com/legal/privacy
-* Litecoin Space (litecoinspace.org) - Litecoin. Terms and a privacy policy were not located in this review.
+* Litecoin Space (litecoinspace.org) - Litecoin. The Litecoin Foundation confirmed that it maintains the service, permits commercial use subject to avoiding abuse, and retains nginx logs for one week with no further logs/data retained. It supplied no numerical request limit. These statements were provided directly to the maintainer; public terms and privacy policy URLs are still being requested. A donation was suggested, not required.
 * BlockCypher (api.blockcypher.com) - Litecoin and Dogecoin. If you configure a BlockCypher API token, it is sent with these requests. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
 * Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com) - Ethereum, Ethereum Classic, ERC-20 tokens and the multi-network stablecoins. Terms: https://eaas.blockscout.com/terms-and-conditions - Privacy: https://eaas.blockscout.com/privacy-notice
 * WhatsOnChain (api.whatsonchain.com) - Bitcoin SV. Terms: https://whatsonchain.com/terms - Privacy: https://whatsonchain.com/privacy
