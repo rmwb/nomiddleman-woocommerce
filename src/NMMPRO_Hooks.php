@@ -176,17 +176,14 @@ function NMMPRO_first_mpk_address_ajax() {
 			$message = __('You have entered a valid Segwit MPK.', 'nomiddleman-crypto-payments-for-woocommerce');
 			$message2 = __('Segwit MPKs (ypub/zpub) are not supported - please use an xpub.', 'nomiddleman-crypto-payments-for-woocommerce');
 
-			echo json_encode([$message, $message2, '']);
-			wp_die();
+			wp_send_json(array($message, $message2, ''));
 		}
 		else {
 			$firstAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 0, $hdMode);
 			$secondAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 1, $hdMode);
 			$thirdAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 2, $hdMode);
 
-			echo json_encode([$firstAddress, $secondAddress, $thirdAddress]);
-
-			wp_die();
+			wp_send_json(array($firstAddress, $secondAddress, $thirdAddress));
 		}
 }
 

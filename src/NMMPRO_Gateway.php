@@ -788,7 +788,12 @@ class NMMPRO_Gateway extends WC_Payment_Gateway {
             <li class="woocommerce-order-overview__qr-code">
                 <p style="word-wrap: break-word;"><?php esc_html_e('QR Code payment:', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
                 <div class="qr-code-container">
-                    <?php echo NMMPRO_Qr::svg($qrData, 200); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- trusted SVG markup generated in memory by this plugin. ?>
+                    <?php
+                    echo wp_kses(
+                        NMMPRO_Qr::svg($qrData, 200),
+                        self::qr_svg_allowed_html()
+                    );
+                    ?>
                 </div>
             </li>
             <li>
@@ -858,6 +863,33 @@ class NMMPRO_Gateway extends WC_Payment_Gateway {
             </p>
         </div>
         <?php
+    }
+
+    /**
+     * The small SVG vocabulary emitted by NMMPRO_Qr::svg().
+     *
+     * @return array<string, array<string, bool>>
+     */
+    private static function qr_svg_allowed_html() {
+        return array(
+            'svg' => array(
+                'xmlns'           => true,
+                'viewbox'         => true,
+                'width'           => true,
+                'height'          => true,
+                'shape-rendering' => true,
+                'role'            => true,
+                'aria-label'      => true,
+            ),
+            'rect' => array(
+                'x'      => true,
+                'y'      => true,
+                'width'  => true,
+                'height' => true,
+                'fill'   => true,
+            ),
+            'g' => array('fill' => true),
+        );
     }
 
     private function handle_thank_you_refresh($chosenCrypto, $orderWalletAddress, $cryptoTotal, $orderId) {

@@ -102,7 +102,7 @@
 			$inputs.removeClass('nmm-flash-yellow').addClass('nmm-flash-green');
 			var addresses;
 			try {
-				addresses = JSON.parse(responseJson);
+				addresses = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
 			} catch (e) {
 				setSamples(cryptoId, 'Address creation failed, please check your MPK.');
 				$inputs.removeClass('nmm-flash-green').addClass('nmm-flash-red');

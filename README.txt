@@ -126,7 +126,7 @@ This plugin contacts third-party blockchain explorers and price APIs from your s
 
 Requests happen during checkout/order payment setup when a needed exchange rate is not cached, and during scheduled background rate warm-ups when cached rates expire. The background job also checks whether an unpaid Autopay or Privacy Mode order has been paid (a verification lookup, repeated until the order is paid or its payment window closes). Verification services are contacted only for the cryptocurrencies and modes that need them; Classic Mode does not perform verification lookups.
 
-Where an operator publishes no terms of service or privacy policy, that is stated below. The CoinGecko, ExchangeRate-API, and Solana Foundation links were checked on 5 September 2026. Other links are supplied for operator reference and remain unverified in this review; availability of a page does not by itself establish that its policy applies to the API endpoint.
+Where terms of service or a privacy policy could not be verified, that is stated below. Frankfurter's API FAQ and ExchangeRate-API's combined terms/privacy document were checked on 13 September 2026. Some other links remain unverified; availability of a page does not by itself establish that its policy applies to the API endpoint.
 
 = Exchange rate services =
 
@@ -134,11 +134,11 @@ Used to convert your store's prices into cryptocurrency. Only a coin ticker or a
 
 * CoinGecko (api.coingecko.com) - cryptocurrency to USD prices. Terms: https://www.coingecko.com/en/terms - Privacy: https://www.coingecko.com/en/privacy
 * HitBTC (api.hitbtc.com) - cryptocurrency to USD prices. Terms: https://hitbtc.com/terms-of-use - Privacy: https://hitbtc.com/privacy-policy
-* Gate.io (data.gate.io) - cryptocurrency to USD prices. Terms: https://www.gate.io/user-agreement - Privacy: https://www.gate.io/privacy-policy
-* Binance (api.binance.com) - cryptocurrency to USD prices. Terms: https://www.binance.com/en/terms - Privacy: https://www.binance.com/en/about-legal/privacy-portal
-* Poloniex (api.poloniex.com) - cryptocurrency to USD prices. Terms: https://poloniex.com/terms - Privacy: a direct policy document could not be verified at the operator's published link.
-* Frankfurter (api.frankfurter.dev) - fiat exchange rates (European Central Bank reference rates) when your store currency is not USD. Only the currency code is sent. Frankfurter is a free open-source service; terms and a privacy policy were not located in this review: https://frankfurter.dev/
-* ExchangeRate-API (open.er-api.com) - fiat exchange rates, used as a fallback when Frankfurter does not answer. Only the currency code is sent. Terms and included Privacy Policy: https://www.exchangerate-api.com/terms
+* Gate.io (data.gate.io) - cryptocurrency to USD prices. Terms: https://www.gate.com/legal/user-agreement - Privacy: https://www.gate.com/legal/privacy-policy
+* Binance (api.binance.com) - cryptocurrency to USD prices. Terms: https://www.binance.com/en/terms - Privacy notice: https://www.binance.com/en/about-legal/New-Privacy-Notice-05January2026 - Regional privacy information: https://www.binance.com/en/about-legal/privacy-portal
+* Poloniex (api.poloniex.com) - cryptocurrency to USD prices. Terms: https://poloniex.com/terms - Privacy: https://www.poloniex.com/support/privacy
+* Frankfurter (api.frankfurter.dev) - fiat exchange rates (European Central Bank reference rates) when your store currency is not USD. Requests send the store currency code and USD as the target currency. Usage terms: https://frankfurter.dev/#faq - the operator permits commercial use, subject to the underlying data providers' terms. Privacy policy: https://frankfurter.dev/#faq - the API FAQ states that the service does not log personal data, IP addresses or request URLs, and uses Cloudflare for caching and DDoS protection with aggregate traffic statistics. These statements are published in the operator's API FAQ rather than separate legal documents.
+* ExchangeRate-API (open.er-api.com), operated by AYR Tech (Pty) Ltd - fiat exchange rates, used as a fallback when Frankfurter does not answer. Only the currency code is sent. Terms of service: https://www.exchangerate-api.com/terms - Privacy policy: https://www.exchangerate-api.com/terms (the Privacy Policy section of this combined document). The document explicitly covers er-api.com and its subdomains.
 
 = Payment verification services =
 
@@ -147,20 +147,20 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * mempool.space - Bitcoin. Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
 * Blockstream (blockstream.info) - Bitcoin, as a fallback. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
 * Blockchain.com (blockchain.info, api.blockchain.info) - Bitcoin and Bitcoin Cash. Terms: https://www.blockchain.com/legal/terms - Privacy: https://www.blockchain.com/legal/privacy
-* Litecoin Space (litecoinspace.org) - Litecoin. Terms and a privacy policy were not located in this review.
+* Litecoin Space (litecoinspace.org) - Litecoin. The Litecoin Foundation confirmed that it maintains the service, permits commercial use subject to avoiding abuse, and retains nginx logs for one week with no further logs/data retained. It supplied no numerical request limit. These statements were provided directly to the maintainer; public terms and privacy policy URLs are still being requested. A donation was suggested, not required.
 * BlockCypher (api.blockcypher.com) - Litecoin and Dogecoin. If you configure a BlockCypher API token, it is sent with these requests. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
 * Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com) - Ethereum, Ethereum Classic, ERC-20 tokens and the multi-network stablecoins. Terms: https://eaas.blockscout.com/terms-and-conditions - Privacy: https://eaas.blockscout.com/privacy-notice
 * WhatsOnChain (api.whatsonchain.com) - Bitcoin SV. Terms: https://whatsonchain.com/terms - Privacy: https://whatsonchain.com/privacy
 * Dash Insight (insight.dash.org) - Dash. Terms: https://www.dash.org/terms-of-use/ - Privacy: https://www.dash.org/privacy/
 * XRPSCAN (api.xrpscan.com) - XRP. Terms: https://xrpscan.com/tos - Privacy: https://xrpscan.com/privacy
 * Koios (api.koios.rest) - Cardano. Terms: https://koios.rest/terms.html - Privacy: https://koios.rest/privacy.html
-* Blockchair (api.blockchair.com) - Zcash. Terms: https://blockchair.com/terms - Privacy: https://blockchair.com/privacy
+* Blockchair (api.blockchair.com) - Zcash. Terms: https://blockchair.com/terms (returned HTTP 401 during review; a publicly accessible terms document is being sought). Privacy policy, published in the operator's official support repository: https://github.com/Blockchair/Blockchair.Support/blob/master/PRIVACY.md - this policy describes short-term IP storage for API rate limiting.
 * chainz.cryptoid.info - Bitcore balance checks in Privacy Mode. Terms and privacy policy (one document): https://chainz.cryptoid.info/terms.dws
 * Stellar Horizon (horizon.stellar.org) - Stellar. Terms: https://stellar.org/terms-of-service - Privacy: https://stellar.org/privacy-policy
-* Waves public nodes (nodes.wavesnodes.com) - Waves. Terms: https://waves.tech/docs/terms - Privacy: https://waves.tech/docs/privacy-policy
+* Waves public nodes (nodes.wavesnodes.com) - Waves. Website terms: https://waves.tech/docs/terms - Website privacy policy: https://waves.tech/docs/privacy-policy (both website policies were verified in Chrome; the pages return HTTP 201). The website terms do not clearly establish coverage for the separate public-node API; endpoint policy confirmation is being sought.
 * Greymass (eos.greymass.com) - EOS. Privacy: https://greymass.com/privacy_policy - separate terms of service were not located in this review.
 * Groestlsight (groestlsight.groestlcoin.org) - Groestlcoin. Privacy: https://groestlcoin.org/privacy - separate terms of service were not located in this review.
-* TzKT (api.tzkt.io) - Tezos. Terms and a privacy policy were not located in this review.
+* TzKT (api.tzkt.io) - Tezos. API-specific terms and privacy policy links remain unverified. The website links to https://bakingbad.dev/terms/ and https://bakingbad.dev/privacy/ but both explicitly exclude API services, so they are not presented as the policies governing these requests.
 * TronScan (apilist.tronscan.org) - Tron and USDT on Tron. Terms: https://tronscan.org/contracts/terms - Privacy: https://tronscan.org/aboutUs/privacyPolicy
 * EOSRIO Hyperion (eos.hyperion.eosrio.io) - EOS, as a fallback. Terms and a privacy policy were not located in this review.
 * dcrdata (explorer.dcrdata.org) - Decred. Terms and a privacy policy were not located in this review.
