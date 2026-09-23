@@ -402,7 +402,7 @@ class NMMPRO_Dashboard {
 
 		$configured = 0;
 		foreach ($settings->get_addresses($cryptoId) as $address) {
-			if (is_string($address) && trim($address) !== '') {
+			if (is_string($address) && trim($address, " \n\r\t\v\x00") !== '') {
 				$configured++;
 			}
 		}

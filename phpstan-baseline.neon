@@ -93,6 +93,12 @@ parameters:
 		-
 			message: '#^Constant NMMPRO_REDUX_SLUG not found\.$#'
 			identifier: constant.notFound
+			count: 2
+			path: src/NMMPRO_Dashboard.php
+
+		-
+			message: '#^Constant NMMPRO_REDUX_SLUG not found\.$#'
+			identifier: constant.notFound
 			count: 1
 			path: src/NMMPRO_Gateway.php
 
