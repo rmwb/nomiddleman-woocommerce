@@ -130,7 +130,9 @@ class NMMPRO_Consumed_Repo {
                 // 'unpaid' (WooCommerce refused the cancellation), and a hash
                 // consumed now could then never pay it. Consume nothing; retry.
                 $current = $wpdb->get_var($wpdb->prepare("SELECT status FROM `$payments` WHERE order_id=%d AND order_amount=%s FOR UPDATE", $orderId, $amount));
-                if ($wpdb->last_error !== '') { throw new RuntimeException('Unable to read the lost payment row'); }
+                // null is a failed read (or a row that vanished): unknown, so
+                // retry rather than consume.
+                if ($current === null) { throw new RuntimeException('Unable to read the lost payment row'); }
                 if ($current === 'cancelling') { throw new RuntimeException('Payment row is mid-cancellation; claim retried later'); }
             }
             foreach ($hashes as $hash) { self::write($coin, $address, $hash, $orderId, true); }
