@@ -175,6 +175,8 @@ jobs:
         run: php tests/test-amount.php
       - name: Exchange-rate consensus (median, outlier rejection, stale tier) tests
         run: php tests/test-exchange-rate.php
+      - name: Status screen (escaping + capability) tests
+        run: php tests/test-dashboard-escaping.php
 
   db-integration:
     name: Autopay + retry queue (WordPress + WooCommerce + MariaDB)

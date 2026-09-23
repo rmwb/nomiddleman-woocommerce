@@ -200,6 +200,9 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 
 == Changelog ==
 
+= Unreleased =
+* New Status screen (Nomiddleman Crypto Payments > Status): a single read-only page answering "is my setup working right now?" - every enabled cryptocurrency with its mode, whether it has a wallet address or master public key configured, and whether that mode can still be verified for that coin; how many orders are waiting to be paid per coin and how old the oldest is (including coins you have since switched off, whose unpaid orders are otherwise invisible); when the background job last ran, when it runs next, whether WP-Cron is disabled (the job runs through WooCommerce's Action Scheduler where available), and how many addresses are queued for retry after a failed blockchain lookup; and the most recent warnings and errors the plugin logged. It changes nothing, contacts no blockchain or exchange service, and adds no database tables
+
 = 2.12.0 =
 * Use a distinct NMMPRO prefix with migration of retained settings and legacy hook compatibility.
 * Persist consumed transactions and atomically bind payment claims; recover interrupted order completion.
