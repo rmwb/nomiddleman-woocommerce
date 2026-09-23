@@ -152,7 +152,8 @@ class NMMPRO_Util {
 			return 'unavailable';
 		}
 
-		$probe = 'nmm_fprobe_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
+		// Derived from the cron lock's own (already site-scoped) name.
+		$probe = 'nmm_fprobe_' . substr(md5(self::cron_lock_name()), 0, 12);
 		$probed = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $probe));
 		$stillHeld = self::cron_lock_owned();
 		if ($probed === '1') {
@@ -170,6 +171,8 @@ class NMMPRO_Util {
 	 * outside a cron pass (direct calls behave as they always have). Inside
 	 * one, re-asks the server every time: WordPress reconnects silently after
 	 * a dropped connection, and every advisory lock dies with the old one.
+	 *
+	 * @phpstan-impure Asks the database each call; the answer can change.
 	 */
 	public static function cron_fence_held() {
 		if (self::$cronFence === null) {

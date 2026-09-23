@@ -1143,8 +1143,8 @@ class NMMPRO_Payment {
 	 * uses and ALL contributing hashes are consumed together.
 	 */
 	/**
-	 * @return bool|null false when a claim hit a database error (the visit is
-	 *                   then incomplete); true or null otherwise.
+	 * @return bool false when a claim hit a database error (the visit is then
+	 *              incomplete); true otherwise, whether or not it aggregated.
 	 */
 	private static function aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings) {
 		$cryptoId = $crypto->get_id();
@@ -1154,7 +1154,7 @@ class NMMPRO_Payment {
 		// unattributable the moment an address can serve more than one order,
 		// and no timestamp comparison can rescue it.
 		if (!self::address_is_per_order($cryptoId)) {
-			return;
+			return true;
 		}
 
 		// Belt and braces for the rule above. address_is_per_order() infers the
@@ -1167,14 +1167,14 @@ class NMMPRO_Payment {
 		$rowsForAddress = $paymentRepo->count_rows_for_address($cryptoId, $address);
 		if ($rowsForAddress === null || $rowsForAddress > 1) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ($rowsForAddress === null ? ' could not be confirmed as per-order (count query failed)' : ' has served more than one order, so it is not per-order after all') . '; not aggregating.', 'warning');
-			return;
+			return true;
 		}
 
 		// Re-read the unpaid rows AFTER the single-tx pass ran: an order it
 		// completed (or a collision it consumed) must not be double-processed.
 		$paymentRecords = $paymentRepo->get_unpaid_for_address($cryptoId, $address);
 		if (count($paymentRecords) == 0) {
-			return;
+			return true;
 		}
 
 		$requiredConfirmations = $nmmSettings->get_autopay_required_confirmations($cryptoId);
@@ -1186,7 +1186,7 @@ class NMMPRO_Payment {
 		// human and leave every transaction unconsumed for a later clean tick.
 		if (count($paymentRecords) > 1) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: ' . $cryptoId . ' address ' . $address . ' unexpectedly has ' . count($paymentRecords) . ' unpaid orders; not aggregating - please reconcile manually.', 'warning');
-			return;
+			return true;
 		}
 
 		$record = $paymentRecords[0];
@@ -1203,12 +1203,12 @@ class NMMPRO_Payment {
 		// threshold here), and gating it keeps a claim that pass left for
 		// retry (CLAIM_DB_ERROR) from being re-attempted within the same tick.
 		if ($contrib['entries'] < 2) {
-			return;
+			return true;
 		}
 
 		if (!self::split_payment_sum_clears($record, $contrib['sum'], $crypto, $cryptoId, $address, $nmmSettings)) {
 			NMMPRO_Util::log(__FILE__, __LINE__, '---split-payment sum below threshold: ' . $cryptoId . ',' . $address . ',' . $contrib['sum']);
-			return;
+			return true;
 		}
 
 		$orderId = $record['order_id'];
@@ -1250,7 +1250,7 @@ class NMMPRO_Payment {
 			}
 			$paymentRepo->set_hash_on_cancelled($orderId, $orderAmount, $storedHashList);
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment for order ' . $orderId . ' but its record was already transitioned (likely expired and cancelled) - not completing the order; recorded all transactions as consumed to prevent reuse on a recycled address. Transaction Hashes: ' . $hashList . '. Please reconcile manually.', 'warning');
-			return;
+			return true;
 		}
 
 		// CLAIM_CLAIMED: we won the row - complete the order exactly as the
@@ -1271,7 +1271,7 @@ class NMMPRO_Payment {
 			// Row is claimed 'paid' (so it stops matching), but the order is
 			// gone - nothing to complete. The txs are already consumed above.
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: verified combined ' . $cryptoId . ' payment but order ' . $orderId . ' no longer exists. Transaction Hashes: ' . $hashList, 'warning');
-			return;
+			return true;
 		}
 
 		$displayHashes = array();
@@ -1290,12 +1290,13 @@ class NMMPRO_Payment {
         if ($order->has_status(array('cancelled', 'failed', 'refunded', 'trash'))) {
             $paymentRepo->set_status($orderId, $orderAmount, 'review');
             $order->add_order_note(__('A verified cryptocurrency payment requires manual reconciliation.', 'nomiddleman-crypto-payments-for-woocommerce'));
-            return;
+            return true;
         }
 		$order->update_meta_data('transaction_hash', $storedHashList);
 		$order->payment_complete();
 		$order->add_order_note($orderNote);
 		self::settle_completion($paymentRepo, $orderId, $orderAmount);
+		return true;
 	}
 
 	private static function get_address_transactions($cryptoId, $address, $transactionLifetime = null) {
