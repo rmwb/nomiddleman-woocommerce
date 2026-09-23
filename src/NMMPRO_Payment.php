@@ -1895,7 +1895,7 @@ class NMMPRO_Payment {
 		$order = $read['order'];
 		if ($read['state'] === 'absent' || $order->is_paid() || !$order->has_status(array('pending', 'on-hold'))) {
 			$settled = self::settle_lease($paymentRepo, $orderId, $orderAmount, 'cancelling');
-			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' ' . ($read['state'] === 'absent' ? 'vanished' : 'changed to ' . $order->get_status()) . ' after cancellation claim; not cancelling, record settled to ' . var_export($settled, true) . '.');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' ' . ($read['state'] === 'absent' ? 'vanished' : 'changed to ' . $order->get_status()) . ' after cancellation claim; not cancelling, record settled to ' . ($settled === null ? 'left for recovery' : $settled) . '.');
 			return;
 		}
 
@@ -1926,7 +1926,7 @@ class NMMPRO_Payment {
 		$settled = self::settle_lease($paymentRepo, $orderId, $orderAmount, 'cancelling');
 
 		if ($settled !== 'cancelled') {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: WooCommerce did not cancel ' . $cryptoId . ' order ' . $orderId . '; its payment record is ' . var_export($settled, true) . ' so it is not stranded, and cancellation will be retried.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: WooCommerce did not cancel ' . $cryptoId . ' order ' . $orderId . '; its payment record is ' . ($settled === null ? 'left for recovery' : $settled) . ' so it is not stranded, and cancellation will be retried.', 'warning');
 			return;
 		}
 
