@@ -104,15 +104,10 @@ class NMMPRO_Log_Repo {
 		$limit = max(1, min(50, (int) $limit));
 		$severity = class_exists('WC_Log_Levels') ? (int) WC_Log_Levels::get_level_severity('warning') : self::WARNING_SEVERITY;
 
-		$rows = $wpdb->get_results($wpdb->prepare(
-			"SELECT `timestamp`, `level`, `message`
-			 FROM `$this->tableName`
-			 WHERE `source` = %s
-			 AND `level` >= %d
-			 ORDER BY `timestamp` DESC, `log_id` DESC
-			 LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the only interpolation is $this->tableName ($wpdb->prefix + a fixed WooCommerce table name); every value is bound through $wpdb->prepare().
-			self::LOG_SOURCE, $severity, $limit
-		), ARRAY_A);
+		$table = $this->tableName;
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the only interpolation is the table name ($wpdb->prefix + WooCommerce's fixed log table name); every value is bound through $wpdb->prepare() below.
+		$sql = "SELECT `timestamp`, `level`, `message` FROM `$table` WHERE `source` = %s AND `level` >= %d ORDER BY `timestamp` DESC, `log_id` DESC LIMIT %d";
+		$rows = $wpdb->get_results($wpdb->prepare($sql, self::LOG_SOURCE, $severity, $limit), ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is prepared in this same call; see the note above.
 
 		return is_array($rows) ? $rows : array();
 	}

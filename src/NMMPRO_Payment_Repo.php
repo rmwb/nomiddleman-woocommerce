@@ -126,16 +126,10 @@ class NMMPRO_Payment_Repo {
 	public function unpaid_backlog_by_crypto() {
 		global $wpdb;
 
-		$rows = $wpdb->get_results(
-			"SELECT `cryptocurrency`,
-					COUNT(*) AS `unpaid_count`,
-					MIN(`ordered_at`) AS `oldest_ordered_at`
-			 FROM `$this->tableName`
-			 WHERE `status` = 'unpaid'
-			 GROUP BY `cryptocurrency`
-			 ORDER BY `cryptocurrency`",
-			ARRAY_A
-		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the only interpolation is $this->tableName ($wpdb->prefix + a plugin constant); the statement binds no values at all, so there is nothing for $wpdb->prepare() to escape.
+		$table = $this->tableName;
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the only interpolation is the table name ($wpdb->prefix + a plugin constant); the statement binds no values, so there is nothing for $wpdb->prepare() to escape.
+		$sql = "SELECT `cryptocurrency`, COUNT(*) AS `unpaid_count`, MIN(`ordered_at`) AS `oldest_ordered_at` FROM `$table` WHERE `status` = 'unpaid' GROUP BY `cryptocurrency` ORDER BY `cryptocurrency`";
+		$rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is the constant statement built above; it takes no values.
 
 		$backlog = array();
 		if (is_array($rows)) {
