@@ -193,6 +193,93 @@ class NMMPRO_Util {
 		self::$cronFence = null;
 	}
 
+	/**
+	 * The current pass's fence as 'held', 'unavailable', 'single-lock' or
+	 * 'lost'; null outside a cron pass. Does not re-query the server.
+	 */
+	public static function cron_fence_state() {
+		return self::$cronFence === null ? null : self::$cronFence['reason'];
+	}
+
+	/**
+	 * Write an option that authorises expiry - coverage, exclusions, the sweep
+	 * cursor and start - ONLY if this connection still owns the cron lock at
+	 * the moment of the write. The ownership test is part of the statement
+	 * itself (INSERT ... SELECT ... WHERE IS_USED_LOCK() = CONNECTION_ID()), so
+	 * no check-then-write gap exists: a pass that lost its lock a microsecond
+	 * earlier writes nothing. A refused or failed write latches the fence lost,
+	 * so every later certification write in the pass is skipped as well.
+	 *
+	 * Outside a cron pass this is a plain option update, as before.
+	 *
+	 * Returns true when the value is stored (or was already stored) under an
+	 * owned lock, false otherwise.
+	 */
+	public static function fenced_update_option($name, $value) {
+		global $wpdb;
+
+		if (self::$cronFence === null) {
+			if (NMMPRO_Compat::update_option($name, $value, false)) {
+				return true;
+			}
+			// false means "unchanged" as well as "failed": only a stored value
+			// that differs from ours is a failure.
+			return maybe_serialize(get_option($name, null)) === maybe_serialize($value);
+		}
+		if (!self::$cronFence['held']) {
+			return false;
+		}
+
+		// 'off' is the non-autoload value from WordPress 6.6; 'no' before it.
+		$autoload = function_exists('wp_autoload_values_to_autoload') ? 'off' : 'no';
+		$serialized = maybe_serialize($value);
+		$affected = $wpdb->query($wpdb->prepare(
+			"INSERT INTO `{$wpdb->options}` (`option_name`, `option_value`, `autoload`)
+			 SELECT %s, %s, %s FROM DUAL WHERE IS_USED_LOCK(%s) = CONNECTION_ID()
+			 ON DUPLICATE KEY UPDATE `option_value` = VALUES(`option_value`)",
+			$name, $serialized, $autoload, self::cron_lock_name()
+		));
+		// The write bypassed the options API, so drop every cached copy.
+		wp_cache_delete($name, 'options');
+		$notoptions = wp_cache_get('notoptions', 'options');
+		if (is_array($notoptions) && isset($notoptions[$name])) {
+			unset($notoptions[$name]);
+			wp_cache_set('notoptions', $notoptions, 'options');
+		}
+		wp_cache_delete('alloptions', 'options');
+
+		if ($affected === false) {
+			self::$cronFence = array('held' => false, 'reason' => 'lost');
+			self::log(__FILE__, __LINE__, 'Could not write ' . $name . ' (' . $wpdb->last_error . '); this pass certifies nothing further.', 'error');
+			return false;
+		}
+		if ($affected > 0) {
+			return true;
+		}
+		// 0 rows: either the stored value was already identical, or the lock
+		// was not ours and nothing was written. Only ownership tells them apart.
+		if (!self::cron_lock_owned()) {
+			self::$cronFence = array('held' => false, 'reason' => 'lost');
+			self::log(__FILE__, __LINE__, 'Cron lock lost before writing ' . $name . '; this pass certifies nothing further.', 'warning');
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Does THIS connection still own the per-address match lock? A worker that
+	 * took the lock and then paused can have lost it to a silent reconnect,
+	 * after which another worker may own the address. Checked immediately
+	 * before an irreversible WooCommerce side effect.
+	 *
+	 * @phpstan-impure Asks the database each call.
+	 */
+	public static function address_match_lock_owned($cryptoId, $address) {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', self::address_match_lock_name($cryptoId, $address))) === '1';
+	}
+
 	// Ownership, not mere use: IS_USED_LOCK returns the OWNER's connection id,
 	// so "somebody holds it" is not proof that we do. One query, so both values
 	// come from the same moment.

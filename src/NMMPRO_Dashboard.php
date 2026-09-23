@@ -184,7 +184,7 @@ class NMMPRO_Dashboard {
 		?>
 		<h2><?php esc_html_e('Unpaid orders for cryptocurrencies that are no longer enabled', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
 		<div class="notice notice-warning inline">
-			<p><?php esc_html_e('These orders were placed while the cryptocurrency was enabled and are still waiting to be paid. They are no longer being checked for payment, so any funds sent to their addresses will not credit the order automatically.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+			<p><?php esc_html_e('These orders were placed while the cryptocurrency was enabled and are still waiting to be paid. Switching a cryptocurrency off only stops new customers choosing it: the background job keeps checking these orders for payment and expires them as usual. The exception is a cryptocurrency this version of the plugin no longer supports at all - its orders cannot be checked, will never expire automatically, and need to be settled by hand.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
 		</div>
 		<table class="widefat striped">
 			<thead>
@@ -192,14 +192,19 @@ class NMMPRO_Dashboard {
 					<th scope="col"><?php esc_html_e('Cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
 					<th scope="col"><?php esc_html_e('Unpaid orders', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
 					<th scope="col"><?php esc_html_e('Oldest unpaid', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
+					<th scope="col"><?php esc_html_e('Payment checks', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
 				</tr>
 			</thead>
 			<tbody>
+				<?php $supported = NMMPRO_Cryptocurrencies::get(); ?>
 				<?php foreach ($orphans as $cryptoId => $row) : ?>
 					<tr>
 						<td><?php echo esc_html($cryptoId); ?></td>
 						<td><?php echo esc_html(number_format_i18n($row['unpaid_count'])); ?></td>
 						<td><?php echo esc_html(self::format_time($row['oldest_ordered_at'])); ?></td>
+						<td><?php echo esc_html(isset($supported[$cryptoId])
+							? __('Continuing', 'nomiddleman-crypto-payments-for-woocommerce')
+							: __('Not possible - no longer supported', 'nomiddleman-crypto-payments-for-woocommerce')); ?></td>
 					</tr>
 				<?php endforeach; ?>
 			</tbody>
@@ -247,6 +252,9 @@ class NMMPRO_Dashboard {
 				<p><?php
 				if ($unfencedReason === 'single-lock') {
 					esc_html_e('Cause: this database server releases a lock when a second one is taken (MySQL before 5.7.5, MariaDB before 10.0.2). Upgrading the database server resolves it.', 'nomiddleman-crypto-payments-for-woocommerce');
+				}
+				elseif ($unfencedReason === 'lost') {
+					esc_html_e('Cause: the background job lost its database lock part-way through a run - usually a dropped or restarted database connection. If this keeps appearing, ask your host whether database connections are being cut during long requests.', 'nomiddleman-crypto-payments-for-woocommerce');
 				}
 				else {
 					esc_html_e('Cause: this database server does not provide the named locks (GET_LOCK) the background job relies on. Your host may be able to enable them.', 'nomiddleman-crypto-payments-for-woocommerce');

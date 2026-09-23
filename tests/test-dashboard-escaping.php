@@ -218,6 +218,11 @@ dok('a job neither scheduler holds IS reported as unscheduled',
 	strpos($none, $notScheduled) !== false);
 $GLOBALS['nmmpro_test_cron_next'] = time() + 30;
 
+// Switching a coin off does not stop its existing orders being checked; only a
+// ticker the plugin no longer supports cannot be checked.
+dok('switched-off coins are not claimed to be unmonitored', strpos($html, 'no longer being checked') === false && strpos($html, 'keeps checking these orders') !== false);
+dok('an unsupported ticker is marked as not checkable', strpos($html, 'Not possible - no longer supported') !== false);
+
 // --- degraded mode: automatic expiry paused ---------------------------------
 $paused = 'Automatic cancellation of expired Autopay orders is paused';
 dok('no paused-expiry notice on a fenced store', strpos($html, $paused) === false);
@@ -226,6 +231,11 @@ ob_start();
 NMMPRO_Dashboard::render_page();
 $degraded = ob_get_clean();
 dok('paused-expiry notice names the old-MySQL cause', strpos($degraded, $paused) !== false && strpos($degraded, 'MySQL before 5.7.5') !== false);
+$GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 30, 'reason' => 'lost');
+ob_start();
+NMMPRO_Dashboard::render_page();
+$lostHtml = ob_get_clean();
+dok('paused-expiry notice explains a lock lost mid-run', strpos($lostHtml, $paused) !== false && strpos($lostHtml, 'lost its database lock part-way') !== false);
 $GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 2 * 3600, 'reason' => 'unavailable');
 ob_start();
 NMMPRO_Dashboard::render_page();

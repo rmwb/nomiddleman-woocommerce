@@ -531,6 +531,13 @@ function NMMPRO_delete_scan_options() {
         foreach ($scanOptions as $scanOption) {
             NMMPRO_Compat::delete_option($scanOption);
         }
+
+        // Per-address expiry deferrals and per-order lease-event markers are
+        // one option row each, so they are removed by prefix.
+        global $wpdb;
+        foreach (array('nmmpro_defer_', 'nmmpro_lease_event_') as $rowPrefix) {
+            $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE option_name LIKE %s", $wpdb->esc_like($rowPrefix) . '%'));
+        }
     });
 }
 

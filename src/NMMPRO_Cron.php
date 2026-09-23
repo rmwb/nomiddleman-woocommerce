@@ -40,13 +40,7 @@ function NMMPRO_do_cron_job() {
 		// its own per-address lock) but certifies and cancels nothing; the
 		// status screen reports why.
 		$fence = NMMPRO_Util::begin_cron_fence($lockAcquired);
-		if ($fence === 'held') {
-			if (NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false) !== false) {
-				NMMPRO_Compat::delete_option('nmmpro_autopay_unfenced');
-			}
-		}
-		else {
-			NMMPRO_Compat::update_option('nmmpro_autopay_unfenced', array('at' => time(), 'reason' => $fence), false);
+		if ($fence !== 'held') {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Cron pass is not exclusive (' . $fence . '); Autopay will match payments but not expire orders this tick.', 'warning');
 		}
 
@@ -116,6 +110,18 @@ function NMMPRO_do_cron_job() {
 		NMMPRO_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMMPRO_get_time_passed($startTime));
 	}
 	finally {
+		// Record how the pass ENDED for the Status screen. Judging at the start
+		// would hide a pass that began exclusive and lost its lock part-way,
+		// which certifies and cancels nothing just the same.
+		$fenceAtEnd = NMMPRO_Util::cron_fence_state();
+		if ($fenceAtEnd === 'held') {
+			if (NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false) !== false) {
+				NMMPRO_Compat::delete_option('nmmpro_autopay_unfenced');
+			}
+		}
+		elseif ($fenceAtEnd !== null) {
+			NMMPRO_Compat::update_option('nmmpro_autopay_unfenced', array('at' => time(), 'reason' => $fenceAtEnd), false);
+		}
 		NMMPRO_Util::end_cron_fence();
 		// Release only the lock we actually acquired. RELEASE_LOCK is a no-op
 		// for any connection that does not own it, but we guard anyway so a
