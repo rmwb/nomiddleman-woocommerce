@@ -40,14 +40,15 @@ class NMMPRO_Consumed_Repo {
             throw new InvalidArgumentException('Invalid consumed identity');
         }
         $table = self::table();
-        $values = array(self::identity($coin, $address, $hash), $hash, $address, $coin, $orderId, time());
+        $identity = self::identity($coin, $address, $hash);
+        $now = time();
         if ($strict) {
             $sql = $wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at)
-                VALUES (%s,%s,%s,%s,%d,%d)", $values);
+                VALUES (%s,%s,%s,%s,%d,%d)", $identity, $hash, $address, $coin, $orderId, $now);
         }
         else {
             $sql = $wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at)
-                VALUES (%s,%s,%s,%s,%d,%d) ON DUPLICATE KEY UPDATE identity=VALUES(identity)", $values);
+                VALUES (%s,%s,%s,%s,%d,%d) ON DUPLICATE KEY UPDATE identity=VALUES(identity)", $identity, $hash, $address, $coin, $orderId, $now);
         }
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is prepared immediately above; the table is only wpdb's prefix plus this class's fixed suffix.
         if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to record consumed transaction'); }

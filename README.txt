@@ -201,18 +201,14 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 == Changelog ==
 
 = Unreleased =
-* Autopay: if recording a verified payment hits a database error, that payment address is now held back from automatic expiry until it has been checked cleanly again. Previously the order being paid could be cancelled later in the same run, once the database recovered
-* Autopay: an order is only marked paid in the plugin's records after WooCommerce has actually saved it as paid. WooCommerce reports a status change to other plugins even when saving the order fails, so a failed save could leave a verified payment recorded as settled against an order still awaiting payment. It now stays pending in the plugin's records and is completed on the next run
-* Autopay: automatic cancellation is recorded only once WooCommerce has actually cancelled the order. If the cancellation fails or is interrupted, the order goes back to awaiting payment instead of being left unwatched, so a payment that arrives afterwards is still credited
-* Autopay: cancelling an order while its verified payment is still being completed no longer hides that payment - the order is flagged for manual reconciliation with a note
-* Autopay: automatic expiry now runs only when the background job can confirm it is the only copy running, and every record that permits it to cancel an order is written only while that is still true. On database servers without usable named locks (including MySQL before 5.7.5), or when a run loses its database lock part-way, payments are still verified but expired orders are left for you to cancel, and the Status screen says why
-* Autopay: expiring an order and crediting a payment to it can no longer overlap - both work one payment address at a time - and a payment that arrives while an order is being expired is never marked as used unless that order is really cancelled
-* Autopay: payment records are settled from what WooCommerce actually stored, not from its order cache, and a momentary database error while reading an order is no longer mistaken for the order having been deleted
-* Autopay: an order status change you make at the same moment the plugin is settling that order's payment is no longer lost, and reopening an order that was being expired gives it a fresh payment window
-* Status screen: switching a cryptocurrency off no longer claims its existing orders are unmonitored - they are still checked and expire as usual; only a cryptocurrency the plugin no longer supports cannot be checked
-* Downgrading to 2.12.0: let any in-progress cancellations settle first (docs/DOWNGRADE.md in the source repository has the steps), or an order being expired at that moment can be left unmonitored
-* Autopay: a transaction already recorded as used can no longer be credited to a second order, even if the per-address lock is ever unavailable
-* New Status screen (Nomiddleman Crypto Payments > Status): a single read-only page answering "is my setup working right now?" - every enabled cryptocurrency with its mode, whether it has a wallet address or master public key configured, and whether that mode can still be verified for that coin; how many orders are waiting to be paid per coin and how old the oldest is (including coins you have since switched off, whose unpaid orders are otherwise invisible); when the background job last ran, when it runs next, whether WP-Cron is disabled (the job runs through WooCommerce's Action Scheduler where available), and how many addresses are queued for retry after a failed blockchain lookup; and the most recent warnings and errors the plugin logged. It changes nothing, contacts no blockchain or exchange service, and adds no database tables
+* New read-only Status screen (Nomiddleman Crypto Payments > Status): each enabled coin's mode, configuration and verifiability; unpaid orders per coin, including coins you have switched off; background-job health; and recent warnings. It changes nothing and contacts no outside service
+* Autopay: an order is marked paid only once WooCommerce has actually saved it as paid, and payment records are settled from stored orders rather than WooCommerce's cache
+* Autopay: a cancellation is recorded only once WooCommerce has actually cancelled the order; a failed or interrupted one returns the order to awaiting payment, so a later payment is still credited
+* Autopay: expiring an order and crediting a payment to it can no longer overlap, and a payment that could not be recorded holds its address back from expiry until it has been checked again
+* Autopay: a transaction already used can never be credited to a second order
+* Autopay: order status changes you make while a payment is being settled are no longer lost; cancelling an order whose payment is still completing flags it for reconciliation
+* Autopay: expiry runs only while the background job is confirmed to be the only copy running. Without usable database locks (including MySQL before 5.7.5) expired orders wait for you, and the Status screen says why
+* Before downgrading to 2.12.0, let in-progress cancellations settle first (see docs/DOWNGRADE.md in the source repository)
 
 = 2.12.0 =
 * Use a distinct NMMPRO prefix with migration of retained settings and legacy hook compatibility.
