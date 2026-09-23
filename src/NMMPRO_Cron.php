@@ -34,6 +34,22 @@ function NMMPRO_do_cron_job() {
 	}
 
 	try {
+		// Automatic expiry acts on sweep coverage, and coverage is only
+		// trustworthy if this pass is really the only one writing it. Without a
+		// held, still-owned cron lock this pass matches (which fails closed on
+		// its own per-address lock) but certifies and cancels nothing; the
+		// status screen reports why.
+		$fence = NMMPRO_Util::begin_cron_fence($lockAcquired);
+		if ($fence === 'held') {
+			if (NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false) !== false) {
+				NMMPRO_Compat::delete_option('nmmpro_autopay_unfenced');
+			}
+		}
+		else {
+			NMMPRO_Compat::update_option('nmmpro_autopay_unfenced', array('at' => time(), 'reason' => $fence), false);
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Cron pass is not exclusive (' . $fence . '); Autopay will match payments but not expire orders this tick.', 'warning');
+		}
+
 		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 		// Number of clean addresses in the database at all times for faster thank you page load times
 		$hdBufferAddressCount = 4;
@@ -80,6 +96,7 @@ function NMMPRO_do_cron_job() {
 		}
 
 		NMMPRO_Payment::resume_verified_orders();
+		NMMPRO_Payment::recover_interrupted_cancellations();
 		NMMPRO_Payment::check_all_addresses_for_matching_payment($autoPaymentTransactionLifetimeSec);
 		NMMPRO_Payment::cancel_expired_payments();
 
@@ -99,6 +116,7 @@ function NMMPRO_do_cron_job() {
 		NMMPRO_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMMPRO_get_time_passed($startTime));
 	}
 	finally {
+		NMMPRO_Util::end_cron_fence();
 		// Release only the lock we actually acquired. RELEASE_LOCK is a no-op
 		// for any connection that does not own it, but we guard anyway so a
 		// degraded (unlocked) run never touches another connection's lock.

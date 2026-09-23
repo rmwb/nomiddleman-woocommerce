@@ -328,6 +328,55 @@ class NMMPRO_Payment_Repo {
 		));
 	}
 
+	/**
+	 * set_status() for changes that originate OUTSIDE the verifier - an admin
+	 * editing the order, a webhook, another plugin - via the order-status hook.
+	 *
+	 * It never touches a row in one of the two lease states. 'completing'
+	 * holds a verified, recorded payment whose order is not confirmed complete
+	 * yet; 'cancelling' holds an expiry whose order is not confirmed
+	 * cancelled yet. Each has an owner (the worker holding it, or the recovery
+	 * pass) that settles it from a FRESH read of the order - and a fresh read
+	 * is the only trustworthy answer, because WooCommerce fires the status
+	 * transition hooks even when saving the order failed and nothing was
+	 * persisted. Settling from the event would mark a row paid (or cancelled)
+	 * under an order still awaiting payment, with nothing ever looking at it
+	 * again; or, when an admin cancels mid-completion, write 'cancelled' over
+	 * a verified payment that recovery would otherwise flag for review.
+	 */
+	public function set_status_from_order_event($orderId, $orderAmount, $status) {
+		global $wpdb;
+		NMMPRO_Util::log(__FILE__, __LINE__, 'order event: updating ' . $orderId . ' to ' . $status);
+
+		$wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = %s
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d
+			 AND `status` NOT IN ('completing', 'cancelling')",
+			$status, $orderAmount, $orderId
+		));
+	}
+
+	/**
+	 * Settle a 'completing' row as paid, only while it is still 'completing'.
+	 * Callers must first confirm the order is paid from a FRESH read (see
+	 * NMMPRO_Payment::settle_completion). Returns the affected-row count, or
+	 * false on a database error.
+	 */
+	public function settle_completion($orderId, $orderAmount) {
+		global $wpdb;
+
+		return $wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = 'paid'
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d
+			 AND `status` = 'completing'",
+			$orderAmount, $orderId
+		));
+	}
+
 	// Tri-state result of a conditional claim. CLAIMED: this call moved the row.
 	// ALREADY: the row was conclusively transitioned out of 'unpaid' by another
 	// worker (cancelled or paid) - a definite, retry-free outcome. DB_ERROR: the
@@ -372,6 +421,40 @@ class NMMPRO_Payment_Repo {
 		return $this->claim_from_unpaid($orderId, $orderAmount, 'cancelled');
 	}
 
+	/**
+	 * Expiry's side of the race when it is about to cancel a live order: move
+	 * the row 'unpaid' -> 'cancelling' rather than straight to 'cancelled'.
+	 * The row must not be terminal until WooCommerce has actually cancelled the
+	 * order - if the request dies, or the cancellation fails, in between, a
+	 * terminal record would sit under an order still awaiting payment, and
+	 * since both the matcher and expiry read only 'unpaid', a payment arriving
+	 * afterwards would never be credited. 'cancelling' is equally invisible to
+	 * both, and NMMPRO_Payment::recover_interrupted_cancellations() settles
+	 * anything left in it. Returns one of the CLAIM_* constants.
+	 */
+	public function claim_for_cancellation_lease($orderId, $orderAmount) {
+		return $this->claim_from_unpaid($orderId, $orderAmount, 'cancelling');
+	}
+
+	/**
+	 * Settle a 'cancelling' row to $toStatus, only while it is still
+	 * 'cancelling' - so a row the order-status hook (or recovery) has already
+	 * settled is never overwritten. Returns the affected-row count, or false on
+	 * a database error.
+	 */
+	public function settle_cancellation($orderId, $orderAmount, $toStatus) {
+		global $wpdb;
+
+		return $wpdb->query($wpdb->prepare(
+			"UPDATE `$this->tableName`
+			 SET `status` = %s
+			 WHERE `order_amount` = %s
+			 AND `order_id` = %d
+			 AND `status` = 'cancelling'",
+			$toStatus, $orderAmount, $orderId
+		));
+	}
+
 	// Verifier's side of the race: claim the row for payment. Returns one of the
 	// CLAIM_* constants; only CLAIM_CLAIMED means this caller may complete the
 	// order. On CLAIM_ALREADY the row was cancelled/paid elsewhere; on
@@ -412,6 +495,8 @@ class NMMPRO_Payment_Repo {
 		));
 	}
 
+	// Called only when an order is reopened for payment. Never re-dates a
+	// lease row, which set_status_from_order_event() also leaves alone.
 	public function set_ordered_at($orderId, $orderAmount, $orderedAt) {
 		global $wpdb;
 
@@ -419,7 +504,8 @@ class NMMPRO_Payment_Repo {
 			"UPDATE `$this->tableName`
 			 SET `ordered_at` = %d
 			 WHERE `order_amount` = %s
-			 AND `order_id` = %d",
+			 AND `order_id` = %d
+			 AND `status` NOT IN ('completing', 'cancelling')",
 			$orderedAt, $orderAmount, $orderId
 		));
 	}

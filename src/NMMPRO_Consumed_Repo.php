@@ -98,7 +98,22 @@ class NMMPRO_Consumed_Repo {
             $payments = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
             $engine = $wpdb->get_var($wpdb->prepare('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s', $payments));
             if (strtolower((string) $engine) !== 'innodb') { throw new RuntimeException('Payment table requires InnoDB'); }
+            if (!is_array($hashes) || count($hashes) === 0) { throw new InvalidArgumentException('A payment claim needs at least one transaction'); }
             if ($wpdb->query('START TRANSACTION') === false) { throw new RuntimeException('Unable to start payment claim'); }
+            // write() is an idempotent upsert, so it would silently accept a hash
+            // another order already owns. The per-address lock and the matcher's
+            // consumed check normally keep such a hash out; refuse it here too,
+            // under row locks inside this transaction, so a broken lock cannot
+            // credit one transaction to two orders.
+            $table = self::table();
+            $identities = array();
+            foreach ($hashes as $hash) { $identities[] = self::identity($coin, $address, $hash); }
+            $placeholders = implode(',', array_fill(0, count($identities), '%s'));
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the table is wpdb's prefix plus this class's fixed suffix, and $placeholders is only literal %s markers; every identity is bound by prepare().
+            $sql = "SELECT COUNT(*) FROM `$table` WHERE identity IN ($placeholders) FOR UPDATE";
+            $owned = $wpdb->get_var($wpdb->prepare($sql, $identities)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is prepared in this call; see the note above.
+            if ($owned === null || $wpdb->last_error !== '') { throw new RuntimeException('Unable to check consumed history before claiming'); }
+            if ((int) $owned !== 0) { throw new RuntimeException('A transaction in this claim is already recorded as consumed'); }
             $claim = $repo->claim_for_payment($orderId, $amount);
             if ($claim === NMMPRO_Payment_Repo::CLAIM_DB_ERROR) { throw new RuntimeException('Payment claim failed'); }
             foreach ($hashes as $hash) { self::write($coin, $address, $hash, $orderId); }

@@ -201,6 +201,12 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 == Changelog ==
 
 = Unreleased =
+* Autopay: if recording a verified payment hits a database error, that payment address is now held back from automatic expiry until it has been checked cleanly again. Previously the order being paid could be cancelled later in the same run, once the database recovered
+* Autopay: an order is only marked paid in the plugin's records after WooCommerce has actually saved it as paid. WooCommerce reports a status change to other plugins even when saving the order fails, so a failed save could leave a verified payment recorded as settled against an order still awaiting payment. It now stays pending in the plugin's records and is completed on the next run
+* Autopay: automatic cancellation is recorded only once WooCommerce has actually cancelled the order. If the cancellation fails or is interrupted, the order goes back to awaiting payment instead of being left unwatched, so a payment that arrives afterwards is still credited
+* Autopay: cancelling an order while its verified payment is still being completed no longer hides that payment - the order is flagged for manual reconciliation with a note
+* Autopay: automatic expiry now runs only when the background job can confirm it is the only copy running. On database servers without usable named locks (including MySQL before 5.7.5) payments are still verified but expired orders are left for you to cancel, and the Status screen says why
+* Autopay: a transaction already recorded as used can no longer be credited to a second order, even if the per-address lock is ever unavailable
 * New Status screen (Nomiddleman Crypto Payments > Status): a single read-only page answering "is my setup working right now?" - every enabled cryptocurrency with its mode, whether it has a wallet address or master public key configured, and whether that mode can still be verified for that coin; how many orders are waiting to be paid per coin and how old the oldest is (including coins you have since switched off, whose unpaid orders are otherwise invisible); when the background job last ran, when it runs next, whether WP-Cron is disabled (the job runs through WooCommerce's Action Scheduler where available), and how many addresses are queued for retry after a failed blockchain lookup; and the most recent warnings and errors the plugin logged. It changes nothing, contacts no blockchain or exchange service, and adds no database tables
 
 = 2.12.0 =

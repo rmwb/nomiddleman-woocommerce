@@ -34,11 +34,83 @@ class NMMPRO_Payment {
                     $order->update_meta_data('transaction_hash', $row['tx_hash']);
                     $order->payment_complete();
                 }
-                if ($order->is_paid()) { (new NMMPRO_Payment_Repo())->set_status($row['order_id'], $row['order_amount'], 'paid'); }
+                self::settle_completion(new NMMPRO_Payment_Repo(), $row['order_id'], $row['order_amount']);
             } catch (\Throwable $e) { NMMPRO_Util::log(__FILE__, __LINE__, 'Verified payment completion will retry: ' . $e->getMessage(), 'error'); }
             finally { NMMPRO_Util::release_address_match_lock($coin, $address); }
         }
     }
+
+	/**
+	 * Settle a 'completing' row as paid only if a FRESH read of the order says
+	 * it is paid. The object payment_complete() ran on is not proof: when the
+	 * order save fails WooCommerce catches the exception, keeps the in-memory
+	 * status, and fires the status hooks anyway - so is_paid() on that object
+	 * can be true for an order the database still has awaiting payment.
+	 * Otherwise the row stays 'completing' and resume_verified_orders() tries
+	 * again next tick. Returns true when the row was settled.
+	 */
+	private static function settle_completion($paymentRepo, $orderId, $orderAmount) {
+		$fresh = WC_Order_Factory::get_order($orderId);
+		if ($fresh && $fresh->is_paid()) {
+			$paymentRepo->settle_completion($orderId, $orderAmount);
+			return true;
+		}
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is not confirmed paid after completion; its verified payment stays recoverable and completion will be retried.', 'warning');
+		return false;
+	}
+
+	/**
+	 * Settle a 'cancelling' row by asking the order, the only authority on
+	 * whether the cancellation happened: paid -> 'paid'; still awaiting
+	 * payment -> back to 'unpaid', where the customer can still pay and expiry
+	 * will try again; gone or otherwise terminal -> 'cancelled'. Conditional on
+	 * the row still being 'cancelling', so it never overwrites a settlement the
+	 * order-status hook already made. Returns the status it chose.
+	 *
+	 * @param WC_Order|false|null $order A FRESH read of the order.
+	 */
+	private static function settle_cancellation_from_order($paymentRepo, $orderId, $orderAmount, $order) {
+		if (!$order) {
+			$status = 'cancelled';
+		}
+		elseif ($order->is_paid()) {
+			$status = 'paid';
+		}
+		elseif ($order->has_status(array('pending', 'on-hold'))) {
+			$status = 'unpaid';
+		}
+		else {
+			$status = 'cancelled';
+		}
+		$paymentRepo->settle_cancellation($orderId, $orderAmount, $status);
+		return $status;
+	}
+
+	/**
+	 * Settle cancellations a previous request started and never finished (see
+	 * NMMPRO_Payment_Repo::claim_for_cancellation_lease()). Runs every tick
+	 * before matching, so a row returned to 'unpaid' is matched this tick.
+	 * Bounded per tick with a persisted cursor, like resume_verified_orders().
+	 */
+	public static function recover_interrupted_cancellations() {
+		global $wpdb;
+		$table = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
+		$cursor = (int) NMMPRO_Compat::get_option('nmmpro_cancellation_cursor', 0);
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the only interpolation is the table name ($wpdb->prefix + a plugin constant); the cursor is bound by prepare().
+		$sql = "SELECT * FROM `$table` WHERE status='cancelling' AND id>%d ORDER BY id LIMIT 25";
+		$rows = $wpdb->get_results($wpdb->prepare($sql, $cursor), ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is prepared in this call; see the note above.
+		NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', count((array) $rows) === 25 ? (int) end($rows)['id'] : 0, false);
+		$paymentRepo = new NMMPRO_Payment_Repo();
+		foreach ((array) $rows as $row) {
+			try {
+				$settled = self::settle_cancellation_from_order($paymentRepo, $row['order_id'], $row['order_amount'], wc_get_order($row['order_id']));
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: settled an interrupted cancellation of order ' . $row['order_id'] . ' to ' . $settled . '.', 'warning');
+			}
+			catch (\Throwable $e) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Interrupted cancellation recovery will retry: ' . $e->getMessage(), 'error');
+			}
+		}
+	}
 
 	public static function check_all_addresses_for_matching_payment($transactionLifetime) {
 		$paymentRepo = new NMMPRO_Payment_Repo();
@@ -58,6 +130,16 @@ class NMMPRO_Payment {
 		NMMPRO_Compat::update_option('nmmpro_autopay_scan_last_run', $now, false);
 		$cronIntervalSec = ($lastRun > 0 && $now > $lastRun) ? ($now - $lastRun) : 60;
 
+		// Coverage stamps, exclusion sets, dirty markers and the sweep start
+		// authorise expiry to cancel orders, so only an exclusive pass writes
+		// them (always true outside a cron pass; see
+		// NMMPRO_Util::cron_fence_held). A pass that STARTS unfenced still
+		// matches - matching fails closed on its per-address lock - and keeps
+		// its own cursor and retry set, so a server that can never be fenced
+		// still works through the whole backlog instead of rescanning its head.
+		$fenced = NMMPRO_Util::cron_fence_held();
+		$lane = $fenced ? '' : '_unfenced';
+
 		// Count only (a single scalar) so a large backlog is never loaded into PHP
 		// just to size the budget.
 		$total = $paymentRepo->count_distinct_unpaid_addresses();
@@ -66,10 +148,12 @@ class NMMPRO_Payment {
 			// and keep the sweep-start fresh - an empty backlog is a trivially
 			// complete sweep, so the first sweep over newly arriving rows must
 			// not inherit a start time from before the idle stretch.
-			if (NMMPRO_Compat::get_option('nmmpro_autopay_scan_retry', array())) {
-				NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry', array(), false);
+			if (NMMPRO_Compat::get_option('nmmpro_autopay_scan_retry' . $lane, array())) {
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry' . $lane, array(), false);
 			}
-			NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $now, false);
+			if ($fenced && NMMPRO_Util::cron_fence_held()) {
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $now, false);
+			}
 			return;
 		}
 
@@ -103,7 +187,9 @@ class NMMPRO_Payment {
 		$sweepStart = (int) NMMPRO_Compat::get_option('nmmpro_autopay_scan_sweep_start', 0);
 		if ($sweepStart < 1) {
 			$sweepStart = $now;
-			NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $sweepStart, false);
+			if ($fenced && NMMPRO_Util::cron_fence_held()) {
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $sweepStart, false);
+			}
 		}
 
 		$plan = self::scan_plan($total, $baseBudget, $transactionLifetime, $shortestCancelSec, $cronIntervalSec);
@@ -144,7 +230,7 @@ class NMMPRO_Payment {
 		// between ticks simply advances to the next one - no restart-at-top that
 		// could starve later addresses. With $take <= $total the after/head pages
 		// never overlap, so no address is processed twice in a tick.
-		$cursor = NMMPRO_Compat::get_option('nmmpro_autopay_scan_cursor', '');
+		$cursor = NMMPRO_Compat::get_option('nmmpro_autopay_scan_cursor' . $lane, '');
 		$cursorParts = ($cursor !== '') ? explode('|', $cursor, 2) : array('', '');
 		$cursorCrypto = $cursorParts[0];
 		$cursorAddress = isset($cursorParts[1]) ? $cursorParts[1] : '';
@@ -161,7 +247,7 @@ class NMMPRO_Payment {
 		// a transient explorer/RPC error is retried on the very next tick rather
 		// than waiting a whole sweep (by which time a payment could age out). The
 		// retry set is bounded, and only the fair-sweep batch advances the cursor.
-		$retrySet = NMMPRO_Compat::get_option('nmmpro_autopay_scan_retry', array());
+		$retrySet = NMMPRO_Compat::get_option('nmmpro_autopay_scan_retry' . $lane, array());
 		if (!is_array($retrySet)) {
 			$retrySet = array();
 		}
@@ -265,8 +351,9 @@ class NMMPRO_Payment {
 				}
 				$xmrTxs = isset($xmrByAddress[$address]) ? $xmrByAddress[$address] : array();
 				if (self::process_address_transactions($crypto, $address, $xmrTxs, $cryptoLifetime) === false) {
-					// Another verifier holds this subaddress; we did not examine
-					// it, so it must not be certified as covered.
+					// Another verifier holds this subaddress, or a claim on it
+					// hit a database error: either way it was not conclusively
+					// processed, so it must not be certified as covered.
 					$newFailed[] = self::scan_key($record);
 					continue;
 				}
@@ -331,7 +418,14 @@ class NMMPRO_Payment {
 		// exclusion set that cancel_expired_payments() consults. Bounded: past
 		// the cap we can no longer track addresses individually, so the
 		// overflow's coins fall back to the coarse coin-level dirty marker.
-		if (!empty($incompleteKeys)) {
+		// What this pass may still write, decided once for the whole tail. A
+		// pass that began fenced and has since lost its lock writes NOTHING -
+		// not even its cursor - so the next fenced tick re-walks this page:
+		// duplicate work, never an address skipped with its failure unrecorded.
+		$writeProgress = $fenced ? NMMPRO_Util::cron_fence_held() : true;
+		$certify = $fenced && $writeProgress;
+
+		if ($certify && !empty($incompleteKeys)) {
 			$builder = NMMPRO_Compat::get_option('nmmpro_autopay_scan_incomplete_next', array());
 			if (!is_array($builder)) {
 				$builder = array();
@@ -347,7 +441,7 @@ class NMMPRO_Payment {
 			NMMPRO_Compat::update_option('nmmpro_autopay_scan_incomplete_next', $builder, false);
 		}
 
-		if (!empty($coinDirty)) {
+		if ($certify && !empty($coinDirty)) {
 			$dirty = NMMPRO_Compat::get_option('nmmpro_autopay_scan_dirty', array());
 			if (!is_array($dirty)) {
 				$dirty = array();
@@ -357,8 +451,10 @@ class NMMPRO_Payment {
 			}
 			NMMPRO_Compat::update_option('nmmpro_autopay_scan_dirty', $dirty, false);
 		}
-		NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry', $newFailed, false);
-		NMMPRO_Compat::update_option('nmmpro_autopay_scan_cursor', $lastKey, false);
+		if ($writeProgress) {
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry' . $lane, $newFailed, false);
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_cursor' . $lane, $lastKey, false);
+		}
 
 		// A full sweep has just completed: either this tick's page wrapped past
 		// the end of the address list, or the budget covered the whole backlog
@@ -397,7 +493,7 @@ class NMMPRO_Payment {
 		// next wrap then simply drops it from the set). Only a ticker missing
 		// from the registry (nothing of that coin can ever be verified) still
 		// blocks its coin's stamp via the coin-level dirty marker.
-		if ($wrapped || $take >= $total) {
+		if ($certify && ($wrapped || $take >= $total)) {
 			// Coin-level exclusions: unverifiable tickers and address-tracking
 			// overflow. Cleared after use - the sweep now starting re-marks
 			// them for as long as their rows exist.
@@ -407,20 +503,8 @@ class NMMPRO_Payment {
 				foreach (array_keys($dirty) as $dirtyCryptoId) {
 					$excludedCryptos[$dirtyCryptoId] = true;
 				}
-				NMMPRO_Compat::update_option('nmmpro_autopay_scan_dirty', array(), false);
 			}
-
 			$stampAt = ($take >= $total) ? $now : $sweepStart;
-			$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
-			if (!is_array($coveredMap)) {
-				$coveredMap = array();
-			}
-			foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
-				if (!isset($excludedCryptos[$sweptCryptoId])) {
-					$coveredMap[$sweptCryptoId] = $stampAt;
-				}
-			}
-			NMMPRO_Compat::update_option('nmmpro_autopay_scan_covered_at', $coveredMap, false);
 
 			// Promote the completed sweep's incomplete addresses to the ACTIVE
 			// exclusion set cancel_expired_payments() consults, adding the
@@ -439,6 +523,28 @@ class NMMPRO_Payment {
 
 			// The next sweep begins with the head rows this tick just fetched.
 			NMMPRO_Compat::update_option('nmmpro_autopay_scan_sweep_start', $now, false);
+			if (!empty($excludedCryptos)) {
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_dirty', array(), false);
+			}
+
+			// Coverage is the one write that authorises cancelling somebody's
+			// order, so it goes LAST - after the exclusions it depends on are
+			// durable - and only if this pass is still exclusive right now.
+			// Stopping anywhere before it leaves the previous stamp, which the
+			// exclusions just written still make safe: every address they
+			// dropped was verified cleanly during this sweep, after that stamp.
+			if (NMMPRO_Util::cron_fence_held()) {
+				$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
+				if (!is_array($coveredMap)) {
+					$coveredMap = array();
+				}
+				foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
+					if (!isset($excludedCryptos[$sweptCryptoId])) {
+						$coveredMap[$sweptCryptoId] = $stampAt;
+					}
+				}
+				NMMPRO_Compat::update_option('nmmpro_autopay_scan_covered_at', $coveredMap, false);
+			}
 		}
 	}
 
@@ -502,6 +608,26 @@ class NMMPRO_Payment {
 		);
 	}
 
+	/**
+	 * Exclude an address from expiry NOW, not at the next sweep wrap. The
+	 * sweep's own failure handling (the retry set, promoted at the wrap) is
+	 * too late for a failure found mid-sweep: cancel_expired_payments() runs
+	 * later in the same tick against the active set and the previous sweep's
+	 * coverage stamp. Adding an exclusion can only defer an expiry, never
+	 * cause one, so this is safe from any caller; the next clean wrap drops it.
+	 */
+	private static function mark_address_unverified($cryptoId, $address) {
+		$key = $cryptoId . '|' . $address;
+		$active = NMMPRO_Compat::get_option('nmmpro_autopay_scan_incomplete', array());
+		if (!is_array($active)) {
+			$active = array();
+		}
+		if (!isset($active[$key])) {
+			$active[$key] = true;
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_incomplete', $active, false);
+		}
+	}
+
 	// Stable identity of a distinct-unpaid-address row, for the sweep cursor.
 	private static function scan_key($record) {
 		return $record['cryptocurrency'] . '|' . $record['address'];
@@ -541,9 +667,9 @@ class NMMPRO_Payment {
 		NMMPRO_Util::log(__FILE__, __LINE__, 'Transactions found for ' . $cryptoId . ': ' . count((array) $transactions));
 
 		if (self::process_address_transactions($crypto, $address, $transactions, $transactionLifetime) === false) {
-			// Another verifier holds this address; we did not examine it. Treat
-			// it exactly like a failed fetch so it is retried and never
-			// certified as covered.
+			// Another verifier holds this address, or a claim on it hit a
+			// database error. Treat it exactly like a failed fetch so it is
+			// retried and never certified as covered.
 			return false;
 		}
 
@@ -657,6 +783,10 @@ class NMMPRO_Payment {
 			return false;
 		}
 
+		// Set when a claim hit a database error: the row's state is unknown and
+		// its payment is unprocessed, so this visit must not count as coverage.
+		$claimFailed = false;
+
 		try {
 
 		foreach ($transactions as $transaction) {
@@ -769,6 +899,12 @@ class NMMPRO_Payment {
 					// ignore a valid payment) and do NOT complete the order; leave
 					// everything untouched so a later tick retries this transaction.
 					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving the transaction unconsumed for retry. Transaction Hash: ' . $txHash, 'error');
+					// A paid order is sitting here unprocessed. If this address
+					// were certified, the expiry pass - later in this same tick,
+					// once the database answers again - could cancel the very
+					// order this transaction pays.
+					self::mark_address_unverified($cryptoId, $address);
+					$claimFailed = true;
 					continue;
 				}
 
@@ -826,7 +962,7 @@ class NMMPRO_Payment {
 				$order->update_meta_data('transaction_hash', $txHash);
 				$order->payment_complete();
 				$order->add_order_note($orderNote);
-                if ($order->is_paid()) { $paymentRepo->set_status($orderId, $orderAmount, 'paid'); }
+				self::settle_completion($paymentRepo, $orderId, $orderAmount);
 			}
 		}
 
@@ -839,9 +975,11 @@ class NMMPRO_Payment {
 		// gives Autopay the same semantics. It runs AFTER the single-tx loop on
 		// purpose: an order completed above is no longer unpaid, and a hash
 		// consumed above no longer contributes to any sum.
-		self::aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings);
+		$aggregated = self::aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings);
 
-		return true;
+		// false marks the visit incomplete, exactly like a busy lock: the
+		// sweep retries the address and never certifies it as covered.
+		return !$claimFailed && $aggregated !== false;
 
 		}
 		finally {
@@ -1004,6 +1142,10 @@ class NMMPRO_Payment {
 	 * completed through the same claim/complete sequence the single-tx path
 	 * uses and ALL contributing hashes are consumed together.
 	 */
+	/**
+	 * @return bool|null false when a claim hit a database error (the visit is
+	 *                   then incomplete); true or null otherwise.
+	 */
 	private static function aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings) {
 		$cryptoId = $crypto->get_id();
 
@@ -1091,7 +1233,8 @@ class NMMPRO_Payment {
 			// contributing transaction is still eligible when a later tick
 			// retries the whole aggregate.
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay split-payment: database error claiming ' . $cryptoId . ' order ' . $orderId . ' for payment; leaving all transactions unconsumed for retry. Transaction Hashes: ' . $hashList, 'error');
-			return;
+			self::mark_address_unverified($cryptoId, $address);
+			return false;
 		}
 
 		if ($claim === NMMPRO_Payment_Repo::CLAIM_ALREADY) {
@@ -1152,7 +1295,7 @@ class NMMPRO_Payment {
 		$order->update_meta_data('transaction_hash', $storedHashList);
 		$order->payment_complete();
 		$order->add_order_note($orderNote);
-                if ($order->is_paid()) { $paymentRepo->set_status($orderId, $orderAmount, 'paid'); }
+		self::settle_completion($paymentRepo, $orderId, $orderAmount);
 	}
 
 	private static function get_address_transactions($cryptoId, $address, $transactionLifetime = null) {
@@ -1283,6 +1426,13 @@ class NMMPRO_Payment {
 
 	public static function cancel_expired_payments() {
 		global $woocommerce;
+
+		// Inside a cron pass that is not exclusive, coverage may be being
+		// rewritten under us; cancel nothing (see NMMPRO_Util::cron_fence_held).
+		if (!NMMPRO_Util::cron_fence_held()) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: cron pass not exclusive; skipping automatic cancellation this tick.');
+			return;
+		}
 		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 
 		$paymentRepo = new NMMPRO_Payment_Repo();
@@ -1416,57 +1566,81 @@ class NMMPRO_Payment {
 					continue;
 				}
 
-				// Atomically claim this row for cancellation. The verifier flips a
-				// matched row 'unpaid' -> 'paid'; this flips 'unpaid' -> 'cancelled'
-				// only while it is still 'unpaid'. Only CLAIM_CLAIMED means we won
-				// and may cancel: on CLAIM_ALREADY the verifier already took the row,
-				// and on CLAIM_DB_ERROR the outcome is unknown - in both cases leave
-				// the order alone (a real error is retried next tick).
-				if ($paymentRepo->claim_for_cancellation($orderId, $orderAmount) !== NMMPRO_Payment_Repo::CLAIM_CLAIMED) {
+				// Automatic cancellation acts on the coverage snapshot read at the
+				// top of this pass. Inside a cron pass, re-confirm before each
+				// claim that this process still holds the cron lock; if it has
+				// been lost (reconnect, or a server that drops it), another tick
+				// may be rewriting that coverage, so stop rather than act on it.
+				if (!NMMPRO_Util::cron_fence_held()) {
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: cron lock no longer held; stopping automatic cancellation for this tick.', 'warning');
+					return;
+				}
+
+				// Atomically claim this row for cancellation, as a LEASE:
+				// 'unpaid' -> 'cancelling', only while it is still 'unpaid'. The
+				// verifier's claim is the opposite conditional update, so exactly
+				// one wins. Only CLAIM_CLAIMED means we won and may cancel: on
+				// CLAIM_ALREADY the verifier already took the row, and on
+				// CLAIM_DB_ERROR the outcome is unknown - in both cases leave the
+				// order alone (a real error is retried next tick). The row does
+				// not become terminal until the order has really been cancelled;
+				// see claim_for_cancellation_lease().
+				if ($paymentRepo->claim_for_cancellation_lease($orderId, $orderAmount) !== NMMPRO_Payment_Repo::CLAIM_CLAIMED) {
 					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: did not claim order ' . $orderId . ' for cancellation (already transitioned or DB error); not cancelling this tick.');
 					continue;
 				}
 
-				// Hook point immediately before the final transition. Integrations
-				// (and the concurrency test) can observe - or, in a genuine race,
-				// complete - the order here; the re-fetch below then reconciles.
-				NMMPRO_Compat::action('nmmpro_before_autopay_cancel', $orderId, $cryptoId, $address);
+				try {
+					// Hook point immediately before the final transition.
+					// Integrations (and the concurrency test) can observe - or, in
+					// a genuine race, complete - the order here; the re-fetch
+					// below then reconciles.
+					NMMPRO_Compat::action('nmmpro_before_autopay_cancel', $orderId, $cryptoId, $address);
 
-				// Final re-fetch after the claim to close the order-side window as
-				// far as WooCommerce allows. If the order was paid or advanced
-				// out-of-band after we claimed the row, reconcile the record and
-				// leave the order alone rather than cancelling a paid order.
-				$order = WC_Order_Factory::get_order($orderId);
+					// Final re-fetch after the claim to close the order-side
+					// window as far as WooCommerce allows. If the order was paid or
+					// advanced out-of-band after we claimed the row, settle the
+					// record from the order and leave the order alone.
+					$order = WC_Order_Factory::get_order($orderId);
 
-				if (!$order) {
-					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' vanished after cancellation claim; record already retired.');
-					continue;
+					if (!$order || $order->is_paid() || !$order->has_status(array('pending', 'on-hold'))) {
+						$settled = self::settle_cancellation_from_order($paymentRepo, $orderId, $orderAmount, $order);
+						NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' ' . (!$order ? 'vanished' : 'changed to ' . $order->get_status()) . ' after cancellation claim; not cancelling, record settled to ' . $settled . '.');
+						continue;
+					}
+
+					$orderNote = sprintf(
+						/* translators: 1: cryptocurrency ticker, 2: number of hours */
+						__('Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce'),
+						$cryptoId,
+						round($paymentCancellationTimeSec/3600, 1));
+
+					add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_cancelled_email_note_subject_line', 1, 2);
+					add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_cancelled_email_heading', 1, 2);
+
+					// WooCommerce catches an exception thrown while saving the new
+					// status and returns false, so the return value alone cannot
+					// be trusted in either direction. Re-read the order and let IT
+					// decide what the record becomes: cancelled if it was, back to
+					// 'unpaid' (still payable, retried next pass) if it was not.
+					$order->update_status('wc-cancelled');
+					$order = WC_Order_Factory::get_order($orderId);
+					$settled = self::settle_cancellation_from_order($paymentRepo, $orderId, $orderAmount, $order);
+
+					if ($settled !== 'cancelled') {
+						NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: WooCommerce did not cancel ' . $cryptoId . ' order ' . $orderId . '; its payment record is ' . $settled . ' so it is not stranded, and cancellation will be retried.', 'warning');
+						continue;
+					}
+
+					$order->add_order_note($orderNote, true);
+
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Cancelled ' . $cryptoId . ' payment: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
 				}
-
-				if ($order->is_paid()) {
-					$paymentRepo->set_status($orderId, $orderAmount, 'paid');
-					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' was paid after cancellation claim; reconciled record to paid, not cancelling.');
-					continue;
+				catch (\Throwable $e) {
+					// The row stays 'cancelling': invisible to matching and expiry,
+					// and settled from the order by the next recovery pass.
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: cancelling ' . $cryptoId . ' order ' . $orderId . ' failed (' . $e->getMessage() . '); its record is left for recovery.', 'error');
 				}
-
-				if (!$order->has_status(array('pending', 'on-hold'))) {
-					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' advanced to ' . $order->get_status() . ' after cancellation claim; leaving order, record cancelled.');
-					continue;
-				}
-
-				$orderNote = sprintf(
-					/* translators: 1: cryptocurrency ticker, 2: number of hours */
-					__('Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address.', 'nomiddleman-crypto-payments-for-woocommerce'),
-					$cryptoId,
-					round($paymentCancellationTimeSec/3600, 1));
-
-				add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_cancelled_email_note_subject_line', 1, 2);
-			add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_cancelled_email_heading', 1, 2);
-
-				$order->update_status('wc-cancelled');
-				$order->add_order_note($orderNote, true);
-
-				NMMPRO_Util::log(__FILE__, __LINE__, 'Cancelled ' . $cryptoId . ' payment: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
 			}
 		}
 	}

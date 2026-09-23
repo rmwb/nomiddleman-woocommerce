@@ -521,6 +521,11 @@ function NMMPRO_delete_scan_options() {
             'nmmpro_autopay_scan_dirty',
             'nmmpro_autopay_scan_incomplete',
             'nmmpro_autopay_scan_incomplete_next',
+            'nmmpro_autopay_scan_cursor_unfenced',
+            'nmmpro_autopay_scan_retry_unfenced',
+            'nmmpro_autopay_unfenced',
+            'nmmpro_completion_cursor',
+            'nmmpro_cancellation_cursor',
         );
 
         foreach ($scanOptions as $scanOption) {

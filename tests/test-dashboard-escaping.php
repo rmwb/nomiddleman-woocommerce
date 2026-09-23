@@ -36,6 +36,7 @@ if (!defined('NMMPRO_REDUX_ID')) { define('NMMPRO_REDUX_ID', 'nmmpro_redux_optio
 if (!defined('NMMPRO_REDUX_SLUG')) { define('NMMPRO_REDUX_SLUG', 'nmmpro_options'); }
 if (!defined('NMMPRO_PAYMENT_TABLE')) { define('NMMPRO_PAYMENT_TABLE', 'nmmpro_payments'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+if (!defined('HOUR_IN_SECONDS')) { define('HOUR_IN_SECONDS', 3600); }
 
 // The two hostile strings. Both reach the screen from storage, not from code.
 define('NMMPRO_TEST_BAD_CRYPTO', '<script>alert(1)</script>');
@@ -44,6 +45,7 @@ define('NMMPRO_TEST_MPK', 'xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2
 
 // --- WordPress stubs --------------------------------------------------------
 $GLOBALS['nmmpro_test_can'] = true;
+$GLOBALS['nmmpro_test_unfenced'] = false;
 
 function current_user_can($capability) { return (bool) $GLOBALS['nmmpro_test_can']; }
 function apply_filters($tag, $value) { return $value; }
@@ -84,6 +86,7 @@ function get_option($key, $default = array()) {
 		'nmmpro_autopay_scan_sweep_start' => time() - 300,
 		'nmmpro_autopay_scan_retry'       => array('BTC|1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2'),
 		'nmmpro_autopay_scan_covered_at'  => array('BTC' => time() - 60),
+		'nmmpro_autopay_unfenced'         => $GLOBALS['nmmpro_test_unfenced'],
 		'date_format'                  => 'Y-m-d',
 		'time_format'                  => 'H:i',
 	);
@@ -214,6 +217,21 @@ $none = ob_get_clean();
 dok('a job neither scheduler holds IS reported as unscheduled',
 	strpos($none, $notScheduled) !== false);
 $GLOBALS['nmmpro_test_cron_next'] = time() + 30;
+
+// --- degraded mode: automatic expiry paused ---------------------------------
+$paused = 'Automatic cancellation of expired Autopay orders is paused';
+dok('no paused-expiry notice on a fenced store', strpos($html, $paused) === false);
+$GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 30, 'reason' => 'single-lock');
+ob_start();
+NMMPRO_Dashboard::render_page();
+$degraded = ob_get_clean();
+dok('paused-expiry notice names the old-MySQL cause', strpos($degraded, $paused) !== false && strpos($degraded, 'MySQL before 5.7.5') !== false);
+$GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 2 * 3600, 'reason' => 'unavailable');
+ob_start();
+NMMPRO_Dashboard::render_page();
+$stale = ob_get_clean();
+dok('a stale degraded record is not shown', strpos($stale, $paused) === false);
+$GLOBALS['nmmpro_test_unfenced'] = false;
 
 // --- render without the capability ------------------------------------------
 $GLOBALS['nmmpro_test_can'] = false;

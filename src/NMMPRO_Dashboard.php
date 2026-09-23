@@ -235,6 +235,26 @@ class NMMPRO_Dashboard {
 			</div>
 		<?php endif; ?>
 
+		<?php
+		// Written by every cron pass that could not make itself exclusive (see
+		// NMMPRO_Util::begin_cron_fence) and removed by the next pass that can.
+		$unfenced = NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false);
+		if (is_array($unfenced) && isset($unfenced['at']) && (time() - (int) $unfenced['at']) < HOUR_IN_SECONDS) :
+			$unfencedReason = isset($unfenced['reason']) ? (string) $unfenced['reason'] : '';
+			?>
+			<div class="notice notice-warning inline">
+				<p><?php esc_html_e('Automatic cancellation of expired Autopay orders is paused. Payments are still being verified, but the background job cannot confirm it is the only copy running, and expiring an order without that could cancel one that was paid. Unpaid orders will wait until you cancel them yourself.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+				<p><?php
+				if ($unfencedReason === 'single-lock') {
+					esc_html_e('Cause: this database server releases a lock when a second one is taken (MySQL before 5.7.5, MariaDB before 10.0.2). Upgrading the database server resolves it.', 'nomiddleman-crypto-payments-for-woocommerce');
+				}
+				else {
+					esc_html_e('Cause: this database server does not provide the named locks (GET_LOCK) the background job relies on. Your host may be able to enable them.', 'nomiddleman-crypto-payments-for-woocommerce');
+				}
+				?></p>
+			</div>
+		<?php endif; ?>
+
 		<?php if ($lastRun === 0) : ?>
 			<div class="notice notice-warning inline">
 				<p><?php esc_html_e('The background job has not recorded a run yet. That is expected on a new install until the first scheduled run happens.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>

@@ -117,6 +117,88 @@ class NMMPRO_Util {
 		return 'nmm_cron_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
 	}
 
+	/**
+	 * The cron pass's exclusivity, for the writes that authorise cancelling an
+	 * order: coverage stamps, exclusion sets and the expiry pass itself. Null
+	 * outside a cron pass. 'held' latches to false the first time it is found
+	 * lost - a lock that came back would not undo what a concurrent pass may
+	 * have written meanwhile.
+	 *
+	 * @var array{held: bool, reason: string}|null
+	 */
+	private static $cronFence = null;
+
+	/**
+	 * Start a cron pass's fence from the raw GET_LOCK result for the cron lock.
+	 *
+	 * Holding the lock is not enough on its own. Before MySQL 5.7.5 (and
+	 * MariaDB 10.0.2) a connection could hold only ONE named lock: taking a
+	 * second released the first. The pass takes a per-address lock for every
+	 * address it matches, so on such a server the cron lock is gone from the
+	 * first address onward and two passes can both believe they are exclusive.
+	 * Probe the behaviour instead of trusting a version string (forks report
+	 * those differently): take one more lock, then ask whether this connection
+	 * still owns the cron lock. Only the cron-lock holder ever probes, so the
+	 * probe lock is uncontended.
+	 *
+	 * Returns 'held', or why the pass is unfenced: 'unavailable' (no advisory
+	 * locks on this host) or 'single-lock' (the server drops the first lock).
+	 */
+	public static function begin_cron_fence($lockAcquired) {
+		global $wpdb;
+
+		if ($lockAcquired !== '1') {
+			self::$cronFence = array('held' => false, 'reason' => 'unavailable');
+			return 'unavailable';
+		}
+
+		$probe = 'nmm_fprobe_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
+		$probed = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $probe));
+		$stillHeld = self::cron_lock_owned();
+		if ($probed === '1') {
+			$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $probe));
+		}
+
+		self::$cronFence = $stillHeld
+			? array('held' => true, 'reason' => 'held')
+			: array('held' => false, 'reason' => 'single-lock');
+		return self::$cronFence['reason'];
+	}
+
+	/**
+	 * May this pass still write state that authorises cancellation? True
+	 * outside a cron pass (direct calls behave as they always have). Inside
+	 * one, re-asks the server every time: WordPress reconnects silently after
+	 * a dropped connection, and every advisory lock dies with the old one.
+	 */
+	public static function cron_fence_held() {
+		if (self::$cronFence === null) {
+			return true;
+		}
+		if (!self::$cronFence['held']) {
+			return false;
+		}
+		if (!self::cron_lock_owned()) {
+			self::$cronFence = array('held' => false, 'reason' => 'lost');
+			self::log(__FILE__, __LINE__, 'Cron lock lost mid-pass; this pass certifies and cancels nothing further.', 'warning');
+			return false;
+		}
+		return true;
+	}
+
+	public static function end_cron_fence() {
+		self::$cronFence = null;
+	}
+
+	// Ownership, not mere use: IS_USED_LOCK returns the OWNER's connection id,
+	// so "somebody holds it" is not proof that we do. One query, so both values
+	// come from the same moment.
+	private static function cron_lock_owned() {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', self::cron_lock_name())) === '1';
+	}
+
 	// Per-order advisory lock name. Scoped to this site AND this order so distinct
 	// orders never share a lock, and neither do same-numbered orders on different
 	// sites. The table prefix ($wpdb->prefix) is blog-specific on multisite, where
