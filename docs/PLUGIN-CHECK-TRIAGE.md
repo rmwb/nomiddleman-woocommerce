@@ -1,19 +1,19 @@
 # Plugin Check warning triage — 24 September 2026 (revised)
 
-The packaged scan of 6 September contained 342 warnings and zero errors after that round's fixes (missing stylesheet version, HTML-wrapped translation and three verbose data-dump log calls). This revision re-scans the payload after the read-only Status screen and three rounds of Autopay safety changes: still zero errors, 403 warnings, every one of them in the categories below. It does not hide the database warnings.
+The packaged scan of 6 September contained 342 warnings and zero errors after that round's fixes (missing stylesheet version, HTML-wrapped translation and three verbose data-dump log calls). This revision re-scans the payload after the read-only Status screen and four rounds of Autopay safety changes: still zero errors, 410 warnings, every one of them in the categories below. It does not hide the database warnings.
 
-- **140 direct queries / 137 no-caching notices:** these predominantly operate on plugin-owned payment, HD-address, address-rotation and retry tables. Conditional claims, current status checks and retry selection must observe current database state. WordPress's order APIs are still used for WooCommerce orders. Adding a cache to these claim paths would undermine their concurrency guarantees. Read-only reporting queries can be optimized separately with explicit invalidation.
+- **143 direct queries / 140 no-caching notices:** these predominantly operate on plugin-owned payment, HD-address, address-rotation and retry tables. Conditional claims, current status checks and retry selection must observe current database state. WordPress's order APIs are still used for WooCommerce orders. Adding a cache to these claim paths would undermine their concurrency guarantees. Read-only reporting queries can be optimized separately with explicit invalidation.
 - **91 interpolation notices:** the reported variables are table identifiers or `$def`. Constructors/helpers derive identifiers from `$wpdb->prefix` plus fixed plugin constants. The three `$def` instances are selected from local literal index-definition arrays. Values (order IDs, addresses, amounts and hashes) are passed through placeholders. The duplicate-HD reconciliation helper is called with the internally built HD table name. No request input was found reaching these interpolated identifiers or index definitions in this review.
-- **Added since 6 September (27 direct-query, 24 no-caching, 7 interpolation, 2 unescaped-parameter, 1 schema-change):**
+- **Added since 6 September (30 direct-query, 27 no-caching, 7 interpolation, 3 unescaped-parameter, 1 schema-change):**
   - **Cron fence:** advisory-lock ownership checks in NMMPRO_Util: `GET_LOCK`, `IS_USED_LOCK`, `RELEASE_LOCK`, and the fenced option write. That write is an `INSERT ... SELECT ... WHERE IS_USED_LOCK() = CONNECTION_ID()` on the options table, so it only lands while the cron lock is held.
-  - **Payment-record changes:** conditional lease claims, generation-checked settlements (`lease_gen`) and under-lock expiry re-reads on the plugin's payment table (NMMPRO_Payment_Repo, NMMPRO_Payment), plus per-address expiry deferrals: one options row each, paged with an option_id cursor and deleted with compare-and-delete.
+  - **Payment-record changes:** conditional lease claims, settlements checked against both `lease_gen` and the order's persisted status (a subquery on WooCommerce's own posts or HPOS orders table), under-lock expiry re-reads, the pause re-check after the cron lock on the plugin's payment table (NMMPRO_Payment_Repo, NMMPRO_Payment), plus per-address expiry deferrals: one options row each, paged with an option_id cursor and deleted with compare-and-delete.
   - **Authoritative order reads:** an existence check for an order in WooCommerce's own storage (posts or the HPOS orders table), used only after WooCommerce returned no order.
   - **Payment-claim transaction:** a strict INSERT and a row-locked status read inside it (NMMPRO_Consumed_Repo).
   - **Uninstall:** removes the deferral rows by prefix.
   - **Status screen:** read-only queries (NMMPRO_Payment_Repo backlog, and NMMPRO_Log_Repo reading WooCommerce's log table only after confirming it exists).
 
   Lock, claim and settlement queries must see the live database state, so none of them can be cached. Every value is bound through placeholders. The interpolated identifiers are table names built from `$wpdb->prefix` and plugin constants, or supplied by WooCommerce.
-- **14 unescaped-parameter notices:** repeat the table-identifier cases above in the consumed ledger, retry repository and duplicate-HD migration, plus the HPOS orders table name that NMMPRO_Payment reads from WooCommerce's own `OrderUtil::get_table_for_orders()` when confirming whether an order exists, and the payment table name in the `lease_gen` migration's column check and ALTER.
+- **15 unescaped-parameter notices:** repeat the table-identifier cases above in the consumed ledger, retry repository and duplicate-HD migration, plus the HPOS orders table name that NMMPRO_Payment reads from WooCommerce's own `OrderUtil::get_table_for_orders()` when confirming whether an order exists, and the payment table name in the `lease_gen` migration's column check and ALTER.
 - **14 schema-change notices:** installation, repair (including the verify-then-record migration that adds the payment table's `lease_gen` column) and uninstall intentionally create/alter/drop the plugin's own tables. These must remain scoped to the current site prefix.
 - **One unfinished-prepare notice:** Carousel_Repo builds a list of literal `(%s)` placeholders and passes every currency as a separate bound value; the scanner cannot infer those placeholders across the concatenation.
 - **Four dynamic-hook notices:** the compatibility wrapper deliberately fires the old and new names. Callers pass fixed plugin hook names.
@@ -54,100 +54,100 @@ Identifier placeholders introduced in newer WordPress versions are not used unco
 | nomiddleman-crypto-woocommerce.php | 454 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
 | nomiddleman-crypto-woocommerce.php | 490 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | nomiddleman-crypto-woocommerce.php | 490 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 543 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 543 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 555 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 555 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 555 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 564 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 564 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 564 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 572 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 572 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 572 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 581 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 581 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 581 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 616 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 616 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 628 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 628 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 628 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'" |
-| nomiddleman-crypto-woocommerce.php | 630 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 630 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 630 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'" |
-| nomiddleman-crypto-woocommerce.php | 630 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 633 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 633 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 633 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'" |
-| nomiddleman-crypto-woocommerce.php | 657 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 657 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 657 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'" |
-| nomiddleman-crypto-woocommerce.php | 659 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 659 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 659 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` ADD UNIQUE KEY `hd_address` (`cryptocurrency`, `address`)" |
-| nomiddleman-crypto-woocommerce.php | 659 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 666 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 666 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 666 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'" |
-| nomiddleman-crypto-woocommerce.php | 679 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 679 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 679 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'" |
-| nomiddleman-crypto-woocommerce.php | 681 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 681 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 681 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` ADD KEY `status_checked` (`status`, `last_checked`)" |
-| nomiddleman-crypto-woocommerce.php | 681 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 684 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 684 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 684 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'" |
-| nomiddleman-crypto-woocommerce.php | 704 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 704 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 704 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
-| nomiddleman-crypto-woocommerce.php | 707 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 707 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 707 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` $def" |
-| nomiddleman-crypto-woocommerce.php | 707 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $def at "ALTER TABLE `$tableName` $def" |
-| nomiddleman-crypto-woocommerce.php | 707 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 711 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 711 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 711 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
-| nomiddleman-crypto-woocommerce.php | 728 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 728 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 728 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $tableName used in $wpdb->get_results() |
-| nomiddleman-crypto-woocommerce.php | 729 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SELECT cryptocurrency, address FROM `$tableName`\n |
-| nomiddleman-crypto-woocommerce.php | 734 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 734 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 734 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $tableName used in $wpdb->get_results() |
-| nomiddleman-crypto-woocommerce.php | 735 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SELECT id, status, order_id, total_received FROM `$tableName`\n |
-| nomiddleman-crypto-woocommerce.php | 758 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 758 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 808 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 808 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 822 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 822 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 830 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 830 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 830 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
-| nomiddleman-crypto-woocommerce.php | 833 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 833 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 833 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` $def" |
-| nomiddleman-crypto-woocommerce.php | 833 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $def at "ALTER TABLE `$tableName` $def" |
-| nomiddleman-crypto-woocommerce.php | 833 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 837 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 837 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 837 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
-| nomiddleman-crypto-woocommerce.php | 860 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 860 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 865 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 865 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 865 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $tableName used in $wpdb->get_results() |
-| nomiddleman-crypto-woocommerce.php | 868 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 868 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 868 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 893 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 893 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| nomiddleman-crypto-woocommerce.php | 1073 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| nomiddleman-crypto-woocommerce.php | 1073 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 544 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 544 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 556 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 556 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 556 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 565 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 565 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 565 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 573 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 573 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 573 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 582 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 582 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 582 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 617 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 617 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 629 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 629 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 629 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'" |
+| nomiddleman-crypto-woocommerce.php | 631 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 631 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 631 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` ADD `hd_mode` bigint(10) NOT NULL default '0'" |
+| nomiddleman-crypto-woocommerce.php | 631 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 634 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 634 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 634 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW COLUMNS FROM `$tableName` LIKE 'hd_mode'" |
+| nomiddleman-crypto-woocommerce.php | 658 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 658 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 658 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'" |
+| nomiddleman-crypto-woocommerce.php | 660 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 660 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 660 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` ADD UNIQUE KEY `hd_address` (`cryptocurrency`, `address`)" |
+| nomiddleman-crypto-woocommerce.php | 660 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 667 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 667 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 667 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'hd_address'" |
+| nomiddleman-crypto-woocommerce.php | 680 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 680 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 680 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'" |
+| nomiddleman-crypto-woocommerce.php | 682 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 682 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 682 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` ADD KEY `status_checked` (`status`, `last_checked`)" |
+| nomiddleman-crypto-woocommerce.php | 682 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 685 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 685 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 685 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName` WHERE Key_name = 'status_checked'" |
+| nomiddleman-crypto-woocommerce.php | 705 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 705 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 705 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
+| nomiddleman-crypto-woocommerce.php | 708 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 708 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 708 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` $def" |
+| nomiddleman-crypto-woocommerce.php | 708 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $def at "ALTER TABLE `$tableName` $def" |
+| nomiddleman-crypto-woocommerce.php | 708 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 712 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 712 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 712 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
+| nomiddleman-crypto-woocommerce.php | 729 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 729 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 729 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $tableName used in $wpdb->get_results() |
+| nomiddleman-crypto-woocommerce.php | 730 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SELECT cryptocurrency, address FROM `$tableName`\n |
+| nomiddleman-crypto-woocommerce.php | 735 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 735 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 735 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $tableName used in $wpdb->get_results() |
+| nomiddleman-crypto-woocommerce.php | 736 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SELECT id, status, order_id, total_received FROM `$tableName`\n |
+| nomiddleman-crypto-woocommerce.php | 759 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 759 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 809 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 809 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 823 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 823 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 831 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 831 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 831 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
+| nomiddleman-crypto-woocommerce.php | 834 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 834 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 834 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "ALTER TABLE `$tableName` $def" |
+| nomiddleman-crypto-woocommerce.php | 834 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $def at "ALTER TABLE `$tableName` $def" |
+| nomiddleman-crypto-woocommerce.php | 834 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 838 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 838 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 838 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SHOW INDEX FROM `$tableName`" |
+| nomiddleman-crypto-woocommerce.php | 861 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 861 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 866 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 866 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 866 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $tableName used in $wpdb->get_results() |
+| nomiddleman-crypto-woocommerce.php | 869 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 869 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 869 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 894 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 894 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| nomiddleman-crypto-woocommerce.php | 1074 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| nomiddleman-crypto-woocommerce.php | 1074 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Hooks.php | 133 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Hooks.php | 133 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Hooks.php | 134 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $tableName at "SELECT `status`, `total_received`, `order_amount` FROM `$tableName` WHERE `order_id` = %d ORDER BY `id` DESC LIMIT 1" |
@@ -165,33 +165,33 @@ Identifier placeholders introduced in newer WordPress versions are not used unco
 | src/NMMPRO_Payment.php | 241 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Payment.php | 241 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Payment.php | 241 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $table at "SELECT status FROM `$table` WHERE id=%d" |
-| src/NMMPRO_Payment.php | 818 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment.php | 818 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment.php | 837 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment.php | 837 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment.php | 867 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment.php | 867 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment.php | 882 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment.php | 831 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment.php | 831 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment.php | 850 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment.php | 850 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment.php | 880 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment.php | 880 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment.php | 895 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Util.php | 157 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Util.php | 157 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Util.php | 160 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Util.php | 160 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Util.php | 227 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Util.php | 237 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 280 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 280 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Util.php | 294 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 294 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Util.php | 303 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 303 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Util.php | 331 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 331 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Util.php | 337 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 337 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Util.php | 378 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 378 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Util.php | 393 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Util.php | 393 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 281 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 281 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 302 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 302 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 311 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 311 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 339 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 339 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 345 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 345 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 386 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 386 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Util.php | 401 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Util.php | 401 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Consumed_Repo.php | 27 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Consumed_Repo.php | 27 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Consumed_Repo.php | 27 | WordPress.DB.DirectDatabaseQuery.SchemaChange | Attempting a database schema change is discouraged. |
@@ -333,30 +333,33 @@ Identifier placeholders introduced in newer WordPress versions are not used unco
 | src/NMMPRO_Payment_Repo.php | 322 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Payment_Repo.php | 322 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Payment_Repo.php | 323 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 353 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 353 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 354 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 373 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 373 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 374 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "SELECT `status`, `lease_gen` FROM `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 398 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 398 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 399 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "SELECT `status`, `ordered_at` FROM `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 421 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 421 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 422 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 453 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 453 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 454 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 502 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 502 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 503 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 520 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 520 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 521 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
-| src/NMMPRO_Payment_Repo.php | 538 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Payment_Repo.php | 538 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Payment_Repo.php | 539 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 366 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 366 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 367 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 376 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 376 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 377 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 400 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 400 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 401 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "SELECT `status`, `lease_gen` FROM `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 425 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 425 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 426 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "SELECT `status`, `ordered_at` FROM `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 462 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 462 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 462 | PluginCheck.Security.DirectDB.UnescapedDBParameter | Unescaped parameter $sql used in $wpdb->query()\n$sql assigned unsafely at line 460. |
+| src/NMMPRO_Payment_Repo.php | 545 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 545 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 546 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 594 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 594 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 595 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 612 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 612 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 613 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
+| src/NMMPRO_Payment_Repo.php | 630 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Payment_Repo.php | 630 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Payment_Repo.php | 631 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName`\n |
 | src/NMMPRO_Hd_Repo.php | 59 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Hd_Repo.php | 59 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Hd_Repo.php | 60 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "INSERT INTO `$this->tableName`\n |
@@ -416,8 +419,12 @@ Identifier placeholders introduced in newer WordPress versions are not used unco
 | src/NMMPRO_Hd_Repo.php | 414 | WordPress.DB.PreparedSQL.InterpolatedNotPrepared | Use placeholders and $wpdb->prepare(); found interpolated variable $this->tableName at "UPDATE `$this->tableName` SET `order_id` = %d WHERE `address` = %s AND `cryptocurrency` = %s AND `hd_mode` = %d" |
 | src/NMMPRO_Cron.php | 31 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Cron.php | 31 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
-| src/NMMPRO_Cron.php | 146 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
-| src/NMMPRO_Cron.php | 146 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Cron.php | 50 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Cron.php | 50 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Cron.php | 54 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Cron.php | 54 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
+| src/NMMPRO_Cron.php | 160 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
+| src/NMMPRO_Cron.php | 160 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Log_Repo.php | 61 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
 | src/NMMPRO_Log_Repo.php | 61 | WordPress.DB.DirectDatabaseQuery.NoCaching | Direct database call without caching detected. Consider using wp_cache_get() / wp_cache_set() or wp_cache_delete(). |
 | src/NMMPRO_Log_Repo.php | 110 | WordPress.DB.DirectDatabaseQuery.DirectQuery | Use of a direct database call is discouraged. |
