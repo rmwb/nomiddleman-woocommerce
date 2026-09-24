@@ -90,11 +90,11 @@ class NMMPRO_Payment {
 				// HPOS keeps a SECOND cache of the raw order row ('orders_data',
 				// used when datastore caching is on) that OrderCache::remove()
 				// does not touch; rebuilding the order from it would reproduce
-				// the stale status. clear_cached_data() is marked internal by
-				// WooCommerce, so it is only called where it exists.
-				$ordersTable = '\Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore';
-				if ($hpos && class_exists($ordersTable) && method_exists($ordersTable, 'clear_cached_data')) {
-					wc_get_container()->get($ordersTable)->clear_cached_data(array($orderId));
+				// the stale status. Asked through WooCommerce's public data-store
+				// loader, whose __call() forwards only to a store that has the
+				// method, so a WooCommerce without datastore caching skips it.
+				if ($hpos) {
+					WC_Data_Store::load('order')->__call('clear_cached_data', array(array($orderId)));
 				}
 			}
 			catch (\Throwable $e) {
@@ -1979,10 +1979,9 @@ class NMMPRO_Payment {
 		}
 		finally {
 			remove_action('woocommerce_before_order_object_save', array(__CLASS__, 'fence_cancellation_save'), PHP_INT_MAX);
-			$fence = self::$cancelFence;
-			self::$cancelFence = null;
+			$tripped = self::take_cancel_fence_tripped();
 		}
-		if (!empty($fence['tripped'])) {
+		if ($tripped) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: lost exclusive access while cancelling order ' . $orderId . '; the cancellation was not saved and its record is left for recovery.', 'warning');
 			return;
 		}
@@ -2007,6 +2006,20 @@ class NMMPRO_Payment {
 	private static $cancelFence = null;
 
 	/**
+	 * Clear the cancellation fence and say whether it refused the save. The
+	 * flag is set by fence_cancellation_save() from inside WooCommerce's save,
+	 * which static analysis cannot follow, hence the separate impure read.
+	 *
+	 * @phpstan-impure
+	 */
+	private static function take_cancel_fence_tripped() {
+		/** @var array{tripped: bool}|null $fence */
+		$fence = self::$cancelFence;
+		self::$cancelFence = null;
+		return is_array($fence) && $fence['tripped'];
+	}
+
+	/**
 	 * woocommerce_before_order_object_save callback, installed only around our
 	 * own update_status('wc-cancelled'). Throws to abort the save when this
 	 * connection no longer has the exclusive right to cancel that order.
@@ -2018,7 +2031,7 @@ class NMMPRO_Payment {
 	 */
 	public static function fence_cancellation_save($order) {
 		$fence = self::$cancelFence;
-		if ($fence === null || !is_object($order) || (int) $order->get_id() !== $fence['order'] || $order->get_status() !== 'cancelled') {
+		if ($fence === null || (int) $order->get_id() !== $fence['order'] || $order->get_status() !== 'cancelled') {
 			return;
 		}
 		$lease = (new NMMPRO_Payment_Repo())->lease_state($fence['order'], $fence['amount']);
@@ -2027,7 +2040,7 @@ class NMMPRO_Payment {
 			&& is_array($lease) && $lease['status'] === 'cancelling' && $lease['gen'] === $fence['gen'];
 		if (!$still) {
 			self::$cancelFence['tripped'] = true;
-			throw new Exception('Nomiddleman: cancellation of order ' . $fence['order'] . ' is no longer exclusive; not saving it.');
+			throw new Exception('Nomiddleman: cancellation of order ' . (int) $fence['order'] . ' is no longer exclusive; not saving it.');
 		}
 	}
 }
