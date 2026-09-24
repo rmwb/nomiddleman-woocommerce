@@ -530,6 +530,7 @@ function NMMPRO_delete_scan_options() {
             'nmmpro_cancellation_cursor',
             'nmmpro_deferral_purge_cursor',
             'nmmpro_background_paused',
+            'nmmpro_autopay_scan_lane',
         );
 
         foreach ($scanOptions as $scanOption) {

@@ -50,6 +50,7 @@ foreach (file($argv[1], FILE_IGNORE_NEW_LINES) as $line) {
     if (!is_array($decoded) || $file === null) { fwrite(STDERR, "unparseable Plugin Check output\n"); exit(2); }
     foreach ($decoded as $f) {
         if (!isset($f["type"], $f["code"], $f["line"], $f["message"])) { fwrite(STDERR, "unexpected Plugin Check result shape\n"); exit(2); }
+        if ($f["type"] !== "ERROR" && $f["type"] !== "WARNING") { fwrite(STDERR, "unknown Plugin Check finding type: " . $f["type"] . "\n"); exit(2); }
         $f["file"] = $file; $items[] = $f;
     }
 }

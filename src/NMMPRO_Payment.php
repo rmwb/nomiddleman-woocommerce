@@ -287,6 +287,14 @@ class NMMPRO_Payment {
 		// still works through the whole backlog instead of rescanning its head.
 		$fenced = NMMPRO_Util::cron_fence_held();
 		$lane = $fenced ? '' : '_unfenced';
+		// Status-screen telemetry: which lane this pass really scanned in. The
+		// fence's ending reason cannot say - a pass that loses its lock before
+		// the sweep starts scans unfenced but ends 'lost', like one that lost
+		// it mid-sweep in the certified lane.
+		$laneName = $fenced ? 'certified' : 'unfenced';
+		if (NMMPRO_Compat::get_option('nmmpro_autopay_scan_lane', '') !== $laneName) {
+			NMMPRO_Compat::update_option('nmmpro_autopay_scan_lane', $laneName, false);
+		}
 
 		// Count only (a single scalar) so a large backlog is never loaded into PHP
 		// just to size the budget.
@@ -338,10 +346,15 @@ class NMMPRO_Payment {
 		// thereafter reset by the wrap handling at the bottom. The coverage
 		// stamp uses this START time, never the wrap time - see below.
 		$sweepStart = (int) NMMPRO_Compat::get_option('nmmpro_autopay_scan_sweep_start', 0);
+		$startPersisted = true;
 		if ($sweepStart < 1) {
 			$sweepStart = $now;
+			// The start of the sweep is what every later coverage stamp is
+			// measured from. If it cannot be stored, a later tick would store a
+			// LATER start and attribute it to addresses this tick checks - so
+			// this tick certifies nothing, not even its cursor.
 			if ($fenced) {
-				NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_sweep_start', $sweepStart);
+				$startPersisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_sweep_start', $sweepStart);
 			}
 		}
 
@@ -582,7 +595,7 @@ class NMMPRO_Payment {
 		// assumes it landed.
 		$writeProgress = $fenced ? NMMPRO_Util::cron_fence_held() : true;
 		$certify = $fenced && $writeProgress;
-		$persisted = true;
+		$persisted = $startPersisted;
 
 		// Accumulate this tick's per-address incompleteness (truncated pages,
 		// mid-window Solana sweeps, dropped retries) into the BUILDER set for
@@ -1698,7 +1711,31 @@ class NMMPRO_Payment {
 		return $result['transactions'];
 	}
 
+	/** @var bool an expiry pass is running in this process */
+	private static $expiryActive = false;
+
+	/**
+	 * Expire unpaid Autopay orders whose window has closed and whose address
+	 * the sweep has verified since. Never nested: a pass reached from inside
+	 * another (a WooCommerce hook fired by one of its cancellations) returns
+	 * at once, so exactly one cancellation - and one save fence - is ever
+	 * active in a process.
+	 */
 	public static function cancel_expired_payments() {
+		if (self::$expiryActive) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: expiry pass requested from inside another; ignoring the nested call.', 'warning');
+			return;
+		}
+		self::$expiryActive = true;
+		try {
+			self::run_cancel_expired_payments();
+		}
+		finally {
+			self::$expiryActive = false;
+		}
+	}
+
+	private static function run_cancel_expired_payments() {
 		global $woocommerce;
 
 		// Inside a cron pass that is not exclusive, coverage may be being
@@ -1924,6 +1961,17 @@ class NMMPRO_Payment {
 		// the order here; the re-read below then reconciles.
 		NMMPRO_Compat::action('nmmpro_before_autopay_cancel', $orderId, $cryptoId, $address);
 
+		// The lease generation is read BEFORE the order, never after: an order
+		// event between the two reads then shows up as a changed generation at
+		// the save fence. Read the other way round, a payment landing between
+		// them would pair a new generation with a stale pending order, and the
+		// fence would pass a cancellation of a paid order.
+		$lease = $paymentRepo->lease_state($orderId, $orderAmount);
+		if (!is_array($lease) || $lease['status'] !== 'cancelling') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not confirm the cancellation lease of order ' . $orderId . '; not cancelling.', 'warning');
+			return;
+		}
+
 		$read = self::read_order_authoritatively($orderId);
 		if ($read['state'] === 'error') {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not re-read order ' . $orderId . ' after claiming it for cancellation; its record is left for recovery.', 'warning');
@@ -1933,12 +1981,6 @@ class NMMPRO_Payment {
 		if ($read['state'] === 'absent' || $order->is_paid() || !$order->has_status(array('pending', 'on-hold'))) {
 			$settled = self::settle_lease($paymentRepo, $orderId, $orderAmount, 'cancelling');
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' ' . ($read['state'] === 'absent' ? 'vanished' : 'changed to ' . $order->get_status()) . ' after cancellation claim; not cancelling, record settled to ' . ($settled === null ? 'left for recovery' : $settled) . '.');
-			return;
-		}
-
-		$lease = $paymentRepo->lease_state($orderId, $orderAmount);
-		if (!is_array($lease) || $lease['status'] !== 'cancelling') {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not confirm the cancellation lease of order ' . $orderId . '; not cancelling.', 'warning');
 			return;
 		}
 
@@ -1953,18 +1995,22 @@ class NMMPRO_Payment {
 
 		// Cancelling is the irreversible step, so it is fenced INSIDE
 		// WooCommerce's save: fence_cancellation_save() runs on the connection
-		// that is about to write, immediately before it writes, and aborts the
-		// save unless that connection still owns this address and the cron
-		// lock and the lease is exactly the one we claimed. A worker that
-		// paused here and was silently reconnected owns neither lock any more,
-		// so its stale cancellation is refused rather than replayed over an
-		// order another worker has since credited.
+		// that is about to write, immediately before it writes, and turns the
+		// save back into a no-op unless that connection still owns this
+		// address and the cron lock and the lease is exactly the one we read
+		// before the order. A worker that paused here and was silently
+		// reconnected owns neither lock any more, so its stale cancellation is
+		// refused rather than replayed over an order another worker has since
+		// credited. (What remains is the instant between that check and
+		// WooCommerce's own UPDATE - WooCommerce has no conditional save; see
+		// docs/AUTOPAY-SAFETY.md.)
 		self::$cancelFence = array(
 			'order'   => (int) $orderId,
 			'amount'  => $orderAmount,
 			'crypto'  => $cryptoId,
 			'address' => $address,
 			'gen'     => $lease['gen'],
+			'from'    => $order->get_status(),
 			'tripped' => false,
 		);
 		add_action('woocommerce_before_order_object_save', array(__CLASS__, 'fence_cancellation_save'), PHP_INT_MAX);
@@ -1972,7 +2018,8 @@ class NMMPRO_Payment {
 			// Current WooCommerce catches an exception thrown while saving the
 			// new status, fires the status hooks anyway and can still return
 			// true, so neither the return value nor the in-memory order can be
-			// trusted. settle_lease() re-reads the order and lets IT decide:
+			// trusted. settle_lease() re-reads the order and lets IT decide -
+			// and its write is conditional on the order's persisted status -
 			// cancelled if it was, back to 'unpaid' (still payable, retried next
 			// pass) if not.
 			$order->update_status('wc-cancelled');
@@ -2000,8 +2047,10 @@ class NMMPRO_Payment {
 
 	/**
 	 * The cancellation cancel_expired_payment() is about to save, or null.
+	 * Only ever one: a cancellation reached from inside another (through a
+	 * WooCommerce hook) is refused - see cancel_expired_payments().
 	 *
-	 * @var array{order: int, amount: string, crypto: string, address: string, gen: int, tripped: bool}|null
+	 * @var array{order: int, amount: string, crypto: string, address: string, gen: int, from: string, tripped: bool}|null
 	 */
 	private static $cancelFence = null;
 
@@ -2021,11 +2070,15 @@ class NMMPRO_Payment {
 
 	/**
 	 * woocommerce_before_order_object_save callback, installed only around our
-	 * own update_status('wc-cancelled'). Throws to abort the save when this
-	 * connection no longer has the exclusive right to cancel that order.
-	 * Current WooCommerce catches the exception and the order stays as it was
-	 * persisted; older versions let it propagate to the caller's guard. Either
-	 * way the lease stays for recovery, which settles it under the lock.
+	 * own update_status('wc-cancelled'). When this connection no longer has
+	 * the exclusive right to cancel that order, it turns the save back into a
+	 * no-op for the status: it restores the status the order had and clears
+	 * the pending transition, so WooCommerce persists the unchanged status and
+	 * fires NO status hooks - no "cancelled" email, no stock or integration
+	 * side effects for a cancellation that did not happen. (Throwing instead
+	 * would stop the write but, in current WooCommerce, not the hooks: its
+	 * save catches the exception and still runs the status transition.)
+	 * The lease stays for recovery, which settles it under the lock.
 	 *
 	 * @param WC_Order $order
 	 */
@@ -2038,9 +2091,21 @@ class NMMPRO_Payment {
 		$still = NMMPRO_Util::address_match_lock_owned($fence['crypto'], $fence['address'])
 			&& NMMPRO_Util::cron_fence_held()
 			&& is_array($lease) && $lease['status'] === 'cancelling' && $lease['gen'] === $fence['gen'];
-		if (!$still) {
-			self::$cancelFence['tripped'] = true;
-			throw new Exception('Nomiddleman: cancellation of order ' . (int) $fence['order'] . ' is no longer exclusive; not saving it.');
+		if ($still) {
+			return;
+		}
+		self::$cancelFence['tripped'] = true;
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: refusing to save the cancellation of order ' . (int) $fence['order'] . ': no longer exclusive.', 'warning');
+		// Restore the persisted status (no transition note) and drop the
+		// transition WooCommerce recorded. status_transition is protected and
+		// has no public reset, so reach it by reflection where it exists; if a
+		// future WooCommerce renames it, the restore alone still keeps the
+		// order out of 'cancelled' (at worst a same-status transition fires).
+		$order->set_status($fence['from'], false);
+		if (property_exists($order, 'status_transition')) {
+			$transition = new ReflectionProperty($order, 'status_transition');
+			$transition->setAccessible(true);
+			$transition->setValue($order, false);
 		}
 	}
 }

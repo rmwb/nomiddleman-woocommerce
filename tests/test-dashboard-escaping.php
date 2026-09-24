@@ -46,6 +46,7 @@ define('NMMPRO_TEST_MPK', 'xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2
 // --- WordPress stubs --------------------------------------------------------
 $GLOBALS['nmmpro_test_can'] = true;
 $GLOBALS['nmmpro_test_unfenced'] = false;
+$GLOBALS['nmmpro_test_lane'] = 'certified';
 
 function current_user_can($capability) { return (bool) $GLOBALS['nmmpro_test_can']; }
 function apply_filters($tag, $value) { return $value; }
@@ -88,6 +89,7 @@ function get_option($key, $default = array()) {
 		'nmmpro_autopay_scan_retry_unfenced' => array('BTC|a', 'BTC|b', 'BTC|c', 'BTC|d', 'BTC|e', 'BTC|f', 'BTC|g'),
 		'nmmpro_autopay_scan_covered_at'  => array('BTC' => time() - 60),
 		'nmmpro_autopay_unfenced'         => $GLOBALS['nmmpro_test_unfenced'],
+		'nmmpro_autopay_scan_lane'        => $GLOBALS['nmmpro_test_lane'],
 		'date_format'                  => 'Y-m-d',
 		'time_format'                  => 'H:i',
 	);
@@ -228,12 +230,14 @@ dok('an unsupported ticker is marked as not checkable', strpos($html, 'Not possi
 $paused = 'Automatic cancellation of expired Autopay orders is paused';
 dok('no paused-expiry notice on a fenced store', strpos($html, $paused) === false);
 $GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 30, 'reason' => 'single-lock');
+$GLOBALS['nmmpro_test_lane'] = 'unfenced';
 ob_start();
 NMMPRO_Dashboard::render_page();
 $degraded = ob_get_clean();
 dok('paused-expiry notice names the old-MySQL cause', strpos($degraded, $paused) !== false && strpos($degraded, 'MySQL before 5.7.5') !== false);
-// The retry count shown is the lane in use: 7 in the matching-only lane here,
-// 1 in the certified lane on a fenced store.
+// The retry count shown is the lane the job recorded using: 7 in the
+// matching-only lane here, 1 in the certified lane on a fenced store.
+$GLOBALS['nmmpro_test_lane'] = 'certified';
 dok('retry count follows the lane the job is using', preg_match('#Addresses queued for retry</th>\s*<td>\s*7\b#', $degraded) === 1 && preg_match('#Addresses queued for retry</th>\s*<td>\s*1\b#', $html) === 1);
 $GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 30, 'reason' => 'lost');
 ob_start();

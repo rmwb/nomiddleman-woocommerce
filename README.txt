@@ -190,6 +190,10 @@ Yes. The `nmm_api_url` filter lets you redirect any verification request to your
 
 Note that this filter currently covers blockchain verification requests only, not exchange-rate lookups.
 
+= I set an order back to Pending, and Autopay completed it again. Why? =
+
+If Autopay has already verified a payment for an order and is still completing it, the verified payment decides, not a later status edit, so the order is completed again. To keep such an order from completing, cancel it instead: the payment is then held for manual reconciliation, with a note on the order.
+
 = Does the plugin provide developer hooks? =
 
 Yes. Filters are available for redirecting verification requests, customizing the customer payment message, adjusting Autopay matching tolerances, changing the checkout icon, and white-labeling the settings page. The full reference with code examples is at https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md

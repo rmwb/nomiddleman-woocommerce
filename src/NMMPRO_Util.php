@@ -268,16 +268,24 @@ class NMMPRO_Util {
 	}
 
 	/**
-	 * Is a cron pass running right now on this site? Only meaningful where
-	 * advisory locks work; used by the downgrade procedure to confirm the
-	 * background job has drained after it was paused.
+	 * Is a cron pass running right now on this site? true / false, or null
+	 * when the server cannot say (advisory locks unavailable, or the query
+	 * failed) - which must be read as "unknown", never as "drained". Used by
+	 * the downgrade procedure after the background job is paused.
 	 *
 	 * @phpstan-impure
 	 */
 	public static function cron_pass_running() {
 		global $wpdb;
 
-		return $wpdb->get_var($wpdb->prepare('SELECT IS_FREE_LOCK(%s)', self::cron_lock_name())) === '0';
+		$free = $wpdb->get_var($wpdb->prepare('SELECT IS_FREE_LOCK(%s)', self::cron_lock_name()));
+		if ($free === '0') {
+			return true;
+		}
+		if ($free === '1') {
+			return false;
+		}
+		return null;
 	}
 
 	/**

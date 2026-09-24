@@ -587,7 +587,9 @@ NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
 NMMPRO_Payment::recover_interrupted_cancellations();
 remove_action('nmmpro_before_lease_settle', $eventThenBreak, 10);
 remove_filter('woocommerce_order_class', $unreadable23, 10);
-asok('event then failed re-read: row stays a recoverable lease', as_row($o23) === 'cancelling', 'row=' . as_row($o23));
+asok('event then failed re-read: row stays a recoverable lease', $GLOBALS['as_seam'] > 0 && as_row($o23) === 'cancelling', 'row=' . as_row($o23) . ' seam=' . $GLOBALS['as_seam']);
+NMMPRO_Payment::recover_interrupted_cancellations();
+asok('  and the next recovery settles it from the reopened order', as_row($o23) === 'cancelled' || as_row($o23) === 'unpaid', 'row=' . as_row($o23));
 
 // --- 14. the cancellation is fenced INSIDE WooCommerce's save ---------------------
 // 14a. The lock is lost after every pre-save check has passed - during the
@@ -712,10 +714,167 @@ while ($passes < 10 && get_option('nmmpro_defer_' . md5($lapsedKey)) !== false) 
 asok('purge reaches a lapsed deferral behind 201 live ones', get_option('nmmpro_defer_' . md5($lapsedKey)) === false && $passes >= 2, 'passes=' . $passes);
 foreach ($future as $k) { delete_option('nmmpro_defer_' . md5($k)); }
 
+// =============================================================================
+// Review round 4.
+// =============================================================================
+$covered = get_option('nmmpro_autopay_scan_covered_at', array());
+$covered['ETH'] = time();
+update_option('nmmpro_autopay_scan_covered_at', $covered, false);
+
+// Change an order's stored status behind WooCommerce, as another request's
+// save would, and drop this process's cached copies of it.
+$setStoredStatus = function ($orderId, $status) use ($wpdb) {
+	$util = '\\Automattic\\WooCommerce\\Utilities\\OrderUtil';
+	if (class_exists($util) && $util::custom_orders_table_usage_is_enabled()) {
+		$wpdb->update($util::get_table_for_orders(), array('status' => $status), array('id' => $orderId));
+		if ($util::orders_cache_usage_is_enabled()) { wc_get_container()->get('\\Automattic\\WooCommerce\\Caches\\OrderCache')->remove($orderId); }
+		WC_Data_Store::load('order')->__call('clear_cached_data', array(array($orderId)));
+	}
+	else {
+		$wpdb->update($wpdb->posts, array('post_status' => $status), array('ID' => $orderId));
+	}
+	clean_post_cache($orderId);
+};
+
+// --- 19. generation read BEFORE the order (M3a) ----------------------------------
+// A payment lands between the canceller's two reads. Read in the right order,
+// the canceller sees the paid order; read the wrong way round it would pair a
+// new generation with a stale pending order and cancel a paid order.
+list($o28, $a28) = $make('_between_reads', 'pending', $expiredAt);
+$GLOBALS['as_armed28'] = false; $GLOBALS['as_fired28'] = false;
+$arm28 = function ($orderId) use ($o28) { if ((int) $orderId === $o28) { $GLOBALS['as_armed28'] = true; } };
+$payBetweenReads = function ($sql) use ($o28, $repo, $setStoredStatus) {
+	if ($GLOBALS['as_armed28'] && !$GLOBALS['as_fired28'] && strpos($sql, 'SELECT `status`, `lease_gen`') !== false && strpos($sql, '`order_id` = ' . $o28) !== false) {
+		$GLOBALS['as_fired28'] = true;
+		$setStoredStatus($o28, 'wc-processing');                // the payment is saved...
+		$repo->set_status_from_order_event($o28, '1', 'paid');   // ...and its event recorded
+	}
+	return $sql;
+};
+add_action('nmmpro_before_autopay_cancel', $arm28);
+add_filter('query', $payBetweenReads);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_filter('query', $payBetweenReads);
+remove_action('nmmpro_before_autopay_cancel', $arm28);
+asok('payment between the canceller\'s reads: the paid order is NOT cancelled', $GLOBALS['as_fired28'] && as_order_status($o28) === 'processing', 'order=' . as_order_status($o28));
+asok('  and its record settles paid', as_row($o28) === 'paid', 'row=' . as_row($o28));
+
+// --- 20. a refused cancellation fires no cancellation hooks (M3c) ----------------
+list($o29, $a29) = $make('_quiet_refusal', 'pending', $expiredAt);
+$GLOBALS['as_cancel_hooks29'] = 0;
+$countCancelHooks = function ($orderId) use ($o29) { if ((int) $orderId === $o29) { $GLOBALS['as_cancel_hooks29']++; } };
+add_action('woocommerce_order_status_cancelled', $countCancelHooks);
+add_action('woocommerce_order_status_pending_to_cancelled', $countCancelHooks);
+$steal29 = function ($order) use ($o29, $a29, $wpdb, $other, $lockNameFor) {
+	if ($order->get_id() !== $o29 || $order->get_status() !== 'cancelled') { return; }
+	$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockNameFor('ETH', $a29)));
+	$other->get_var($other->prepare('SELECT GET_LOCK(%s, 5)', $lockNameFor('ETH', $a29)));
+};
+add_action('woocommerce_before_order_object_save', $steal29, 1);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_before_order_object_save', $steal29, 1);
+remove_action('woocommerce_order_status_cancelled', $countCancelHooks);
+remove_action('woocommerce_order_status_pending_to_cancelled', $countCancelHooks);
+$other->query('SELECT RELEASE_ALL_LOCKS()');
+asok('refused cancellation: order not cancelled and lease kept', as_order_status($o29) === 'pending' && as_row($o29) === 'cancelling', 'order=' . as_order_status($o29) . ' row=' . as_row($o29));
+asok('  and NO cancellation hooks fired', $GLOBALS['as_cancel_hooks29'] === 0, 'hooks=' . $GLOBALS['as_cancel_hooks29']);
+NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+NMMPRO_Payment::recover_interrupted_cancellations();
+
+// --- 21. an admin change whose event write failed still wins (M2) ----------------
+// Settlement decides "cancelled"; the admin reopens the order, but the event's
+// payment-row update is lost (no generation bump). The order's stored status
+// must stop the stale write.
+list($o30) = $make('_lost_event', 'cancelled', $expiredAt);
+$repo->set_status($o30, '1', 'cancelling');
+$GLOBALS['as_fired30'] = false;
+$reopenWithoutEvent = function ($orderId, $lease, $status) use ($o30, $setStoredStatus) {
+	if ((int) $orderId === $o30 && !$GLOBALS['as_fired30']) { $GLOBALS['as_fired30'] = true; $setStoredStatus($o30, 'wc-pending'); }
+};
+add_action('nmmpro_before_lease_settle', $reopenWithoutEvent, 10, 3);
+NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+NMMPRO_Payment::recover_interrupted_cancellations();
+remove_action('nmmpro_before_lease_settle', $reopenWithoutEvent, 10);
+asok('lost event: stale "cancelled" not written over a reopened order', $GLOBALS['as_fired30'] && as_row($o30) === 'unpaid', 'row=' . as_row($o30));
+
+// --- 22. the first sweep-start write must land (M5) ------------------------------
+delete_option('nmmpro_autopay_scan_sweep_start');
+update_option('nmmpro_autopay_scan_cursor', 'ETH|' . $prefix . '_cursor_sentinel', false);
+$covered22 = get_option('nmmpro_autopay_scan_covered_at', array());
+$refuseStart = function ($value, $old) { return $old; };
+$tinyBudget = function () { return 1; };
+$offline22 = function () { return new WP_Error('offline', 'offline'); };
+add_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $refuseStart, 10, 2);
+add_filter('nmmpro_autopay_scan_budget', $tinyBudget);
+add_filter('pre_http_request', $offline22, 10, 3);
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * HOUR_IN_SECONDS);
+remove_filter('pre_http_request', $offline22, 10);
+remove_filter('nmmpro_autopay_scan_budget', $tinyBudget);
+remove_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $refuseStart, 10);
+wp_cache_delete('nmmpro_autopay_scan_cursor', 'options');
+asok('unstored sweep start: the certified cursor does not advance', get_option('nmmpro_autopay_scan_cursor') === 'ETH|' . $prefix . '_cursor_sentinel', 'cursor=' . get_option('nmmpro_autopay_scan_cursor'));
+asok('  and no coverage is stamped', get_option('nmmpro_autopay_scan_covered_at', array()) === $covered22);
+
+// --- 23. a pass that waited for the lock re-checks the pause (M6) ----------------
+update_option('nmmpro_autopay_scan_last_run', 1, false);
+$GLOBALS['as_paused23'] = false;
+$pauseWhileWaiting = function ($sql) use ($wpdb) {
+	if (!$GLOBALS['as_paused23'] && strpos($sql, 'GET_LOCK(') !== false && strpos($sql, "'nmm_cron_") !== false) {
+		$GLOBALS['as_paused23'] = true;
+		update_option('nmmpro_background_paused', 1, false); // the operator pauses now
+	}
+	return $sql;
+};
+$offline23 = function () { return new WP_Error('offline', 'offline'); };
+add_filter('pre_http_request', $offline23, 10, 3);
+add_filter('query', $pauseWhileWaiting);
+NMMPRO_do_cron_job();
+remove_filter('query', $pauseWhileWaiting);
+remove_filter('pre_http_request', $offline23, 10);
+delete_option('nmmpro_background_paused');
+asok('pause set while a pass waited for the lock: it does no work', $GLOBALS['as_paused23'] && (int) get_option('nmmpro_autopay_scan_last_run') === 1 && NMMPRO_Util::cron_pass_running() === false);
+
+// --- 24. events still apply without the lease_gen column (N1) --------------------
+list($o31) = $make('_no_column', 'cancelled', time());
+$repo->set_status($o31, '1', 'cancelled');
+$noColumn = function ($sql) { return strpos($sql, '`lease_gen` = `lease_gen` + 1') !== false ? str_replace('`lease_gen`', '`lease_gen_missing`', $sql) : $sql; };
+add_filter('query', $noColumn);
+$was = $wpdb->suppress_errors(true);
+$repo->set_status_from_order_event($o31, '1', 'unpaid');
+$wpdb->suppress_errors($was);
+remove_filter('query', $noColumn);
+asok('missing lease_gen column: an ordinary order event still applies', as_row($o31) === 'unpaid', 'row=' . as_row($o31));
+
+// --- 25. no nested cancellation erases the outer fence (N2) ----------------------
+list($o32, $a32) = $make('_outer', 'pending', $expiredAt);
+list($o33, $a33) = $make('_inner', 'pending', $expiredAt);
+$GLOBALS['as_inner33'] = null;
+$nestAndSteal = function ($order) use ($o32, $o33, $a32, $wpdb, $other, $lockNameFor) {
+	if ($order->get_id() !== $o32 || $order->get_status() !== 'cancelled') { return; }
+	// Whatever the outer pass has or has not done to the inner order yet, the
+	// NESTED call must not change it: compare its state across that call.
+	$before = as_row($o33) . '/' . as_order_status($o33);
+	NMMPRO_Payment::cancel_expired_payments();   // an integration re-enters expiry
+	$GLOBALS['as_inner33'] = array($before, as_row($o33) . '/' . as_order_status($o33));
+	$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockNameFor('ETH', $a32)));
+	$other->get_var($other->prepare('SELECT GET_LOCK(%s, 5)', $lockNameFor('ETH', $a32)));
+};
+add_action('woocommerce_before_order_object_save', $nestAndSteal, 1);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_before_order_object_save', $nestAndSteal, 1);
+$other->query('SELECT RELEASE_ALL_LOCKS()');
+asok('nested expiry is refused: it changes nothing', is_array($GLOBALS['as_inner33']) && $GLOBALS['as_inner33'][0] === $GLOBALS['as_inner33'][1], 'inner=' . json_encode($GLOBALS['as_inner33']));
+asok('  and the outer fence still refuses its stale cancellation', as_order_status($o32) === 'pending' && as_row($o32) === 'cancelling', 'outer order=' . as_order_status($o32) . ' row=' . as_row($o32));
+NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+NMMPRO_Payment::recover_interrupted_cancellations();
+
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o30, $o31, $o32, $o33) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }

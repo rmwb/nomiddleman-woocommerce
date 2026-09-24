@@ -229,9 +229,7 @@ class NMMPRO_Dashboard {
 		// A pass that cannot be exclusive keeps its own retry set (see
 		// NMMPRO_Payment::check_all_addresses_for_matching_payment); count the
 		// one the background job is actually using.
-		$unfencedNow = NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false);
-		$usingUnfencedLane = is_array($unfencedNow) && isset($unfencedNow['at'], $unfencedNow['reason'])
-			&& (time() - (int) $unfencedNow['at']) < HOUR_IN_SECONDS && $unfencedNow['reason'] !== 'lost';
+		$usingUnfencedLane = NMMPRO_Compat::get_option('nmmpro_autopay_scan_lane', 'certified') === 'unfenced';
 		$retrySet = NMMPRO_Compat::get_option($usingUnfencedLane ? 'nmmpro_autopay_scan_retry_unfenced' : 'nmmpro_autopay_scan_retry', array());
 		$retryCount = is_array($retrySet) ? count($retrySet) : 0;
 
