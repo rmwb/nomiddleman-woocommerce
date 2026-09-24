@@ -2102,10 +2102,13 @@ class NMMPRO_Payment {
 		// future WooCommerce renames it, the restore alone still keeps the
 		// order out of 'cancelled' (at worst a same-status transition fires).
 		$order->set_status($fence['from'], false);
-		if (property_exists($order, 'status_transition')) {
+		try {
 			$transition = new ReflectionProperty($order, 'status_transition');
 			$transition->setAccessible(true);
 			$transition->setValue($order, false);
+		}
+		catch (\ReflectionException $e) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not clear the pending status transition of order ' . (int) $fence['order'] . ' (' . $e->getMessage() . '); a same-status transition may fire.', 'warning');
 		}
 	}
 }
