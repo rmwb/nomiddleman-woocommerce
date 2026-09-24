@@ -192,6 +192,7 @@ function NMMPRO_init_gateways(){
     NMMPRO_update_hd_table();
     NMMPRO_maybe_create_sol_retry_table();
     NMMPRO_maybe_add_payment_indexes();
+    NMMPRO_maybe_add_payment_lease_gen();
 
     add_action('init', 'NMMPRO_schedule_payment_checks');
     add_action('admin_init', 'NMMPRO_cleanup_legacy_qr_files');
@@ -297,6 +298,7 @@ function NMMPRO_activate_site() {
     NMMPRO_create_carousel_table();
     NMMPRO_maybe_create_sol_retry_table();
     NMMPRO_maybe_add_payment_indexes();
+    NMMPRO_maybe_add_payment_lease_gen();
     // Activation is the one moment we know the plugin directory was just
     // written to, so rebuild the cached extension list here rather than leaving
     // it to the directory-signature check on the next front-end request.
@@ -358,7 +360,7 @@ function NMMPRO_verify_site_tables() {
     // the shipped migrations rebuild it to the current schema.
     $schemaOptions = array(
         $wpdb->prefix . NMMPRO_HD_TABLE        => array('nmmpro_hd_table_version'),
-        $wpdb->prefix . NMMPRO_PAYMENT_TABLE   => array('nmmpro_payment_index_version'),
+        $wpdb->prefix . NMMPRO_PAYMENT_TABLE   => array('nmmpro_payment_index_version', 'nmmpro_payment_lease_schema'),
         $wpdb->prefix . NMMPRO_CAROUSEL_TABLE  => array(),
         $wpdb->prefix . NMMPRO_SOL_RETRY_TABLE => array('nmmpro_sol_retry_schema', 'nmmpro_sol_retry_table_created'),
     );
@@ -526,16 +528,18 @@ function NMMPRO_delete_scan_options() {
             'nmmpro_autopay_unfenced',
             'nmmpro_completion_cursor',
             'nmmpro_cancellation_cursor',
+            'nmmpro_deferral_purge_cursor',
+            'nmmpro_background_paused',
         );
 
         foreach ($scanOptions as $scanOption) {
             NMMPRO_Compat::delete_option($scanOption);
         }
 
-        // Per-address expiry deferrals and per-order lease-event markers are
-        // one option row each, so they are removed by prefix.
+        // Per-address expiry deferrals are one option row each, so they are
+        // removed by prefix.
         global $wpdb;
-        foreach (array('nmmpro_defer_', 'nmmpro_lease_event_') as $rowPrefix) {
+        foreach (array('nmmpro_defer_') as $rowPrefix) {
             $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE option_name LIKE %s", $wpdb->esc_like($rowPrefix) . '%'));
         }
     });
@@ -567,6 +571,7 @@ function NMMPRO_drop_payment_table() {
         global $wpdb;
         $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMMPRO_PAYMENT_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
         NMMPRO_Compat::delete_option('nmmpro_payment_index_version');
+        NMMPRO_Compat::delete_option('nmmpro_payment_lease_schema');
     });
 }
 
@@ -790,6 +795,7 @@ function NMMPRO_create_payment_table() {
             `order_amount` decimal(32, 18) NOT NULL DEFAULT '0.000000000000000000',
             `tx_hash` char(255) NULL,
             `hd_address` tinyint(4) NOT NULL DEFAULT '0',
+            `lease_gen` bigint(20) unsigned NOT NULL DEFAULT '0',
 
 
             PRIMARY KEY (`id`),
@@ -834,6 +840,39 @@ function NMMPRO_maybe_add_payment_indexes() {
     }
     else {
         NMMPRO_Util::log(__FILE__, __LINE__, 'Payment index migration did not complete (' . $wpdb->last_error . '); will retry next load.', 'error');
+    }
+}
+
+// Add the lease_gen column to existing payment tables (verify-then-record,
+// like the index migration above). Every order-status event bumps it in the
+// same UPDATE that applies the event, and a leased row ('completing' or
+// 'cancelling') is only settled by an UPDATE conditional on the value read
+// before the order was - so an event landing in between makes the settlement
+// fail and re-read, rather than being overwritten. Until the column exists
+// those UPDATEs fail, which leaves leases in place: late, never wrong.
+function NMMPRO_maybe_add_payment_lease_gen() {
+    if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') === '1') {
+        return;
+    }
+
+    global $wpdb;
+    $tableName = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tableName)) !== $tableName) {
+        return; // table not created yet; nothing to do
+    }
+
+    $hasColumn = function () use ($wpdb, $tableName) {
+        return (bool) $wpdb->get_results("SHOW COLUMNS FROM `$tableName` LIKE 'lease_gen'"); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared -- DDL introspection on $wpdb->prefix plus a plugin constant; no user input.
+    };
+    if (!$hasColumn()) {
+        $wpdb->query("ALTER TABLE `$tableName` ADD COLUMN `lease_gen` bigint(20) unsigned NOT NULL DEFAULT '0'"); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared -- DDL on $wpdb->prefix plus a plugin constant; a table name cannot be a placeholder.
+    }
+
+    if ($hasColumn()) {
+        NMMPRO_Compat::update_option('nmmpro_payment_lease_schema', '1');
+    }
+    else {
+        NMMPRO_Util::log(__FILE__, __LINE__, 'Payment lease_gen migration did not complete (' . $wpdb->last_error . '); leased payment records will wait until it does. Will retry next load.', 'error');
     }
 }
 

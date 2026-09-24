@@ -85,6 +85,7 @@ function get_option($key, $default = array()) {
 		'nmmpro_autopay_scan_last_run'    => time() - 90,
 		'nmmpro_autopay_scan_sweep_start' => time() - 300,
 		'nmmpro_autopay_scan_retry'       => array('BTC|1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2'),
+		'nmmpro_autopay_scan_retry_unfenced' => array('BTC|a', 'BTC|b', 'BTC|c', 'BTC|d', 'BTC|e', 'BTC|f', 'BTC|g'),
 		'nmmpro_autopay_scan_covered_at'  => array('BTC' => time() - 60),
 		'nmmpro_autopay_unfenced'         => $GLOBALS['nmmpro_test_unfenced'],
 		'date_format'                  => 'Y-m-d',
@@ -231,6 +232,9 @@ ob_start();
 NMMPRO_Dashboard::render_page();
 $degraded = ob_get_clean();
 dok('paused-expiry notice names the old-MySQL cause', strpos($degraded, $paused) !== false && strpos($degraded, 'MySQL before 5.7.5') !== false);
+// The retry count shown is the lane in use: 7 in the matching-only lane here,
+// 1 in the certified lane on a fenced store.
+dok('retry count follows the lane the job is using', preg_match('#Addresses queued for retry</th>\s*<td>\s*7\b#', $degraded) === 1 && preg_match('#Addresses queued for retry</th>\s*<td>\s*1\b#', $html) === 1);
 $GLOBALS['nmmpro_test_unfenced'] = array('at' => time() - 30, 'reason' => 'lost');
 ob_start();
 NMMPRO_Dashboard::render_page();

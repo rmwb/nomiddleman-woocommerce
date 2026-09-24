@@ -87,6 +87,15 @@ class NMMPRO_Payment {
 				if ($orderUtil::orders_cache_usage_is_enabled()) {
 					wc_get_container()->get($orderCache)->remove($orderId);
 				}
+				// HPOS keeps a SECOND cache of the raw order row ('orders_data',
+				// used when datastore caching is on) that OrderCache::remove()
+				// does not touch; rebuilding the order from it would reproduce
+				// the stale status. clear_cached_data() is marked internal by
+				// WooCommerce, so it is only called where it exists.
+				$ordersTable = '\Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore';
+				if ($hpos && class_exists($ordersTable) && method_exists($ordersTable, 'clear_cached_data')) {
+					wc_get_container()->get($ordersTable)->clear_cached_data(array($orderId));
+				}
 			}
 			catch (\Throwable $e) {
 				NMMPRO_Util::log(__FILE__, __LINE__, 'Could not clear the cached copy of order ' . $orderId . ': ' . $e->getMessage(), 'warning');
@@ -122,13 +131,12 @@ class NMMPRO_Payment {
 	 * customer can still pay, expiry tries again); gone or otherwise
 	 * terminal -> 'cancelled'.
 	 * 'completing': paid -> 'paid'; gone, cancelled, failed, refunded or
-	 * trashed -> 'review' (a verified payment needs a human); otherwise the
-	 * completion is unfinished -> leave it for resume_verified_orders().
-	 * On a RE-settle (an order event landed while we decided), an order that
-	 * was reopened for payment -> 'unpaid', as the order-status hook would
-	 * have made it.
+	 * trashed -> 'review' (a verified payment needs a human); still awaiting
+	 * payment -> the completion is unfinished, leave it for
+	 * resume_verified_orders(). The payment was verified on chain, so while
+	 * this lease is held that verification, not a later status edit, decides.
 	 */
-	private static function lease_outcome($lease, $read, $resettle) {
+	private static function lease_outcome($lease, $read) {
 		$order = $read['order'];
 		if ($read['state'] === 'absent' || !$order) {
 			return $lease === 'cancelling' ? 'cancelled' : 'review';
@@ -140,10 +148,7 @@ class NMMPRO_Payment {
 		if ($lease === 'cancelling') {
 			return $awaiting ? 'unpaid' : 'cancelled';
 		}
-		if ($awaiting) {
-			return $resettle ? 'unpaid' : null;
-		}
-		return 'review';
+		return $awaiting ? null : 'review';
 	}
 
 	/**
@@ -153,62 +158,60 @@ class NMMPRO_Payment {
 	 * order save, keeps the unsaved status in memory and fires the status
 	 * hooks anyway, so neither is proof of what was persisted.
 	 *
-	 * Order events that meet a leased row are recorded, not applied (see
-	 * NMMPRO_Payment_Repo::set_status_from_order_event). If one lands between
-	 * this read and this write, the marker has moved: read again and settle
-	 * again from what we wrote, so the admin's change is never lost. Bounded;
-	 * a row whose order keeps changing is left as last settled.
+	 * The row's lease_gen is read BEFORE the order, and the write is
+	 * conditional on it: an order event that lands in between bumps it (see
+	 * NMMPRO_Payment_Repo::set_status_from_order_event), the write matches
+	 * nothing, and we read both again. Nothing terminal is ever written from a
+	 * stale read and repaired later. Any failure - an unreadable row or order,
+	 * a database error, an order that keeps changing - leaves the row in its
+	 * lease state, which the recovery passes select every tick.
 	 *
-	 * Returns the status the row was settled to, or null if it was left alone.
+	 * Returns the status the row was settled to, the status someone else had
+	 * already settled it to, or null if it was left leased.
 	 */
 	private static function settle_lease($paymentRepo, $orderId, $orderAmount, $lease) {
-		$from = $lease;
-		$status = null;
 		for ($attempt = 0; $attempt < 3; $attempt++) {
-			$marker = NMMPRO_Payment_Repo::lease_event_marker($orderId);
+			$state = $paymentRepo->lease_state($orderId, $orderAmount);
+			if ($state === false) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not read the payment record of order ' . $orderId . '; leaving it for the next pass.', 'warning');
+				return null;
+			}
+			if ($state === null) {
+				return null;
+			}
+			if ($state['status'] !== $lease) {
+				return $state['status']; // settled by someone else first; theirs stands
+			}
+
 			$read = self::read_order_authoritatively($orderId);
 			if ($read['state'] === 'error') {
-				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not read order ' . $orderId . ' to settle its ' . $from . ' record; leaving it for the next pass.', 'warning');
-				return $from === $lease ? null : $from;
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not read order ' . $orderId . ' to settle its ' . $lease . ' record; leaving it for the next pass.', 'warning');
+				return null;
 			}
-			$status = self::lease_outcome($lease, $read, $attempt > 0);
+			$status = self::lease_outcome($lease, $read);
 			if ($status === null) {
-				if ($lease === 'completing') {
-					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is not confirmed paid after completion; its verified payment stays recoverable and completion will be retried.', 'warning');
-				}
-				return $from === $lease ? null : $from;
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' is not confirmed paid after completion; its verified payment stays recoverable and completion will be retried.', 'warning');
+				return null;
 			}
 
 			// Test and integration seam: the instant between deciding and writing.
 			NMMPRO_Compat::action('nmmpro_before_lease_settle', $orderId, $lease, $status);
 
-			if ($status !== $from) {
-				$moved = $paymentRepo->settle_lease($orderId, $orderAmount, $from, $status);
-				if ($moved === false) {
-					NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: database error settling order ' . $orderId . ' from ' . $from . '; will retry.', 'error');
-					return $from === $lease ? null : $from;
-				}
-				if ($moved === 0) {
-					// Someone else moved it first: the recovery pass, or (after
-					// our first write) the order-status hook applying the very
-					// event we were about to replay. Theirs stands.
-					return $status;
-				}
+			$moved = $paymentRepo->settle_lease($orderId, $orderAmount, $lease, $state['gen'], $status);
+			if ($moved === false) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: database error settling order ' . $orderId . '; leaving it for the next pass.', 'error');
+				return null;
+			}
+			if ($moved > 0) {
 				if ($status === 'review' && $read['order']) {
 					$read['order']->add_order_note(__('A verified cryptocurrency payment requires manual reconciliation.', 'nomiddleman-crypto-payments-for-woocommerce'));
 				}
-			}
-
-			if (NMMPRO_Payment_Repo::lease_event_marker($orderId) === $marker) {
-				if ($marker !== '') {
-					NMMPRO_Payment_Repo::clear_lease_event($orderId, $marker);
-				}
 				return $status;
 			}
-			$from = $status;
+			// 0 rows: an order event bumped lease_gen, or the row moved. Re-read.
 		}
-		NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' kept changing while its payment record was being settled; left as ' . $status . '. Please check it.', 'warning');
-		return $status;
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: order ' . $orderId . ' kept changing while its payment record was being settled; left for the next pass.', 'warning');
+		return null;
 	}
 
 	/**
@@ -570,12 +573,16 @@ class NMMPRO_Payment {
 		// timing telemetry and authorises nothing.)
 		//
 		// Every certified write below goes through fenced_update_option(),
-		// which tests lock ownership INSIDE the statement that writes, and
-		// latches the fence lost on any refusal or failure - so the writes that
-		// follow it in this pass are skipped too. They are ordered so that
-		// stopping after any one of them leaves a safe state.
+		// which tests lock ownership INSIDE the statement that writes and
+		// confirms the write landed. They are chained: the first one that is
+		// refused or fails stops every write after it - in a cron pass and in a
+		// direct call alike - and they are ordered so that stopping after any
+		// one of them leaves a safe state. A failed exclusion write in
+		// particular must never be followed by a cursor or coverage write that
+		// assumes it landed.
 		$writeProgress = $fenced ? NMMPRO_Util::cron_fence_held() : true;
 		$certify = $fenced && $writeProgress;
+		$persisted = true;
 
 		// Accumulate this tick's per-address incompleteness (truncated pages,
 		// mid-window Solana sweeps, dropped retries) into the BUILDER set for
@@ -596,10 +603,10 @@ class NMMPRO_Payment {
 				}
 				$builder[$incompleteKey] = true;
 			}
-			NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', $builder);
+			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', $builder);
 		}
 
-		if ($certify && !empty($coinDirty)) {
+		if ($certify && $persisted && !empty($coinDirty)) {
 			$dirty = NMMPRO_Compat::get_option('nmmpro_autopay_scan_dirty', array());
 			if (!is_array($dirty)) {
 				$dirty = array();
@@ -607,13 +614,16 @@ class NMMPRO_Payment {
 			foreach (array_keys($coinDirty) as $dirtyCryptoId) {
 				$dirty[$dirtyCryptoId] = true;
 			}
-			NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', $dirty);
+			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', $dirty);
 		}
-		if ($certify) {
+		if ($certify && $persisted) {
 			// Retry set before cursor: a cursor that advanced past an address
 			// whose failure was not recorded is the one unsafe combination.
-			NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_retry', $newFailed);
-			NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_cursor', $lastKey);
+			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_retry', $newFailed)
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_cursor', $lastKey);
+		}
+		if ($certify && !$persisted) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not persist this tick\'s sweep state; nothing is certified and the page is re-walked next tick.', 'warning');
 		}
 		elseif (!$fenced) {
 			NMMPRO_Compat::update_option('nmmpro_autopay_scan_retry_unfenced', $newFailed, false);
@@ -657,7 +667,7 @@ class NMMPRO_Payment {
 		// next wrap then simply drops it from the set). Only a ticker missing
 		// from the registry (nothing of that coin can ever be verified) still
 		// blocks its coin's stamp via the coin-level dirty marker.
-		if ($certify && ($wrapped || $take >= $total)) {
+		if ($certify && $persisted && ($wrapped || $take >= $total)) {
 			// Coin-level exclusions: unverifiable tickers and address-tracking
 			// overflow. Cleared after use - the sweep now starting re-marks
 			// them for as long as their rows exist.
@@ -841,16 +851,28 @@ class NMMPRO_Payment {
 	/**
 	 * Remove deferrals that have lapsed against their coin's coverage stamp.
 	 * Compare-and-delete on the exact stored value, so a deferral re-armed
-	 * between our read and our delete survives.
+	 * between our read and our delete survives. Pages through the rows with a
+	 * persisted option_id cursor, so a block of long-lived deferrals cannot
+	 * hide the lapsed ones behind it. Runs every tick from the cron job,
+	 * whether or not anything is currently unpaid.
 	 */
-	private static function purge_lapsed_deferrals($coveredMap) {
+	public static function purge_lapsed_deferrals() {
 		global $wpdb;
 
+		$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
+		if (!is_array($coveredMap)) {
+			$coveredMap = array();
+		}
+		$cursor = (int) NMMPRO_Compat::get_option('nmmpro_deferral_purge_cursor', 0);
 		$rows = $wpdb->get_results($wpdb->prepare(
-			"SELECT `option_name`, `option_value` FROM `{$wpdb->options}` WHERE `option_name` LIKE %s LIMIT 200",
-			$wpdb->esc_like('nmmpro_defer_') . '%'
+			"SELECT `option_id`, `option_name`, `option_value` FROM `{$wpdb->options}` WHERE `option_name` LIKE %s AND `option_id` > %d ORDER BY `option_id` LIMIT 200",
+			$wpdb->esc_like('nmmpro_defer_') . '%', $cursor
 		), ARRAY_A);
-		foreach ((array) $rows as $row) {
+		if (!is_array($rows)) {
+			return;
+		}
+		NMMPRO_Compat::update_option('nmmpro_deferral_purge_cursor', count($rows) === 200 ? (int) end($rows)['option_id'] : 0, false);
+		foreach ($rows as $row) {
 			$deferral = maybe_unserialize($row['option_value']);
 			if (!is_array($deferral) || !isset($deferral['crypto'], $deferral['at'])) {
 				continue;
@@ -1816,7 +1838,7 @@ class NMMPRO_Payment {
 					continue;
 				}
 				try {
-					self::cancel_expired_payment($paymentRepo, $paymentRecord, $cryptoId, $address, $paymentCancellationTimeSec);
+					self::cancel_expired_payment($paymentRepo, $paymentRecord, $cryptoId, $address, $paymentCancellationTimeSec, $cancelClock, $cryptoCoveredAt);
 				}
 				catch (\Throwable $e) {
 					// A row already in 'cancelling' stays there: invisible to
@@ -1829,22 +1851,37 @@ class NMMPRO_Payment {
 				}
 			}
 		}
-
-		self::purge_lapsed_deferrals($coveredMap);
 	}
 
 	/**
 	 * Expire one row. The caller holds the address lock for its whole run.
 	 */
-	private static function cancel_expired_payment($paymentRepo, $paymentRecord, $cryptoId, $address, $paymentCancellationTimeSec) {
+	private static function cancel_expired_payment($paymentRepo, $paymentRecord, $cryptoId, $address, $paymentCancellationTimeSec, $cancelClock, $coveredAt) {
 		$orderId = $paymentRecord['order_id'];
 		$orderAmount = $paymentRecord['order_amount'];
 
-		// The unpaid rows were snapshotted earlier; re-check the live order right
-		// before touching state, because a merchant, webhook or the verifier can
-		// complete the order in between. Never cancel one that has already been
-		// paid or is no longer awaiting payment - and never act on a read that
-		// failed: a momentary database error must not look like a deleted order.
+		// The row was snapshotted before we held the address. Re-judge it now
+		// that we do: another worker may have deferred the address (a payment
+		// it could not record), an admin may have reopened the order with a
+		// fresh payment window, or the row may have moved on altogether.
+		$current = $paymentRepo->expiry_state($orderId, $orderAmount);
+		if ($current === false) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not re-read the payment record of order ' . $orderId . '; not expiring it this tick.', 'warning');
+			return;
+		}
+		if ($current === null || $current['status'] !== 'unpaid' || ($cancelClock - $current['ordered_at']) <= $paymentCancellationTimeSec) {
+			return;
+		}
+		if (self::address_deferred($cryptoId, $address, $coveredAt)) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: deferring expiry for ' . $cryptoId . ' address ' . $address . ' (a payment on it could not be recorded).');
+			return;
+		}
+
+		// Re-check the live order right before touching state, because a
+		// merchant, webhook or the verifier can complete the order in between.
+		// Never cancel one that has already been paid or is no longer awaiting
+		// payment - and never act on a read that failed: a momentary database
+		// error must not look like a deleted order.
 		$read = self::read_order_authoritatively($orderId);
 		if ($read['state'] === 'error') {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not read order ' . $orderId . '; not expiring it this tick.', 'warning');
@@ -1899,12 +1936,9 @@ class NMMPRO_Payment {
 			return;
 		}
 
-		// Cancelling is the irreversible step. Only while this connection still
-		// owns the address (a silent reconnect hands it to whoever asks next,
-		// who may be crediting this very order) and still holds the cron fence.
-		// Otherwise leave the lease: recovery settles it under the lock.
-		if (!NMMPRO_Util::address_match_lock_owned($cryptoId, $address) || !NMMPRO_Util::cron_fence_held()) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: lost exclusive access before cancelling order ' . $orderId . '; its record is left for recovery.', 'warning');
+		$lease = $paymentRepo->lease_state($orderId, $orderAmount);
+		if (!is_array($lease) || $lease['status'] !== 'cancelling') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: could not confirm the cancellation lease of order ' . $orderId . '; not cancelling.', 'warning');
 			return;
 		}
 
@@ -1917,12 +1951,42 @@ class NMMPRO_Payment {
 		add_filter('woocommerce_email_subject_customer_note', 'NMMPRO_change_cancelled_email_note_subject_line', 1, 2);
 		add_filter('woocommerce_email_heading_customer_note', 'NMMPRO_change_cancelled_email_heading', 1, 2);
 
-		// Current WooCommerce catches an exception thrown while saving the new
-		// status, fires the status hooks anyway and can still return true, so
-		// neither the return value nor the in-memory order can be trusted.
-		// settle_lease() re-reads the order and lets IT decide: cancelled if it
-		// was, back to 'unpaid' (still payable, retried next pass) if not.
-		$order->update_status('wc-cancelled');
+		// Cancelling is the irreversible step, so it is fenced INSIDE
+		// WooCommerce's save: fence_cancellation_save() runs on the connection
+		// that is about to write, immediately before it writes, and aborts the
+		// save unless that connection still owns this address and the cron
+		// lock and the lease is exactly the one we claimed. A worker that
+		// paused here and was silently reconnected owns neither lock any more,
+		// so its stale cancellation is refused rather than replayed over an
+		// order another worker has since credited.
+		self::$cancelFence = array(
+			'order'   => (int) $orderId,
+			'amount'  => $orderAmount,
+			'crypto'  => $cryptoId,
+			'address' => $address,
+			'gen'     => $lease['gen'],
+			'tripped' => false,
+		);
+		add_action('woocommerce_before_order_object_save', array(__CLASS__, 'fence_cancellation_save'), PHP_INT_MAX);
+		try {
+			// Current WooCommerce catches an exception thrown while saving the
+			// new status, fires the status hooks anyway and can still return
+			// true, so neither the return value nor the in-memory order can be
+			// trusted. settle_lease() re-reads the order and lets IT decide:
+			// cancelled if it was, back to 'unpaid' (still payable, retried next
+			// pass) if not.
+			$order->update_status('wc-cancelled');
+		}
+		finally {
+			remove_action('woocommerce_before_order_object_save', array(__CLASS__, 'fence_cancellation_save'), PHP_INT_MAX);
+			$fence = self::$cancelFence;
+			self::$cancelFence = null;
+		}
+		if (!empty($fence['tripped'])) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: lost exclusive access while cancelling order ' . $orderId . '; the cancellation was not saved and its record is left for recovery.', 'warning');
+			return;
+		}
+
 		$settled = self::settle_lease($paymentRepo, $orderId, $orderAmount, 'cancelling');
 
 		if ($settled !== 'cancelled') {
@@ -1933,6 +1997,38 @@ class NMMPRO_Payment {
 		$order->add_order_note($orderNote, true);
 
 		NMMPRO_Util::log(__FILE__, __LINE__, 'Cancelled ' . $cryptoId . ' payment: ' . $orderId . ' which was using address: ' . $address . 'due to non-payment.');
+	}
+
+	/**
+	 * The cancellation cancel_expired_payment() is about to save, or null.
+	 *
+	 * @var array{order: int, amount: string, crypto: string, address: string, gen: int, tripped: bool}|null
+	 */
+	private static $cancelFence = null;
+
+	/**
+	 * woocommerce_before_order_object_save callback, installed only around our
+	 * own update_status('wc-cancelled'). Throws to abort the save when this
+	 * connection no longer has the exclusive right to cancel that order.
+	 * Current WooCommerce catches the exception and the order stays as it was
+	 * persisted; older versions let it propagate to the caller's guard. Either
+	 * way the lease stays for recovery, which settles it under the lock.
+	 *
+	 * @param WC_Order $order
+	 */
+	public static function fence_cancellation_save($order) {
+		$fence = self::$cancelFence;
+		if ($fence === null || !is_object($order) || (int) $order->get_id() !== $fence['order'] || $order->get_status() !== 'cancelled') {
+			return;
+		}
+		$lease = (new NMMPRO_Payment_Repo())->lease_state($fence['order'], $fence['amount']);
+		$still = NMMPRO_Util::address_match_lock_owned($fence['crypto'], $fence['address'])
+			&& NMMPRO_Util::cron_fence_held()
+			&& is_array($lease) && $lease['status'] === 'cancelling' && $lease['gen'] === $fence['gen'];
+		if (!$still) {
+			self::$cancelFence['tripped'] = true;
+			throw new Exception('Nomiddleman: cancellation of order ' . $fence['order'] . ' is no longer exclusive; not saving it.');
+		}
 	}
 }
 

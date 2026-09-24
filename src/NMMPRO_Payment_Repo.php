@@ -332,19 +332,19 @@ class NMMPRO_Payment_Repo {
 	 * set_status() for changes that originate OUTSIDE the verifier - an admin
 	 * editing the order, a webhook, another plugin - via the order-status hook.
 	 *
-	 * It never writes a row in one of the two lease states. 'completing' holds
-	 * a verified, recorded payment whose order is not confirmed complete yet;
-	 * 'cancelling' holds an expiry whose order is not confirmed cancelled yet.
-	 * Each has an owner (the worker holding it, or the recovery pass) that
-	 * settles it from an authoritative read of the order. That read is the
-	 * only trustworthy answer: current WooCommerce fires the status-transition
-	 * hooks even when saving the order failed and nothing was persisted.
+	 * ONE statement, so nothing can land between its parts: it bumps the row's
+	 * lease_gen and applies the new status, except to a row in one of the two
+	 * lease states. 'completing' holds a verified, recorded payment whose order
+	 * is not confirmed complete yet; 'cancelling' holds an expiry whose order
+	 * is not confirmed cancelled yet. Each has an owner that settles it from an
+	 * authoritative read of the order (NMMPRO_Payment::settle_lease) - the only
+	 * trustworthy answer, because current WooCommerce fires the status hooks
+	 * even when saving the order failed. The bump is what stops that owner
+	 * overwriting this event: its settlement is conditional on the lease_gen
+	 * it read before reading the order, so it fails and re-reads instead.
 	 *
-	 * The event is not lost, though. For a leased row it bumps the order's
-	 * lease-event marker, and NMMPRO_Payment::settle_lease() re-reads and
-	 * re-settles when the marker moved while it was deciding - so an admin
-	 * reopening an order in the instant between the owner's read and its
-	 * write still wins.
+	 * MySQL applies single-table SET assignments left to right, so lease_gen
+	 * is computed from the status as it was before this statement.
 	 */
 	public function set_status_from_order_event($orderId, $orderAmount, $status) {
 		global $wpdb;
@@ -352,69 +352,70 @@ class NMMPRO_Payment_Repo {
 
 		$wpdb->query($wpdb->prepare(
 			"UPDATE `$this->tableName`
-			 SET `status` = %s
+			 SET `lease_gen` = `lease_gen` + 1,
+			     `status` = IF(`status` IN ('completing', 'cancelling'), `status`, %s)
 			 WHERE `order_amount` = %s
-			 AND `order_id` = %d
-			 AND `status` NOT IN ('completing', 'cancelling')",
+			 AND `order_id` = %d",
 			$status, $orderAmount, $orderId
 		));
-
-		$leased = $wpdb->get_var($wpdb->prepare(
-			"SELECT COUNT(*) FROM `$this->tableName`
-			 WHERE `order_amount` = %s
-			 AND `order_id` = %d
-			 AND `status` IN ('completing', 'cancelling')",
-			$orderAmount, $orderId
-		));
-		if ((int) $leased > 0) {
-			self::note_lease_event($orderId);
-		}
-	}
-
-	// Per-order marker bumped by every order event that met a leased row. A
-	// fresh random value each time, so two events can never look like none.
-	private static function lease_event_option($orderId) {
-		return 'nmmpro_lease_event_' . (int) $orderId;
-	}
-
-	public static function note_lease_event($orderId) {
-		NMMPRO_Compat::update_option(self::lease_event_option($orderId), wp_generate_password(20, false), false);
 	}
 
 	/**
-	 * The marker as stored right now, read past every cache: the event that
-	 * bumps it runs in another request, whose write this process's object
-	 * cache has not seen.
+	 * A leased row's current status and lease_gen, read together. Returns
+	 * array('status' => string, 'gen' => int), null when the row does not
+	 * exist, or false when the read failed.
 	 *
 	 * @phpstan-impure
 	 */
-	public static function lease_event_marker($orderId) {
+	public function lease_state($orderId, $orderAmount) {
 		global $wpdb;
 
-		return (string) $wpdb->get_var($wpdb->prepare(
-			"SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s",
-			self::lease_event_option($orderId)
-		));
-	}
-
-	public static function clear_lease_event($orderId, $marker) {
-		global $wpdb;
-
-		// Only the marker we settled against: an event arriving after our
-		// final check must keep its own.
-		$wpdb->query($wpdb->prepare(
-			"DELETE FROM `{$wpdb->options}` WHERE `option_name` = %s AND `option_value` = %s",
-			self::lease_event_option($orderId), $marker
-		));
-		wp_cache_delete(self::lease_event_option($orderId), 'options');
+		$row = $wpdb->get_row($wpdb->prepare(
+			"SELECT `status`, `lease_gen` FROM `$this->tableName`
+			 WHERE `order_amount` = %s AND `order_id` = %d",
+			$orderAmount, $orderId
+		), ARRAY_A);
+		if ($wpdb->last_error !== '') {
+			return false;
+		}
+		if (!is_array($row)) {
+			return null;
+		}
+		return array('status' => (string) $row['status'], 'gen' => (int) $row['lease_gen']);
 	}
 
 	/**
-	 * Move a row from $fromStatus to $toStatus, only while it is still in
-	 * $fromStatus. Returns the affected-row count, or false on a database
-	 * error.
+	 * The status and ordered_at of a row as they are now, for re-judging an
+	 * expiry under the address lock. Returns array('status' => string,
+	 * 'ordered_at' => int), null when the row does not exist, or false when
+	 * the read failed.
+	 *
+	 * @phpstan-impure
 	 */
-	public function settle_lease($orderId, $orderAmount, $fromStatus, $toStatus) {
+	public function expiry_state($orderId, $orderAmount) {
+		global $wpdb;
+
+		$row = $wpdb->get_row($wpdb->prepare(
+			"SELECT `status`, `ordered_at` FROM `$this->tableName`
+			 WHERE `order_amount` = %s AND `order_id` = %d",
+			$orderAmount, $orderId
+		), ARRAY_A);
+		if ($wpdb->last_error !== '') {
+			return false;
+		}
+		if (!is_array($row)) {
+			return null;
+		}
+		return array('status' => (string) $row['status'], 'ordered_at' => (int) $row['ordered_at']);
+	}
+
+	/**
+	 * Settle a leased row: move it from $fromStatus to $toStatus only while it
+	 * is still in $fromStatus AND no order event has bumped lease_gen since
+	 * $gen was read. Returns the affected-row count (0 means something moved
+	 * it first - re-read), or false on a database error.
+	 */
+	public function settle_lease($orderId, $orderAmount, $fromStatus, $gen, $toStatus) {
 		global $wpdb;
 
 		return $wpdb->query($wpdb->prepare(
@@ -422,8 +423,9 @@ class NMMPRO_Payment_Repo {
 			 SET `status` = %s
 			 WHERE `order_amount` = %s
 			 AND `order_id` = %d
-			 AND `status` = %s",
-			$toStatus, $orderAmount, $orderId, $fromStatus
+			 AND `status` = %s
+			 AND `lease_gen` = %d",
+			$toStatus, $orderAmount, $orderId, $fromStatus, $gen
 		));
 	}
 

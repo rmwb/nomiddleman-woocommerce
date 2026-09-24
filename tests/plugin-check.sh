@@ -70,7 +70,18 @@ exit($byType["ERROR"] > 0 ? 1 : 0);
 ' "$WORK/result.txt"
 PARSE_STATUS=$?
 set -e
-if [ "$PARSE_STATUS" -eq 2 ]; then
+
+# Plugin Check exits 0 whether or not it finds errors, so ANY other exit
+# status means the scan itself failed - even after it printed some valid
+# results, which would otherwise read as a clean partial scan. A PHP fatal on
+# stderr, or output that does not end on a result line, is the same.
+LAST_LINE=$(grep -v '^[[:space:]]*$' "$WORK/result.txt" | tail -n 1 || true)
+case "$LAST_LINE" in
+    '['*']'|'Success: Checks complete.'*) OUTPUT_COMPLETE=1 ;;
+    *) OUTPUT_COMPLETE=0 ;;
+esac
+if [ "$PARSE_STATUS" -eq 2 ] || [ "$WP_STATUS" -ne 0 ] || [ "$OUTPUT_COMPLETE" -ne 1 ] \
+    || grep -qiE 'PHP (Fatal|Parse) error|Fatal error:' "$WORK/stderr.txt" "$WORK/result.txt"; then
     echo "Plugin Check did not complete (wp exit $WP_STATUS):" >&2
     head -20 "$WORK/stderr.txt" "$WORK/result.txt" >&2
     exit 2

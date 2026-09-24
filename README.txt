@@ -208,7 +208,7 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 * Autopay: a transaction already used can never be credited to a second order
 * Autopay: order status changes you make while a payment is being settled are no longer lost; cancelling an order whose payment is still completing flags it for reconciliation
 * Autopay: expiry runs only while the background job is confirmed to be the only copy running. Without usable database locks (including MySQL before 5.7.5) expired orders wait for you, and the Status screen says why
-* Before downgrading to 2.12.0, let in-progress cancellations settle first (see docs/DOWNGRADE.md in the source repository)
+* Upgrade adds a column to the plugin's payment table automatically. Before downgrading to 2.12.0, pause the background job and let in-progress cancellations settle (docs/DOWNGRADE.md in the source repository)
 
 = 2.12.0 =
 * Use a distinct NMMPRO prefix with migration of retained settings and legacy hook compatibility.

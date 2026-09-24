@@ -18,6 +18,15 @@ function NMMPRO_do_cron_job() {
 	// never wedge the cron. The lock name is scoped to this site (database +
 	// table prefix) so neither sites sharing a MySQL server nor subsites on
 	// one multisite network block one another.
+	// Paused by the operator (for example before a downgrade - see
+	// docs/DOWNGRADE.md): do nothing at all, not even take the lock. Nothing
+	// else runs matching, completion recovery or expiry, so a paused store has
+	// no Autopay worker once any pass already in flight has finished.
+	if (NMMPRO_Compat::get_option('nmmpro_background_paused', false)) {
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Background job paused (nmmpro_background_paused); skipping this tick.');
+		return;
+	}
+
 	$lockName = NMMPRO_Util::cron_lock_name();
 	$lockAcquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName));
 
@@ -93,6 +102,7 @@ function NMMPRO_do_cron_job() {
 		NMMPRO_Payment::recover_interrupted_cancellations();
 		NMMPRO_Payment::check_all_addresses_for_matching_payment($autoPaymentTransactionLifetimeSec);
 		NMMPRO_Payment::cancel_expired_payments();
+		NMMPRO_Payment::purge_lapsed_deferrals();
 
 		// Reclaim durable Solana retry rows for addresses no longer scanned at all
 		// (SOL disabled, or a carousel address removed/replaced) once they are far
@@ -113,6 +123,12 @@ function NMMPRO_do_cron_job() {
 		// Record how the pass ENDED for the Status screen. Judging at the start
 		// would hide a pass that began exclusive and lost its lock part-way,
 		// which certifies and cancels nothing just the same.
+		// Re-ask the server rather than trusting the last answer: a connection
+		// dropped after the last certified write still means this pass was not
+		// exclusive to the end.
+		if (NMMPRO_Util::cron_fence_state() === 'held') {
+			NMMPRO_Util::cron_fence_held();
+		}
 		$fenceAtEnd = NMMPRO_Util::cron_fence_state();
 		if ($fenceAtEnd === 'held') {
 			if (NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false) !== false) {

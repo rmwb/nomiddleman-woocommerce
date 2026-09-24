@@ -306,6 +306,8 @@ $newTick();
 $covered['ETH'] = time() + 5;
 update_option('nmmpro_autopay_scan_covered_at', $covered, false);
 NMMPRO_Payment::cancel_expired_payments();
+NMMPRO_Compat::update_option('nmmpro_deferral_purge_cursor', 0, false);
+NMMPRO_Payment::purge_lapsed_deferrals();
 asok('a deferral lapses once coverage postdates it', as_order_status($o9a) === 'cancelled' && get_option('nmmpro_defer_' . md5('ETH|' . $a9a)) === false);
 $covered['ETH'] = time();
 update_option('nmmpro_autopay_scan_covered_at', $covered, false);
@@ -429,8 +431,9 @@ remove_action('nmmpro_before_lease_settle', $reopen, 10);
 $ordered16 = (int) $wpdb->get_var($wpdb->prepare("SELECT ordered_at FROM `$pt` WHERE order_id=%d", $o16));
 asok('admin reopen mid-settlement wins: row back to unpaid', $GLOBALS['as_reopened'] && as_row($o16) === 'unpaid', 'row=' . as_row($o16));
 asok('  with a fresh payment window', $ordered16 > time() - 120);
-// 10b. The same for a completion: settled paid, but the admin reopened the
-// order for payment in between.
+// 10b. A completion: about to settle paid when an admin reopens the order.
+// The settlement must not write 'paid' over that change; the row stays a
+// recoverable 'completing' lease (the verified payment decides from there).
 list($o17) = $make('_reopen_paid', 'processing', time());
 $repo->set_status($o17, '1', 'completing');
 $GLOBALS['as_reopened'] = false;
@@ -441,7 +444,7 @@ add_action('nmmpro_before_lease_settle', $reopenPaid, 10, 3);
 NMMPRO_Compat::update_option('nmmpro_completion_cursor', 0, false);
 NMMPRO_Payment::resume_verified_orders();
 remove_action('nmmpro_before_lease_settle', $reopenPaid, 10);
-asok('admin reopen mid-completion wins: row unpaid, not paid', $GLOBALS['as_reopened'] && as_row($o17) === 'unpaid', 'row=' . as_row($o17));
+asok('admin reopen mid-completion: paid is NOT written over it', $GLOBALS['as_reopened'] && as_row($o17) === 'completing', 'row=' . as_row($o17));
 
 // --- 11. one worker per address: no takeover of a live lease -------------------
 // 11a. Another worker holds the address: recovery leaves its lease alone.
@@ -544,10 +547,175 @@ $stampLost = get_option('nmmpro_autopay_scan_covered_at', array());
 asok('lock lost mid-publication: exclusions promoted, coverage NOT stamped', $GLOBALS['as_lost_after_promote'] && isset($stampLost['ETH']) && (int) $stampLost['ETH'] === 1, 'ETH=' . (isset($stampLost['ETH']) ? $stampLost['ETH'] : '-'));
 asok('  and the pass knows its fence was lost', $stateAfter === 'lost');
 
+// =============================================================================
+// Review round 3.
+// =============================================================================
+
+// Section 12 deliberately leaves ETH's coverage stamp at 1 ("not stamped");
+// re-seed fresh coverage so expired ETH rows are eligible again, or the
+// expiry assertions below would pass because nothing was ever examined.
+$covered = get_option('nmmpro_autopay_scan_covered_at', array());
+$covered['ETH'] = time();
+update_option('nmmpro_autopay_scan_covered_at', $covered, false);
+
+// --- 13. lease_gen: one statement per order event -------------------------------
+list($o22) = $make('_gen', 'on-hold', time());
+$repo->set_status($o22, '1', 'cancelling');
+$gen0 = $repo->lease_state($o22, '1');
+$repo->set_status_from_order_event($o22, '1', 'unpaid');
+$gen1 = $repo->lease_state($o22, '1');
+asok('order event on a lease: status kept, generation bumped', $gen1['status'] === 'cancelling' && $gen1['gen'] === $gen0['gen'] + 1);
+$repo->set_status($o22, '1', 'unpaid');
+$repo->set_status_from_order_event($o22, '1', 'paid');
+$gen2 = $repo->lease_state($o22, '1');
+asok('order event on an ordinary row: applied and bumped', $gen2['status'] === 'paid' && $gen2['gen'] === $gen1['gen'] + 1);
+asok('a stale-generation settlement matches nothing', $repo->settle_lease($o22, '1', 'paid', $gen1['gen'], 'cancelled') === 0 && as_row($o22) === 'paid');
+
+// An order event mid-settlement, then the re-read FAILS: nothing terminal may
+// have been written - the row stays a lease recovery will select.
+list($o23) = $make('_gen_readfail', 'cancelled', $expiredAt);
+$repo->set_status($o23, '1', 'cancelling');
+$GLOBALS['as_seam'] = 0;
+$unreadable23 = function ($class, $type, $id) use ($o23) { return (int) $id === $o23 ? 'NMMPRO_Test_No_Such_Order_Class' : $class; };
+$eventThenBreak = function ($orderId) use ($o23, $repo, $unreadable23) {
+	if ((int) $orderId !== $o23 || $GLOBALS['as_seam']++ > 0) { return; }
+	$repo->set_status_from_order_event($o23, '1', 'unpaid');      // an admin event lands...
+	add_filter('woocommerce_order_class', $unreadable23, 10, 3);    // ...and the next read fails
+};
+add_action('nmmpro_before_lease_settle', $eventThenBreak, 10, 1);
+NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+NMMPRO_Payment::recover_interrupted_cancellations();
+remove_action('nmmpro_before_lease_settle', $eventThenBreak, 10);
+remove_filter('woocommerce_order_class', $unreadable23, 10);
+asok('event then failed re-read: row stays a recoverable lease', as_row($o23) === 'cancelling', 'row=' . as_row($o23));
+
+// --- 14. the cancellation is fenced INSIDE WooCommerce's save ---------------------
+// 14a. The lock is lost after every pre-save check has passed - during the
+// save itself. The order must not be saved cancelled.
+list($o24, $a24) = $make('_savefence', 'pending', $expiredAt);
+$stealDuringSave = function ($order) use ($o24, $a24, $wpdb, $other, $lockNameFor) {
+	if ($order->get_id() !== $o24 || $order->get_status() !== 'cancelled') { return; }
+	$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockNameFor('ETH', $a24)));
+	$other->get_var($other->prepare('SELECT GET_LOCK(%s, 5)', $lockNameFor('ETH', $a24)));
+};
+add_action('woocommerce_before_order_object_save', $stealDuringSave, 1);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_before_order_object_save', $stealDuringSave, 1);
+asok('lock lost during the save: the order is NOT cancelled', as_order_status($o24) === 'pending' && as_row($o24) === 'cancelling', 'order=' . as_order_status($o24) . ' row=' . as_row($o24));
+$other->query('SELECT RELEASE_ALL_LOCKS()');
+NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+NMMPRO_Payment::recover_interrupted_cancellations();
+asok('  recovery returns it to unpaid', as_row($o24) === 'unpaid');
+// 14b. Same connection, nested: while this process holds an address, a
+// recovery reached from inside that work must treat it as busy (named locks
+// are recursive, so the database alone would let it in).
+list($o25, $a25) = $make('_reentry', 'pending', $expiredAt);
+$repo->set_status($o25, '1', 'cancelling');
+$held = NMMPRO_Util::acquire_address_match_lock('ETH', $a25);
+NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+NMMPRO_Payment::recover_interrupted_cancellations();
+$rowWhileHeld = as_row($o25);
+NMMPRO_Util::release_address_match_lock('ETH', $a25);
+asok('recovery nested inside this process\'s own address work is refused', $held === '1' && $rowWhileHeld === 'cancelling', 'row=' . $rowWhileHeld);
+NMMPRO_Payment::recover_interrupted_cancellations();
+asok('  and runs once the outer work has released it', as_row($o25) === 'unpaid');
+
+// --- 15. expiry re-judges the row once it holds the address -----------------------
+// 15a. Another worker defers the address between expiry's snapshot check and
+// expiry getting the lock (simulated as the lock is taken).
+list($o26, $a26) = $make('_late_defer', 'pending', $expiredAt);
+$GLOBALS['as_deferred26'] = false;
+$deferAtLock = function ($sql) use ($a26, $lockNameFor) {
+	if (!$GLOBALS['as_deferred26'] && strpos($sql, 'GET_LOCK(') !== false && strpos($sql, $lockNameFor('ETH', $a26)) !== false) {
+		$GLOBALS['as_deferred26'] = true;
+		update_option('nmmpro_defer_' . md5('ETH|' . $a26), array('crypto' => 'ETH', 'address' => $a26, 'at' => time()), false);
+	}
+	return $sql;
+};
+add_filter('query', $deferAtLock);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_filter('query', $deferAtLock);
+asok('deferral arriving before the lock is honoured under it', $GLOBALS['as_deferred26'] && as_order_status($o26) === 'pending' && as_row($o26) === 'unpaid');
+delete_option('nmmpro_defer_' . md5('ETH|' . $a26));
+// 15b. An admin reopens the order (fresh payment window) in the same gap.
+list($o27, $a27) = $make('_late_reopen', 'pending', $expiredAt);
+$GLOBALS['as_reopened27'] = false;
+$reopenAtLock = function ($sql) use ($a27, $o27, $lockNameFor, $pt) {
+	global $wpdb;
+	if (!$GLOBALS['as_reopened27'] && strpos($sql, 'GET_LOCK(') !== false && strpos($sql, $lockNameFor('ETH', $a27)) !== false) {
+		$GLOBALS['as_reopened27'] = true;
+		$wpdb->query($wpdb->prepare("UPDATE `$pt` SET ordered_at=%d WHERE order_id=%d", time(), $o27));
+	}
+	return $sql;
+};
+add_filter('query', $reopenAtLock);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_filter('query', $reopenAtLock);
+asok('fresh payment window arriving before the lock is honoured', $GLOBALS['as_reopened27'] && as_order_status($o27) === 'pending' && as_row($o27) === 'unpaid');
+
+// --- 16. a direct sweep certifies nothing after a failed safety write ---------------
+$bigBudget16 = function () { return 100000; };
+$offline16 = function () { return new WP_Error('offline', 'offline'); };
+add_filter('nmmpro_autopay_scan_budget', $bigBudget16);
+add_filter('pre_http_request', $offline16, 10, 3);
+update_option('nmmpro_autopay_scan_retry', array('ETH|' . $prefix . '_stale_retry'), false);
+$covered16 = get_option('nmmpro_autopay_scan_covered_at', array());
+$covered16['ETH'] = 1;
+update_option('nmmpro_autopay_scan_covered_at', $covered16, false);
+$refuseRetry = function ($value, $old) { return $old; };
+add_filter('pre_update_option_nmmpro_autopay_scan_retry', $refuseRetry, 10, 2);
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * HOUR_IN_SECONDS);
+remove_filter('pre_update_option_nmmpro_autopay_scan_retry', $refuseRetry, 10);
+$after16 = get_option('nmmpro_autopay_scan_covered_at', array());
+asok('direct sweep: failed retry write -> coverage NOT stamped', isset($after16['ETH']) && (int) $after16['ETH'] === 1, 'ETH=' . (isset($after16['ETH']) ? $after16['ETH'] : '-'));
+NMMPRO_Payment::check_all_addresses_for_matching_payment(3 * HOUR_IN_SECONDS);
+$after16b = get_option('nmmpro_autopay_scan_covered_at', array());
+asok('  control: the same sweep stamps once the write lands', isset($after16b['ETH']) && (int) $after16b['ETH'] > 1);
+remove_filter('pre_http_request', $offline16, 10);
+remove_filter('nmmpro_autopay_scan_budget', $bigBudget16);
+
+// --- 17. the pause switch stops the background job before it does anything ---------
+// A sentinel, not "whatever it was": a pass run in the same second as an
+// earlier one would write the same value and hide that it ran.
+update_option('nmmpro_autopay_scan_last_run', 1, false);
+$lastRun17 = get_option('nmmpro_autopay_scan_last_run');
+update_option('nmmpro_background_paused', 1, false);
+// Offline, so a regression that ignores the pause cannot reach real explorers.
+$offline17 = function () { return new WP_Error('offline', 'offline'); };
+add_filter('pre_http_request', $offline17, 10, 3);
+NMMPRO_do_cron_job();
+remove_filter('pre_http_request', $offline17, 10);
+$pausedLastRun = get_option('nmmpro_autopay_scan_last_run');
+delete_option('nmmpro_background_paused');
+asok('paused: the cron job returns without running a pass', (int) $pausedLastRun === 1 && NMMPRO_Util::cron_pass_running() === false, 'last_run=' . $pausedLastRun);
+
+// --- 18. deferral purge pages past long-lived deferrals ----------------------------
+$future = array();
+for ($i = 0; $i < 201; $i++) {
+	$k = 'ETH|' . $prefix . '_live_' . $i;
+	$future[] = $k;
+	update_option('nmmpro_defer_' . md5($k), array('crypto' => 'ETH', 'address' => $k, 'at' => time() + 86400), false);
+}
+$lapsedKey = 'ETH|' . $prefix . '_lapsed';
+update_option('nmmpro_defer_' . md5($lapsedKey), array('crypto' => 'ETH', 'address' => $lapsedKey, 'at' => 5), false);
+NMMPRO_Compat::update_option('nmmpro_deferral_purge_cursor', 0, false);
+$passes = 0;
+while ($passes < 10 && get_option('nmmpro_defer_' . md5($lapsedKey)) !== false) {
+	wp_cache_delete('nmmpro_defer_' . md5($lapsedKey), 'options');
+	NMMPRO_Payment::purge_lapsed_deferrals();
+	$passes++;
+	wp_cache_delete('nmmpro_defer_' . md5($lapsedKey), 'options');
+}
+asok('purge reaches a lapsed deferral behind 201 live ones', get_option('nmmpro_defer_' . md5($lapsedKey)) === false && $passes >= 2, 'passes=' . $passes);
+foreach ($future as $k) { delete_option('nmmpro_defer_' . md5($k)); }
+
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }

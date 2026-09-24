@@ -219,12 +219,13 @@ class NMMPRO_Util {
 		global $wpdb;
 
 		if (self::$cronFence === null) {
-			if (NMMPRO_Compat::update_option($name, $value, false)) {
-				return true;
-			}
-			// false means "unchanged" as well as "failed": only a stored value
-			// that differs from ours is a failure.
-			return maybe_serialize(get_option($name, null)) === maybe_serialize($value);
+			NMMPRO_Compat::update_option($name, $value, false);
+			// update_option() returns false for "unchanged" as well as "failed",
+			// and get_option() can answer from a stale cache, so confirm against
+			// the stored bytes themselves. WordPress stores a scalar as its
+			// string form and anything else serialized.
+			$stored = $wpdb->get_var($wpdb->prepare("SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s", $name));
+			return $stored !== null && $stored === (string) maybe_serialize($value);
 		}
 		if (!self::$cronFence['held']) {
 			return false;
@@ -264,6 +265,19 @@ class NMMPRO_Util {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Is a cron pass running right now on this site? Only meaningful where
+	 * advisory locks work; used by the downgrade procedure to confirm the
+	 * background job has drained after it was paused.
+	 *
+	 * @phpstan-impure
+	 */
+	public static function cron_pass_running() {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT IS_FREE_LOCK(%s)', self::cron_lock_name())) === '0';
 	}
 
 	/**
@@ -352,14 +366,35 @@ class NMMPRO_Util {
 	public static function acquire_address_match_lock($cryptoId, $address, $timeoutSeconds = 0) {
 		global $wpdb;
 
-		return $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', self::address_match_lock_name($cryptoId, $address), $timeoutSeconds));
+		$name = self::address_match_lock_name($cryptoId, $address);
+		// Named locks are recursive per connection (MySQL 5.7.5+, MariaDB
+		// 10.0.2+): a second GET_LOCK from this same connection "succeeds".
+		// Code reached from inside an address's work - a WooCommerce hook
+		// fired by a cancellation or a completion - must see it as busy, or a
+		// recovery pass could settle the very lease its caller still holds.
+		if (isset(self::$heldAddressLocks[$name])) {
+			return '0';
+		}
+		$acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', $name, $timeoutSeconds));
+		if ($acquired === '1') {
+			self::$heldAddressLocks[$name] = true;
+		}
+		return $acquired;
 	}
 
 	public static function release_address_match_lock($cryptoId, $address) {
 		global $wpdb;
 
-		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::address_match_lock_name($cryptoId, $address)));
+		$name = self::address_match_lock_name($cryptoId, $address);
+		if (!isset(self::$heldAddressLocks[$name])) {
+			return; // never ours (busy or unavailable): nothing to release
+		}
+		unset(self::$heldAddressLocks[$name]);
+		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
 	}
+
+	/** @var array<string, true> address locks this process currently holds */
+	private static $heldAddressLocks = array();
 
 	/**
 	 * The pinned request currently in flight: the token that identifies it, the
