@@ -347,32 +347,36 @@ class NMMPRO_Payment_Repo {
 	 * correct under MySQL's left-to-right SET evaluation and under MariaDB's
 	 * SIMULTANEOUS_ASSIGNMENT mode alike.
 	 *
-	 * The column comes from a migration. On a site where it has not run yet -
-	 * a multisite runner that switched blogs before that site's own load, or
-	 * a migration that failed - the event must still be applied, so: run this
-	 * site's migration now if it is pending, and if the column is still
-	 * missing, fall back to the pre-lease_gen statement. A leased row stays
-	 * safe either way: settle_lease() also requires the order's persisted
-	 * status to support what it writes.
+	 * The column comes from a migration, which runs only at safe boundaries
+	 * (the site's own load and activation) - never from here: this runs
+	 * inside an order save, possibly inside a caller's transaction, and an
+	 * ALTER TABLE would commit that transaction implicitly. On a site where
+	 * the migration has not run yet (a multisite runner that switched blogs
+	 * before that site's own load, or a migration that failed) the event is
+	 * applied with the pre-lease_gen statement, which leaves leased rows
+	 * alone: they wait for the migration - late, never wrong. A leased row
+	 * stays safe either way: settle_lease() also requires the order to be
+	 * stored exactly as it was when the settlement was decided.
 	 */
 	public function set_status_from_order_event($orderId, $orderAmount, $status) {
 		global $wpdb;
 		NMMPRO_Util::log(__FILE__, __LINE__, 'order event: updating ' . $orderId . ' to ' . $status);
 
-		if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') !== '1' && function_exists('NMMPRO_maybe_add_payment_lease_gen')) {
-			NMMPRO_maybe_add_payment_lease_gen();
+		$applied = false;
+		if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') === '1') {
+			$applied = $wpdb->query($wpdb->prepare(
+				"UPDATE `$this->tableName`
+				 SET `lease_gen` = `lease_gen` + 1,
+				     `status` = IF(`status` IN ('completing', 'cancelling'), `status`, %s)
+				 WHERE `order_amount` = %s
+				 AND `order_id` = %d",
+				$status, $orderAmount, $orderId
+			));
+			if ($applied === false) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'order event for ' . $orderId . ' could not use lease_gen (' . $wpdb->last_error . '); applying it without.', 'warning');
+			}
 		}
-
-		$applied = $wpdb->query($wpdb->prepare(
-			"UPDATE `$this->tableName`
-			 SET `lease_gen` = `lease_gen` + 1,
-			     `status` = IF(`status` IN ('completing', 'cancelling'), `status`, %s)
-			 WHERE `order_amount` = %s
-			 AND `order_id` = %d",
-			$status, $orderAmount, $orderId
-		));
 		if ($applied === false) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'order event for ' . $orderId . ' could not use lease_gen (' . $wpdb->last_error . '); applying it without.', 'warning');
 			$fallback = $wpdb->query($wpdb->prepare(
 				"UPDATE `$this->tableName`
 				 SET `status` = %s
@@ -439,43 +443,44 @@ class NMMPRO_Payment_Repo {
 	/**
 	 * Settle a leased row: move it from $fromStatus to $toStatus only while it
 	 * is still in $fromStatus, no order event has bumped lease_gen since $gen
-	 * was read, AND the order's PERSISTED status - read by this same statement
-	 * from WooCommerce's authoritative order storage - still supports
-	 * $toStatus. The last condition is what makes a lost order event harmless:
-	 * if an admin's change was saved but its payment-row update failed, the
-	 * generation never moved, yet the order's stored status did, and a
-	 * settlement decided from the earlier read matches nothing.
+	 * was read, AND the order is still stored exactly as it was when the
+	 * decision was made - the same status ($observedStatus, as
+	 * WC_Order::get_status() returned it), or still absent ($observedStatus
+	 * null). The condition is read by this same statement from WooCommerce's
+	 * authoritative order storage.
+	 *
+	 * Comparing with what was actually read, not with a status list rebuilt
+	 * in SQL, keeps the SQL and the PHP decision in agreement whatever the
+	 * status is - custom statuses, and paid-ness decided per order by the
+	 * woocommerce_order_is_paid filter, included. It is also what makes a
+	 * lost order event harmless: if an admin's change was saved but its
+	 * payment-row update failed, the generation never moved, yet the stored
+	 * status did, and a settlement decided from the earlier read matches
+	 * nothing.
 	 *
 	 * Returns the affected-row count (0 means something moved first - re-read),
 	 * or false on a database error.
 	 */
-	public function settle_lease($orderId, $orderAmount, $fromStatus, $gen, $toStatus) {
+	public function settle_lease($orderId, $orderAmount, $fromStatus, $gen, $toStatus, $observedStatus) {
 		global $wpdb;
 
-		$require = self::persisted_order_requirement($orderId, $toStatus);
-		if ($require === null) {
-			return false;
-		}
-		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the payment table is $wpdb->prefix plus a plugin constant; $require['sql'] is built by persisted_order_requirement() from WooCommerce's own order table name and literal %s/%d markers only; every value is bound below.
+		$require = self::order_stored_as($orderId, $observedStatus);
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the payment table is $wpdb->prefix plus a plugin constant; $require['sql'] is built by order_stored_as() from WooCommerce's own order table name and literal %s/%d markers only; every value is bound below.
 		$sql = "UPDATE `$this->tableName` SET `status` = %s WHERE `order_amount` = %s AND `order_id` = %d AND `status` = %s AND `lease_gen` = %d AND " . $require['sql'];
 		$args = array_merge(array($toStatus, $orderAmount, $orderId, $fromStatus, $gen), $require['args']);
 		return $wpdb->query($wpdb->prepare($sql, $args)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is prepared in this call; see the note above.
 	}
 
 	/**
-	 * The SQL condition (with its bound values) that the order's persisted
-	 * status supports settling a leased row to $toStatus. Reads WooCommerce's
+	 * The SQL condition (with its bound values) that order $orderId is stored
+	 * with status $status - as WC_Order::get_status() reports it, so stored
+	 * either with WooCommerce's 'wc-' prefix or, like 'trash', without - or,
+	 * for a null $status, that it is not stored at all. Reads WooCommerce's
 	 * authoritative order storage: the HPOS orders table, or posts.
 	 *
-	 *   'paid'      - the order is stored with a paid status;
-	 *   'unpaid'    - it is stored pending or on-hold (still payable);
-	 *   'cancelled' - it is gone, or stored with neither kind of status;
-	 *   'review'    - it is gone, or stored cancelled, failed, refunded or
-	 *                 trashed (a verified payment needs a human).
-	 *
-	 * @return array{sql: string, args: array<int, int|string>}|null
+	 * @return array{sql: string, args: array<int, int|string>}
 	 */
-	private static function persisted_order_requirement($orderId, $toStatus) {
+	public static function order_stored_as($orderId, $status) {
 		global $wpdb;
 
 		$orderUtil = '\Automattic\WooCommerce\Utilities\OrderUtil';
@@ -489,36 +494,15 @@ class NMMPRO_Payment_Repo {
 			$idCol = '`ID`';
 			$statusCol = '`post_status`';
 		}
-		$paid = array();
-		foreach ((array) wc_get_is_paid_statuses() as $paidStatus) {
-			$paid[] = 'wc-' . $paidStatus;
+		if ($status === null) {
+			return array('sql' => "NOT EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d)", 'args' => array((int) $orderId));
 		}
-		$awaiting = array('wc-pending', 'wc-on-hold');
-		// {LIST} is replaced by one %s marker per value; the %d markers stay
-		// for prepare(). (Not sprintf(): its %d would turn a '%d' into 0.)
-		$exists = "EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d AND $statusCol IN ({LIST}))";
-		$absent = "NOT EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d)";
-		$in = function ($values) { return implode(',', array_fill(0, count($values), '%s')); };
-
-		switch ($toStatus) {
-			case 'paid':
-				return array('sql' => str_replace('{LIST}', $in($paid), $exists), 'args' => array_merge(array((int) $orderId), $paid));
-			case 'unpaid':
-				return array('sql' => str_replace('{LIST}', $in($awaiting), $exists), 'args' => array_merge(array((int) $orderId), $awaiting));
-			case 'cancelled':
-				$live = array_merge($paid, $awaiting);
-				return array(
-					'sql'  => '(' . $absent . " OR EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d AND $statusCol NOT IN (" . $in($live) . ')))',
-					'args' => array_merge(array((int) $orderId, (int) $orderId), $live),
-				);
-			case 'review':
-				$dead = array('wc-cancelled', 'wc-failed', 'wc-refunded', 'trash');
-				return array(
-					'sql'  => '(' . $absent . ' OR ' . str_replace('{LIST}', $in($dead), $exists) . ')',
-					'args' => array_merge(array((int) $orderId, (int) $orderId), $dead),
-				);
-		}
-		return null;
+		$status = (string) $status;
+		$bare = strpos($status, 'wc-') === 0 ? substr($status, 3) : $status;
+		return array(
+			'sql'  => "EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d AND $statusCol IN (%s, %s))",
+			'args' => array((int) $orderId, 'wc-' . $bare, $bare),
+		);
 	}
 
 	// Tri-state result of a conditional claim. CLAIMED: this call moved the row.

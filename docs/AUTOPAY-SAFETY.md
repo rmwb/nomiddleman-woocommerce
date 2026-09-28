@@ -11,7 +11,7 @@ Every Autopay order has a WooCommerce order and a row in the plugin's payment ta
 | `unpaid` | Awaiting payment. The only status that matching and expiry select. |
 | `completing` | A payment was verified and recorded, and the order is being completed. |
 | `cancelling` | The order's payment window closed, and it is being cancelled. |
-| `paid`, `cancelled`, `review` | Terminal. `review` means a verified payment needs a human, for example because the order was cancelled first. |
+| `paid`, `cancelled`, `review` | Terminal. `review` means a verified payment needs a human, for example because the order was cancelled first, or moved to a custom status that is not paid. |
 
 `completing` and `cancelling` are **leases**. Nothing but their owner, and the recovery passes that run every tick, can move them. Neither matching nor expiry can see them.
 
@@ -24,16 +24,26 @@ Every Autopay order has a WooCommerce order and a row in the plugin's payment ta
 5. **A lease is settled from what WooCommerce stored, not from what it reported.** Current WooCommerce fires its status hooks even when saving the order failed. Settlement therefore:
    - reads the order past WooCommerce's order cache and the HPOS datastore cache;
    - treats an unreadable order as unknown, not deleted;
-   - writes only if the row's `lease_gen` is unchanged since it was read (every order event bumps it) **and** the order's persisted status, read by the same `UPDATE`, still supports the result.
+   - writes only if the row's `lease_gen` is unchanged since it was read (every order event bumps it) **and** the order is still stored exactly as it was when the decision was made (the same status, or still absent), read by the same `UPDATE`. Comparing with what was read, rather than with a list of statuses rebuilt in SQL, keeps the decision and the write in agreement for custom statuses and for a per-order `woocommerce_order_is_paid` filter.
 
    Any failure leaves the lease for the recovery passes.
-6. **A cancellation is checked inside WooCommerce's own save.** Just before WooCommerce writes a cancelled order, a hook on `woocommerce_before_order_object_save` confirms three things on the connection about to write: it still owns the address lock, it still owns the cron lock, and the lease generation is unchanged. If any check fails, the order keeps its previous status and no status hooks fire, so no "cancelled" email is sent and no stock or integration effects run.
+6. **A cancellation is checked inside WooCommerce's own save.** Just before WooCommerce writes a cancelled order, a hook on `woocommerce_before_order_object_save` confirms four things on the connection about to write:
+   - it still owns the address lock;
+   - it still owns the cron lock;
+   - the lease generation is unchanged;
+   - the order is still stored with the status the canceller read.
+
+   The last check catches a payment saved by another request whose payment-record event failed to land. If any check fails, the save is **aborted**: the hook clears WooCommerce's pending status transition and throws, and WooCommerce catches the exception before its data store writes anything. Nothing is stored: not the cancellation, and not the canceller's older status over one saved since. No status hooks fire, so no "cancelled" email is sent and no stock or integration effects run.
+
+   Clearing the transition needs a protected WooCommerce property. Before claiming a cancellation, the canceller checks that it exists, and does not cancel at all if it does not.
+7. **Order events never run DDL.** The `lease_gen` column comes from a migration that runs only when the site loads and on activation. An order event on a site whose migration is still pending applies to ordinary rows without `lease_gen` and leaves leased rows for the migration. It never runs `ALTER TABLE`, which would implicitly commit a caller's open transaction.
+8. **A background pass that cannot read the pause switch does nothing.** After taking the cron lock, the pass re-reads `nmmpro_background_paused` from the table. A failed read is treated as paused, and the lock is released.
 
 ## Known limits
 
 These are properties of building on WordPress and WooCommerce, not open defects.
 
-- **No conditional order save.** WooCommerce cannot make "save this order as cancelled" conditional on a database predicate. The save check in guarantee 6 narrows the exposure to the instant between the check and WooCommerce's own `UPDATE`. A connection lost in that instant, after the check passed, cannot be detected. That needs three things at once:
+- **No conditional order save.** WooCommerce cannot make "save this order as cancelled" conditional on a database predicate. The save check in guarantee 6 narrows the exposure to the instant between the check (including its read of the stored status) and WooCommerce's own `UPDATE`. A connection lost in that instant, after the check passed, cannot be detected. That needs three things at once:
   - a dropped database connection;
   - a paused PHP process;
   - a second worker completing a payment for the same order in between.

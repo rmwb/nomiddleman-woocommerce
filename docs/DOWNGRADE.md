@@ -19,7 +19,7 @@ Do **not** rewrite these rows to `unpaid` by hand. Whether the order was actuall
 
 Keep this version installed and active until step 5.
 
-1. **Pause the background job.** Every pass checks this option before taking the cron lock, and again, straight from the database, after taking it. A pass that was already waiting for the lock also exits without doing any work:
+1. **Pause the background job.** Every pass checks this option before taking the cron lock, and again, straight from the database, after taking it. A pass that was already waiting for the lock also exits without doing any work, and so does one whose second read fails:
 
    ```bash
    wp option update nmmpro_background_paused 1

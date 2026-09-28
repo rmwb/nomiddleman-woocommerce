@@ -42,21 +42,25 @@ function NMMPRO_do_cron_job() {
 		NMMPRO_Util::log(__FILE__, __LINE__, 'Advisory lock unavailable on this host; running cron without overlap protection.', 'warning');
 	}
 
-	// Re-check the pause now that the lock is held, straight from the table
-	// (not the object cache): a pass that read "not paused" and then waited
-	// for the lock must not start work after the operator paused and saw
-	// the lock free. Together with the check above, a paused store starts no
-	// new work once the lock has been seen free.
-	$pausedNow = $wpdb->get_var($wpdb->prepare("SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s", 'nmmpro_background_paused'));
-	if ($pausedNow !== null && $pausedNow !== '' && $pausedNow !== '0') {
-		NMMPRO_Util::log(__FILE__, __LINE__, 'Background job paused while waiting for the lock; exiting.');
-		if ($lockAcquired === '1') {
-			$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockName));
-		}
-		return;
-	}
-
 	try {
+		// Re-check the pause now that the lock is held, straight from the table
+		// (not the object cache): a pass that read "not paused" and then waited
+		// for the lock must not start work after the operator paused and saw
+		// the lock free. Together with the check above, a paused store starts no
+		// new work once the lock has been seen free. A read that FAILS is not
+		// "not paused": get_var() answers null for a missing option and for a
+		// failed query alike, so the error is checked and the pass exits. Both
+		// exits are inside the try, so the lock is released in finally.
+		$pausedNow = $wpdb->get_var($wpdb->prepare("SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s", 'nmmpro_background_paused'));
+		if ($wpdb->last_error !== '') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Could not read the background pause state (' . $wpdb->last_error . '); exiting this tick without doing anything.', 'warning');
+			return;
+		}
+		if ($pausedNow !== null && $pausedNow !== '' && $pausedNow !== '0') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Background job paused while waiting for the lock; exiting.');
+			return;
+		}
+
 		// Automatic expiry acts on sweep coverage, and coverage is only
 		// trustworthy if this pass is really the only one writing it. Without a
 		// held, still-owned cron lock this pass matches (which fails closed on
