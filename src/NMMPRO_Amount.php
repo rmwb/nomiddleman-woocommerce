@@ -89,6 +89,11 @@ class NMMPRO_Amount {
         return self::integer($out);
     }
 
+    /** $expected - $received in whole units, or '0' when nothing is owed. */
+    public static function shortfall($expected, $received) {
+        return self::compare($received, $expected) >= 0 ? '0' : self::subtract(self::integer($expected), self::integer($received));
+    }
+
     public static function multiply($a, $b) {
         $a = self::integer($a); $b = self::integer($b);
         if (strlen($a) + strlen($b) > self::MAX_DIGITS) { throw new InvalidArgumentException('Product too long'); }

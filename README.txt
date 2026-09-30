@@ -124,7 +124,7 @@ Public transaction APIs for these coins no longer exist or were never available,
 
 This plugin contacts third-party blockchain explorers and price APIs from your store's server, never from the customer's browser. The request payloads contain public blockchain or market-query data: payment addresses, public transaction identifiers or signatures, cryptocurrency tickers, and ISO currency codes. A BlockCypher token is also sent if you configure one. As with any server-to-server HTTP request, the receiving operator can see the connecting server's IP address and request metadata. The plugin does not put customer name, email address, order contents or other WooCommerce customer fields in these requests. Monero wallet-RPC credentials and JSON-RPC commands go only to the wallet-RPC URL you configure.
 
-Requests happen during checkout/order payment setup when a needed exchange rate is not cached, and during scheduled background rate warm-ups when cached rates expire. The background job also checks whether an unpaid Autopay or Privacy Mode order has been paid (a verification lookup, repeated until the order is paid or its payment window closes). Verification services are contacted only for the cryptocurrencies and modes that need them; Classic Mode does not perform verification lookups.
+Requests happen during checkout/order payment setup when a needed exchange rate is not cached, and during scheduled background rate warm-ups when cached rates expire. In Privacy Mode, checkout also asks a verification service whether a fresh payment address has ever been used, before showing it. The background job also checks whether an unpaid Autopay or Privacy Mode order has been paid (a verification lookup, repeated until the order is paid or its payment window closes), and in Privacy Mode keeps watching addresses of finished orders for late payments for up to 90 days. Verification services are contacted only for the cryptocurrencies and modes that need them; Classic Mode does not perform verification lookups.
 
 Where terms of service or a privacy policy could not be verified, that is stated below. Frankfurter's API FAQ and ExchangeRate-API's combined terms/privacy document were checked on 13 September 2026. Some other links remain unverified; availability of a page does not by itself establish that its policy applies to the API endpoint.
 
@@ -144,18 +144,17 @@ Used to convert your store's prices into cryptocurrency. Only a coin ticker or a
 
 Contacted only in Autopay and Privacy Mode, and only for the coins you enable. Each request carries the order's public payment address, and for confirmation checks the public transaction identifiers seen at that address.
 
-* mempool.space - Bitcoin. Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
-* Blockstream (blockstream.info) - Bitcoin, as a fallback. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
-* Blockchain.com (blockchain.info, api.blockchain.info) - Bitcoin and Bitcoin Cash. Terms: https://www.blockchain.com/legal/terms - Privacy: https://www.blockchain.com/legal/privacy
+* mempool.space - Bitcoin (Autopay and Privacy Mode). Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
+* Blockstream (blockstream.info) - Bitcoin, as a fallback in Privacy Mode. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
+* Blockchain.com (api.blockchain.info) - Bitcoin Cash. Terms: https://www.blockchain.com/legal/terms - Privacy: https://www.blockchain.com/legal/privacy
 * Litecoin Space (litecoinspace.org) - Litecoin. The Litecoin Foundation confirmed that it maintains the service, permits commercial use subject to avoiding abuse, and retains nginx logs for one week with no further logs/data retained. It supplied no numerical request limit. These statements were provided directly to the maintainer; public terms and privacy policy URLs are still being requested. A donation was suggested, not required.
-* BlockCypher (api.blockcypher.com) - Litecoin and Dogecoin. If you configure a BlockCypher API token, it is sent with these requests. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
+* BlockCypher (api.blockcypher.com) - Dogecoin and Dash in Privacy Mode, Dogecoin and Litecoin in Autopay, and Litecoin as a Privacy Mode fallback. If you configure a BlockCypher API token, it is sent with these requests. Without a token BlockCypher allows about 100 requests an hour; stores using Privacy Mode for Dogecoin or Dash should configure one. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
 * Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com) - Ethereum, Ethereum Classic, ERC-20 tokens and the multi-network stablecoins. Terms: https://eaas.blockscout.com/terms-and-conditions - Privacy: https://eaas.blockscout.com/privacy-notice
 * WhatsOnChain (api.whatsonchain.com) - Bitcoin SV. Terms: https://whatsonchain.com/terms - Privacy: https://whatsonchain.com/privacy
-* Dash Insight (insight.dash.org) - Dash. Terms: https://www.dash.org/terms-of-use/ - Privacy: https://www.dash.org/privacy/
+* Dash Insight (insight.dash.org) - Dash in Autopay. Terms: https://www.dash.org/terms-of-use/ - Privacy: https://www.dash.org/privacy/
 * XRPSCAN (api.xrpscan.com) - XRP. Terms: https://xrpscan.com/tos - Privacy: https://xrpscan.com/privacy
 * Koios (api.koios.rest) - Cardano. Terms: https://koios.rest/terms.html - Privacy: https://koios.rest/privacy.html
 * Blockchair (api.blockchair.com) - Zcash. Terms: https://blockchair.com/terms (returned HTTP 401 during review; a publicly accessible terms document is being sought). Privacy policy, published in the operator's official support repository: https://github.com/Blockchair/Blockchair.Support/blob/master/PRIVACY.md - this policy describes short-term IP storage for API rate limiting.
-* chainz.cryptoid.info - Bitcore balance checks in Privacy Mode. Terms and privacy policy (one document): https://chainz.cryptoid.info/terms.dws
 * Stellar Horizon (horizon.stellar.org) - Stellar. Terms: https://stellar.org/terms-of-service - Privacy: https://stellar.org/privacy-policy
 * Waves public nodes (nodes.wavesnodes.com) - Waves. Website terms: https://waves.tech/docs/terms - Website privacy policy: https://waves.tech/docs/privacy-policy (both website policies were verified in Chrome; the pages return HTTP 201). The website terms do not clearly establish coverage for the separate public-node API; endpoint policy confirmation is being sought.
 * Greymass (eos.greymass.com) - EOS. Privacy: https://greymass.com/privacy_policy - separate terms of service were not located in this review.
@@ -165,7 +164,6 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * EOSRIO Hyperion (eos.hyperion.eosrio.io) - EOS, as a fallback. Terms and a privacy policy were not located in this review.
 * dcrdata (explorer.dcrdata.org) - Decred. Terms and a privacy policy were not located in this review.
 * DigiExplorer (digiexplorer.info) - DigiByte. Terms and a privacy policy were not located in this review.
-* qtum.info - Qtum. Terms and a privacy policy were not located in this review.
 * BlackCoin explorer (explorer.blackcoin.nl) - BlackCoin. Terms and a privacy policy were not located in this review.
 
 = Endpoints you configure yourself =
@@ -200,7 +198,11 @@ Yes. Filters are available for redirecting verification requests, customizing th
 
 = Privacy Mode (HD): should I raise my wallet's gap limit? =
 
-Yes - as a safeguard. Privacy Mode derives a fresh address per order from your master public key. To avoid handing out an ever-growing range of addresses, the plugin returns an address to the pool for reuse **only** if the order was abandoned without paying and fresh block-explorer checks confirm the address never received anything on-chain; any address that saw funds is retired permanently. This keeps a run of abandoned checkouts from advancing the derivation index unnecessarily. As defense-in-depth, set your receiving wallet's **gap limit** (the number of consecutive unused addresses it scans from the seed - 20 by default in Electrum) comfortably above the longest run of abandoned checkouts you would expect between payments, so a paid address is always discovered on seed recovery. In Electrum this is `wallet.change_gap_limit` / the `gap_limit_for_change` and address gap-limit settings; other HD wallets have an equivalent. This wallet setting should be a backstop, not the plugin's primary protection.
+Yes. Privacy Mode derives a fresh address for every order from your master public key and never gives an address to a second order - not even one whose checkout was abandoned, because a customer can still pay it later. Abandoned checkouts therefore leave unused addresses between paid ones. When you restore your wallet from its seed, make it scan at least as far as the highest address index the plugin has used, or some payments will not appear (the funds are safe on chain). The Status screen shows that index for each Privacy Mode wallet. In Electrum, raise the gap limit from the console with `wallet.change_gap_limit(N)`; other wallets have an equivalent setting. Keep the key dedicated to this store: addresses that already have transactions are retired without being used, and many in a row suspend Privacy Mode for that coin until you confirm the key and save the settings.
+
+= After updating, some Privacy Mode orders say "held for manual review". Why? =
+
+Earlier versions judged a Privacy Mode payment by the total an address had ever received, so funds sent to an address before an order existed could mark the order paid. This version credits only transactions confirmed after the address was issued to that order. Orders that were awaiting payment when you updated have no such record, so they are held for you instead of being completed or cancelled automatically: check each address on a block explorer, confirm which transactions belong to the order, then complete or cancel it. Each order shows a Privacy Mode panel with its address and state. Addresses the plugin had prepared but not yet used are retired, and new ones are derived. Privacy Mode is no longer available for Qtum and Bitcore, whose only data sources report lifetime totals; Classic Mode still works for them.
 
 == Changelog ==
 
@@ -212,6 +214,11 @@ Yes - as a safeguard. Privacy Mode derives a fresh address per order from your m
 * Autopay: a transaction already used can never be credited to a second order
 * Autopay: order status changes you make while a payment is being settled are no longer lost; cancelling an order whose payment is still completing flags it for reconciliation
 * Autopay: expiry runs only while the background job is confirmed to be the only copy running. Without usable database locks (including MySQL before 5.7.5) expired orders wait for you, and the Status screen says why
+* Privacy Mode: only transactions confirmed after an address was issued to an order can pay it; funds it received earlier no longer count
+* Privacy Mode: each address is checked on the blockchain before it is shown and never reused; a transaction credited to one order can never pay another
+* Privacy Mode: no cancellation unless the blockchain was read completely and shows nothing arrived; at least one confirmation required; late payments are reported, never applied
+* Privacy Mode: Qtum and Bitcore are no longer offered; orders awaiting payment at update are held for review (see the FAQ)
+* WP-CLI: `wp nmmpro-hd audit` and `wp nmmpro-hd reconcile`
 * Upgrade adds a column to the plugin's payment table automatically. Before downgrading to 2.12.0, pause the background job and let in-progress cancellations settle (docs/DOWNGRADE.md in the source repository)
 
 = 2.12.0 =

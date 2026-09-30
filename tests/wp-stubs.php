@@ -53,7 +53,11 @@ if (!function_exists('esc_url')) {
 	function esc_url($url) { return $url; }
 }
 
-class WP_Error_Stub {}
+class WP_Error_Stub {
+	private $message;
+	public function __construct($message = '') { $this->message = (string) $message; }
+	public function get_error_message() { return $this->message; }
+}
 
 if (!function_exists('wp_parse_url')) {
 	function wp_parse_url($url, $component = -1) {
@@ -85,7 +89,7 @@ function nmmpro_test_http($url, $method = 'GET', $postBody = null, $headers = ar
 	$body = curl_exec($ch);
 	$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 	if ($body === false) {
-		return new WP_Error_Stub();
+		return new WP_Error_Stub(curl_error($ch));
 	}
 	return array('body' => $body, 'response' => array('code' => $code));
 }

@@ -40,8 +40,14 @@ sok('absurd autopay confirmations clamp to 100',
 	(float) with('_autopayment_required_confirmations', '99999')->get_autopay_required_confirmations('BTC') === 100.0);
 sok('in-range autopay confirmations pass through',
 	(float) with('_autopayment_required_confirmations', '6')->get_autopay_required_confirmations('BTC') === 6.0);
-sok('negative HD confirmations clamp to 0',
-	(float) with('_hd_required_confirmations', '-1')->get_hd_required_confirmations('BTC') === 0.0);
+// Privacy Mode needs a confirming block (its time attributes the payment to
+// the order), so its floor is 1, and a legacy saved 0 reads as 1.
+sok('negative HD confirmations clamp to 1',
+	(float) with('_hd_required_confirmations', '-1')->get_hd_required_confirmations('BTC') === 1.0);
+sok('a legacy zero HD confirmation setting reads as 1',
+	(float) with('_hd_required_confirmations', '0')->get_hd_required_confirmations('BTC') === 1.0);
+sok('in-range HD confirmations pass through',
+	(float) with('_hd_required_confirmations', '6')->get_hd_required_confirmations('BTC') === 6.0);
 
 // --- cancellation timers: 0 would cancel an order the instant it is placed ---
 sok('zero autopay cancellation time clamps to the 0.01h floor',

@@ -30,7 +30,10 @@ class NMMPRO_Settings {
 	const NUMERIC_BOUNDS = array(
 		'_markup'                                 => array('min' => -99.9, 'max' => 100.0, 'step' => '0.1'),
 		'_hd_percent_to_process'                  => array('min' => 0.8,   'max' => 1.0,   'step' => '0.001'),
-		'_hd_required_confirmations'              => array('min' => 0,     'max' => 100,   'step' => '1'),
+		// At least one: Privacy Mode attributes a payment to an order by the
+		// time of the block that confirmed it, and an unconfirmed payment has
+		// no such time. A legacy saved 0 is read as 1.
+		'_hd_required_confirmations'              => array('min' => 1,     'max' => 100,   'step' => '1'),
 		'_hd_order_cancellation_time_hr'          => array('min' => 0.01,  'max' => 168.0, 'step' => '0.01'),
 		'_autopayment_percent_to_process'         => array('min' => 0.985, 'max' => 1.0,   'step' => '0.0001'),
 		'_autopayment_required_confirmations'     => array('min' => 0,     'max' => 100,   'step' => '1'),
@@ -108,6 +111,12 @@ class NMMPRO_Settings {
 		$cryptos = NMMPRO_Cryptocurrencies::get();
 		$validHd = $cryptos[$cryptoId]->has_hd();
 		if ($this->hd_enabled($cryptoId) && !$validHd) {
+			return false;
+		}
+		// Privacy Mode is only offered where it can verify payments: the site's
+		// evidence schema is in place and the coin has a reviewed adapter. The
+		// mode is not silently switched; the admin screen explains why.
+		if ($this->hd_enabled($cryptoId) && !NMMPRO_Hd::automatic_available($cryptoId)) {
 			return false;
 		}
 		return $this->crypto_selected($cryptoId) && $modeEnabled;

@@ -22,6 +22,7 @@ nmmpro_test_require_plugin(array(
 	'src/NMMPRO_Sol_Retry_Repo.php',
 	'src/NMMPRO_Blockchain.php',
 	'src/NMMPRO_Exchange.php',
+	'src/NMMPRO_Hd_Evidence.php',
 ));
 
 // SOL verification touches the durable retry store; offline it no-ops (no $wpdb).
@@ -185,12 +186,30 @@ foreach ($multinet as $mnId => $mnInfo) {
 	check($mnId . ' ' . $mnInfo[0], NMMPRO_Blockchain::get_erc20_address_transactions($mnId, $mnAddr));
 }
 
-// --- HD (privacy mode) balance checks ---
-if ($run('BTC')) check('BTC hd blockchain.info', NMMPRO_Blockchain::get_blockchaininfo_total_received_for_btc_address('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', 2));
-if ($run('LTC')) check('LTC hd litecoinspace', NMMPRO_Blockchain::get_litecoinspace_total_received_for_ltc_address('LVg2kJoFNg45Nbpy53h7Fe1wKyeXVRhMH9'));
-if ($run('DOGE')) check('DOGE hd blockcypher', NMMPRO_Blockchain::get_blockcypher_total_received_for_doge_address('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'));
-if ($run('DASH')) check('DASH hd insight', NMMPRO_Blockchain::get_dashblockexplorer_total_received_for_dash_address('XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw'));
-if ($run('BTX')) { sleep(10); /* chainz etiquette */ check('BTX hd chainz', NMMPRO_Blockchain::get_chainz_total_received_for_btx_address('2LSuLfHTLdxYUCVjLDBvcmL5A9Umnvpcnv')); }
+// --- HD (privacy mode) evidence adapters ---
+// Each reviewed adapter must still answer the clean-address check (these
+// public addresses are well used, so 'used') and return well-formed incoming
+// outputs from a bounded scan. One page is enough to prove the format; an
+// address this busy legitimately reports 'page limit reached'.
+function check_hd_evidence($coin, $address) {
+	global $failures;
+	$activity = NMMPRO_Hd_Evidence::address_activity($coin, $address);
+	$tip = NMMPRO_Hd_Evidence::chain_tip($coin);
+	$scan = NMMPRO_Hd_Evidence::scan($coin, $address, time() - 365 * 86400, null, 1);
+	$scanOk = ($scan['coverage'] === 'complete' || $scan['reason'] === 'page limit reached') && count($scan['outputs']) > 0;
+	$ok = $activity['state'] === 'used' && $scanOk && $tip['height'] !== null;
+	$first = $scan['outputs'] ? $scan['outputs'][0] : null;
+	printf("%-22s %-5s %s\n", $coin . ' hd evidence', $ok ? 'ok' : 'FAIL',
+		'activity=' . $activity['state'] . ' tip=' . var_export($tip['height'], true) . ' coverage=' . $scan['coverage'] . ($scan['reason'] !== '' ? ' (' . $scan['reason'] . ')' : '')
+		. ' outputs=' . count($scan['outputs']) . ($first ? ' first=' . $first['amount_units'] . '/' . substr($first['tx_hash'], 0, 12) . ':' . $first['output_index'] . ' confs=' . $first['confirmations'] : ''));
+	if (!$ok) {
+		$failures[] = $coin . ' hd evidence';
+	}
+}
+if ($run('BTC')) check_hd_evidence('BTC', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa');
+if ($run('LTC')) check_hd_evidence('LTC', 'LVg2kJoFNg45Nbpy53h7Fe1wKyeXVRhMH9');
+if ($run('DOGE')) check_hd_evidence('DOGE', 'DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L');
+if ($run('DASH')) check_hd_evidence('DASH', 'XdAUmwtig27HBG6WfYyHAzP8n6XC9jESEw');
 
 // --- exchange rates ---
 if ($run('RATES')) {

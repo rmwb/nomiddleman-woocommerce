@@ -87,33 +87,11 @@ class NMMPRO_Gateway extends WC_Payment_Gateway {
     // We load our crypto select with valid crypto currencies
     public function payment_fields() {
 
-        $nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
-
-        $validCryptos = $nmmSettings->get_valid_selected_cryptos();
+        // Privacy Mode coins that cannot verify automatically are already left
+        // out by get_valid_selected_cryptos(). No address is derived or checked
+        // here: that costs an explorer request per page view, and the checkout
+        // allocator (NMMPRO_Hd_Allocator) derives and checks on demand.
         $excludedCryptoIds = array();
-
-        foreach ($validCryptos as $crypto) {
-            $cryptoId = $crypto->get_id();
-
-            if ($nmmSettings->hd_enabled($cryptoId)) {
-
-                $mpk = $nmmSettings->get_mpk($cryptoId);
-                $hdMode = $nmmSettings->get_hd_mode($cryptoId);
-                $hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
-
-                $count = $hdRepo->count_ready();
-
-                if ($count < 1) {
-                    try {
-                        NMMPRO_Hd::force_new_address($cryptoId, $mpk, $hdMode);
-                    }
-                    catch ( \Exception $e) {
-                        NMMPRO_Util::log(__FILE__, __LINE__, 'UNABLE TO GENERATE HD ADDRESS FOR ' . $crypto->get_name() . ' ADMIN MUST BE NOTIFIED. REMOVING CRYPTO FROM PAYMENT OPTIONS' . $e->getTraceAsString());
-                        $excludedCryptoIds[] = $cryptoId;
-                    }
-                }
-            }
-        }
 
         $selectOptions = $this->get_select_options_for_valid_cryptos($excludedCryptoIds);
 
@@ -518,25 +496,22 @@ class NMMPRO_Gateway extends WC_Payment_Gateway {
             if ($nmmSettings->hd_enabled($cryptoId)) {
                 $mpk = $nmmSettings->get_mpk($cryptoId);
                 $hdMode = $nmmSettings->get_hd_mode($cryptoId);
-                $hdRepo = new NMMPRO_Hd_Repo($cryptoId, $mpk, $hdMode);
 
-                // Atomically claim the oldest ready address for this order.
-                $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
-
-                // if none was available, derive one and try to claim again
-                if (!$orderWalletAddress) {
-                    try {
-                        NMMPRO_Hd::force_new_address($cryptoId, $mpk, $hdMode);
-                        $orderWalletAddress = $hdRepo->claim_oldest_ready($order_id, $formattedCryptoTotal);
-                    }
-                    catch ( \Exception $e) {
-                        throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce') . ' ' . esc_html($e->getMessage()));
-                    }
+                // Never issue a Privacy Mode address that nothing can verify:
+                // without the evidence schema and a reviewed adapter for the
+                // coin, the order fails here, before any address is shown.
+                // The checkout does not offer such a coin in the first place
+                // (NMMPRO_Settings::crypto_selected_and_valid); this covers an
+                // order placed before the capability changed.
+                if (!NMMPRO_Hd::automatic_available($cryptoId)) {
+                    NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode is unavailable for ' . $cryptoId . ' (' . NMMPRO_Hd::automatic_unavailable_reason($cryptoId) . '); not issuing an address for order ' . $order_id . '.', 'error');
+                    throw new \Exception(esc_html__('Automatic payment verification is currently unavailable for this cryptocurrency, so no payment address has been issued and you have not been charged. Please choose another payment option or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
                 }
 
-                if (!$orderWalletAddress) {
-                    throw new \Exception(esc_html__('Unable to get payment address for order. This order has been cancelled. Please try again or contact the site administrator.', 'nomiddleman-crypto-payments-for-woocommerce'));
-                }
+                // Reserve, freshly check on chain, and permanently bind an
+                // address to this order - or resume the order's own binding on a
+                // retried checkout. Nothing below shows it until it is bound.
+                $orderWalletAddress = NMMPRO_Hd_Allocator::allocate($cryptoId, $mpk, $hdMode, $order_id, $formattedCryptoTotal);
 
                 // keep the session copy other code paths still read
                 if ($this->session_usable()) {

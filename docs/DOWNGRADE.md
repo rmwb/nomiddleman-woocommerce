@@ -6,6 +6,14 @@ This release adds one payment-record state, `cancelling`: automatic expiry holds
 
 Do **not** rewrite these rows to `unpaid` by hand. Whether the order was actually cancelled is recorded on the order, not the payment record. Let the plugin settle each row from its order, and only while nothing can create new ones.
 
+## Privacy Mode first
+
+Earlier releases decide Privacy Mode payments from an address's lifetime total. That total is exactly what let funds received before an order existed pay it. Before downgrading, switch every Privacy Mode coin to **Classic Mode** and keep it there until this release (or a later one) is back. The full rollback rules are in `docs/HD-DEPLOYMENT.md`:
+- never restore an old database snapshot over live orders;
+- keep the evidence tables.
+
+Earlier releases leave this release's `retired` and `review` records alone, so they neither recycle retired addresses nor pay orders held for review.
+
 ## Before you start
 
 - **Only the background job creates `cancelling` rows**, and only in a pass that holds the cron lock. On a server without usable named locks, or before MySQL 5.7.5, no pass is ever exclusive (the Status screen says "Automatic cancellation ... is paused"), so this version never creates `cancelling` rows there. Check with the query in step 3. If it shows none, you can skip straight to step 5.

@@ -26,6 +26,78 @@ class NMMPRO_Admin {
         add_action('admin_init', array('NMMPRO_Address', 'flag_invalid_stored_addresses'));
         add_action('admin_init', array(__CLASS__, 'maybe_dismiss_invalid_address_notice'));
         add_action('admin_notices', array(__CLASS__, 'render_invalid_address_notice'));
+        add_action('admin_notices', array(__CLASS__, 'render_privacy_mode_notice'));
+        // Re-saving the settings acknowledges a Privacy Mode used-address
+        // suspension (see NMMPRO_Hd::force_new_address).
+        add_action('update_option_' . NMMPRO_REDUX_ID, array('NMMPRO_Hd', 'clear_allocation_limits'));
+        // Read-only Privacy Mode panel on the order screen (legacy and HPOS).
+        add_action('add_meta_boxes', array('NMMPRO_Hd_Order_Panel', 'register'), 10, 2);
+    }
+
+    /**
+     * Privacy Mode that cannot run automatically, and legacy Privacy Mode
+     * orders held for manual review. Both need the merchant: an unavailable
+     * coin is no longer offered at checkout, and a held order is never
+     * completed or cancelled automatically.
+     */
+    public static function render_privacy_mode_notice() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID, array()));
+        $schemaPending = false;
+        $unsupported = array();
+        $limited = array();
+        foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
+            $cid = $crypto->get_id();
+            if (!$crypto->has_hd() || !$settings->crypto_selected($cid) || !$settings->hd_enabled($cid)) {
+                continue;
+            }
+            $reason = NMMPRO_Hd::automatic_unavailable_reason($cid);
+            if ($reason === 'schema') {
+                $schemaPending = true;
+            }
+            elseif ($reason === 'unsupported') {
+                $unsupported[] = $cid;
+            }
+            elseif ($reason === 'allocation_limit') {
+                $limited[] = $cid;
+            }
+        }
+
+        $held = 0;
+        if (NMMPRO_Hd_Schema::ready()) {
+            global $wpdb;
+            $held = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$wpdb->prefix}" . NMMPRO_HD_TABLE . "` WHERE `status` = 'review'"); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared -- table name from wpdb's prefix and a plugin constant; no variable input.
+        }
+
+        if (!$schemaPending && $unsupported === array() && $limited === array() && $held === 0) {
+            return;
+        }
+        ?>
+        <div class="notice notice-warning">
+            <p><strong><?php esc_html_e('Nomiddleman Crypto Payments: Privacy Mode needs your attention.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></strong></p>
+            <?php if ($schemaPending) : ?>
+                <p><?php esc_html_e('Privacy Mode is paused on this site until its database upgrade completes. The upgrade retries automatically on every page load; if this notice persists, the plugin log shows why (usually database permissions). No Privacy Mode address is issued, and no order is completed or cancelled automatically, until then.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+            <?php endif; ?>
+            <?php if ($unsupported !== array()) : ?>
+                <p><?php
+                    /* translators: %s: comma-separated cryptocurrency tickers */
+                    printf(esc_html__('Privacy Mode can no longer verify payments automatically for: %s. These coins are not offered at checkout in Privacy Mode. Switch them to Classic Mode, or disable them, in the settings.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html(implode(', ', $unsupported))); ?></p>
+            <?php endif; ?>
+            <?php if ($limited !== array()) : ?>
+                <p><?php
+                    /* translators: %s: comma-separated cryptocurrency tickers */
+                    printf(esc_html__('Privacy Mode is suspended for %s: many consecutive addresses derived from your master public key already had transactions on chain, so another wallet or store may be using the same key. No address was reused. Check that this key belongs to this store alone (or enter a dedicated one), then save the settings to resume.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html(implode(', ', $limited))); ?></p>
+            <?php endif; ?>
+            <?php if ($held > 0) : ?>
+                <p><?php
+                    /* translators: %d: number of Privacy Mode address records */
+                    printf(esc_html(_n('%d Privacy Mode order was awaiting payment under the previous verification method and is held for manual review. It will not be completed or cancelled automatically: check the address on a block explorer, confirm which transactions belong to the order, then complete or cancel the order yourself.', '%d Privacy Mode orders were awaiting payment under the previous verification method and are held for manual review. They will not be completed or cancelled automatically: check each address on a block explorer, confirm which transactions belong to the order, then complete or cancel the order yourself.', $held, 'nomiddleman-crypto-payments-for-woocommerce')), (int) $held); ?></p>
+            <?php endif; ?>
+        </div>
+        <?php
     }
 
     /**
@@ -293,7 +365,11 @@ class NMMPRO_Admin {
                     <p><strong><?php
                         /* translators: %s: cryptocurrency name */
                         printf(esc_html__('The mode previously configured for %s can no longer verify payments', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($crypto->get_name())); ?></strong> &mdash;
-                    <?php esc_html_e('every public API for it has shut down. Orders in this mode will never confirm automatically. Please switch to Classic Mode (manual confirmation) below and save.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></p>
+                    <?php if ($mode === '2') :
+                        esc_html_e('Privacy Mode now requires transaction evidence that attributes each payment to its order, and no reviewed source provides it for this coin. It is no longer offered at checkout, and existing Privacy Mode orders need manual review. Please switch to Classic Mode (manual confirmation) below and save.', 'nomiddleman-crypto-payments-for-woocommerce');
+                    else :
+                        esc_html_e('every public API for it has shut down. Orders in this mode will never confirm automatically. Please switch to Classic Mode (manual confirmation) below and save.', 'nomiddleman-crypto-payments-for-woocommerce');
+                    endif; ?></p>
                 </div>
             <?php endif; ?>
 
@@ -305,7 +381,7 @@ class NMMPRO_Admin {
                     endif; ?>
                     <?php if (!$hdAvailable && $crypto->has_hd()) :
                         /* translators: %s: cryptocurrency ticker */
-                        printf(esc_html__('Privacy Mode is unavailable for %s: no working balance API exists anymore.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($cid));
+                        printf(esc_html__('Privacy Mode is unavailable for %s: no reviewed source provides the per-transaction evidence needed to tell a new payment from funds the address received before.', 'nomiddleman-crypto-payments-for-woocommerce'), esc_html($cid));
                     endif; ?>
                 </p>
             <?php endif; ?>
@@ -468,7 +544,7 @@ class NMMPRO_Admin {
                     __('Privacy Mode will automatically confirm payments that are this percentage of the total amount requested. (1 = 100%), (0.94 = 94%)', 'nomiddleman-crypto-payments-for-woocommerce'));
                 self::render_number_row($cid, '_hd_required_confirmations', __('Privacy Mode Required Confirmations', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_hd_required_confirmations', '2'), '2',
-                    __('The number of confirmations a payment needs before it is considered a valid payment.', 'nomiddleman-crypto-payments-for-woocommerce'));
+                    __('The number of confirmations a payment needs before it is considered a valid payment. At least 1: Privacy Mode only counts a payment once it is in a block, because the block\'s time is what shows the payment was made after the order.', 'nomiddleman-crypto-payments-for-woocommerce'));
                 self::render_number_row($cid, '_hd_order_cancellation_time_hr', __('Privacy Mode Order Cancellation Timer (hr)', 'nomiddleman-crypto-payments-for-woocommerce'),
                     self::value($values, $cid . '_hd_order_cancellation_time_hr', '24'), '2',
                     __('Hours that have to elapse before an order is cancelled automatically. (1.5 = 1 hour 30 minutes)', 'nomiddleman-crypto-payments-for-woocommerce'));
