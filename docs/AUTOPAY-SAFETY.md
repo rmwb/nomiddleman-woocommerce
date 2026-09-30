@@ -37,6 +37,12 @@ Every Autopay order has a WooCommerce order and a row in the plugin's payment ta
 
    One thing is written: WooCommerce's exception handler adds an internal error note to the order, recording that the save failed. Anything listening for new order notes sees it. Checked against WooCommerce 10.0, 10.8, 11.0 and 11.1.
 
+   The check judges one save: the first that would store the order as cancelled. Once that save has passed, later saves of the same order within the same cancellation are not checked. Two things make such saves:
+   - WooCommerce itself saves a second copy of the order under HPOS, for its coupon usage bookkeeping when an order is cancelled;
+   - an integration may re-save the order from a status hook.
+
+   Both see the order already stored as cancelled, which the check would otherwise misread as "the order changed".
+
    Clearing the transition needs a protected WooCommerce property. Before claiming a cancellation, the canceller checks that it exists, and does not cancel at all if it does not.
 7. **Order events never run DDL.** The `lease_gen` column comes from a migration that runs only when the site loads and on activation. It never runs from an order event, where `ALTER TABLE` would implicitly commit a caller's open transaction.
 

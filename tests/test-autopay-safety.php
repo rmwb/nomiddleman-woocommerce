@@ -1138,10 +1138,56 @@ NMMPRO_Payment::cancel_expired_payments();
 asok('  once recorded, the lease settles paid', as_row($o44) === 'paid', 'row=' . as_row($o44));
 asok('  and the expired order is cancelled', as_row($o45) === 'cancelled' && as_stored($o45) === 'wc-cancelled', 'row=' . as_row($o45) . ' stored=' . as_stored($o45));
 
+// --- 33. saves after the approved cancellation are not refused ------------------
+// Once the fence has passed the cancellation and WooCommerce is writing it,
+// the order may be saved again inside the same update_status(): WooCommerce
+// itself saves a second copy under HPOS (coupon usage bookkeeping on
+// woocommerce_order_status_cancelled), and an integration may re-save the
+// object it was handed. Both see the order already stored as cancelled; the
+// fence must not read that as "the order changed" and refuse.
+$as_meta = function ($orderId, $key) use ($wpdb) {
+	$util = '\\Automattic\\WooCommerce\\Utilities\\OrderUtil';
+	if (class_exists($util) && $util::custom_orders_table_usage_is_enabled()) {
+		return $wpdb->get_var($wpdb->prepare('SELECT `meta_value` FROM `' . $wpdb->prefix . 'wc_orders_meta` WHERE `order_id` = %d AND `meta_key` = %s', $orderId, $key));
+	}
+	return $wpdb->get_var($wpdb->prepare("SELECT `meta_value` FROM `{$wpdb->postmeta}` WHERE `post_id` = %d AND `meta_key` = %s", $orderId, $key));
+};
+list($o46) = $make('_resave_copy', 'pending', $expiredAt);
+list($o47) = $make('_resave_same', 'pending', $expiredAt);
+$GLOBALS['as_resaved'] = array();
+$resave = function ($orderId, $order) use ($o46, $o47) {
+	if ((int) $orderId === $o46) {
+		$copy = new WC_Order($o46);                 // a second copy, as WooCommerce's coupon bookkeeping does
+		$copy->update_meta_data('_nmm_resaved', 'copy');
+		$copy->save();
+		$GLOBALS['as_resaved'][] = $o46;
+	}
+	if ((int) $orderId === $o47) {
+		$order->update_meta_data('_nmm_resaved', 'same');  // the very object being cancelled
+		$order->save();
+		$GLOBALS['as_resaved'][] = $o47;
+	}
+};
+add_action('woocommerce_order_status_cancelled', $resave, 10, 2);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_order_status_cancelled', $resave, 10);
+foreach (array(array($o46, 'copy', 'a second copy'), array($o47, 'same', 'the same object')) as $case) {
+	list($id, $meta, $label) = $case;
+	$told = false; $refusedNote = false;
+	foreach (wc_get_order_notes(array('order_id' => $id)) as $note) {
+		if (strpos($note->content, 'unable to pay') !== false) { $told = true; }
+		if (strpos($note->content, 'refused to save') !== false) { $refusedNote = true; }
+	}
+	asok('re-saved as ' . $label . ' after the cancellation: cancelled, settled', in_array($id, $GLOBALS['as_resaved'], true) && as_stored($id) === 'wc-cancelled' && as_row($id) === 'cancelled', 'stored=' . as_stored($id) . ' row=' . as_row($id));
+	asok('  the re-save was stored, not refused', $as_meta($id, '_nmm_resaved') === $meta && !$refusedNote, 'meta=' . var_export($as_meta($id, '_nmm_resaved'), true) . ' refused-note=' . var_export($refusedNote, true));
+	asok('  and the customer was told it was cancelled', $told);
+}
+
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }
