@@ -1884,7 +1884,28 @@ class NMMPRO_Blockchain {
 		);
 	}
 
-	public static function get_erc20_address_transactions($cryptoId, $address) {
+	/**
+	 * Incoming transfers of an ERC-20 token to $address, newest first.
+	 *
+	 * Sources, the second tried only when the first could not answer (a
+	 * transport error, a non-200 status, a host in backoff or a malformed
+	 * body):
+	 *  1. the chain's Blockscout instance;
+	 *  2. public JSON-RPC nodes, read log by log (NMMPRO_Evm_Transfers).
+	 *
+	 * (Routescan serves the same tokentx response keylessly for Ethereum, but
+	 * its API terms reserve use of the data for informational and personal
+	 * purposes and bar relying on it for commercial decisions without written
+	 * approval, so it is not used.)
+	 *
+	 * $lookbackSec is how far back the caller will reason about the result.
+	 * The explorer pages ignore it (they return the newest rows and report
+	 * their page for the truncation check); the JSON-RPC source must cover
+	 * it completely or fail. When every source fails the result is an error,
+	 * and the caller's existing deferral applies: nothing is matched,
+	 * certified or expired on this address this pass.
+	 */
+	public static function get_erc20_address_transactions($cryptoId, $address, $lookbackSec = 0) {
 		$cryptos = NMMPRO_Cryptocurrencies::get();
 		$contract = isset($cryptos[$cryptoId]) ? (string) $cryptos[$cryptoId]->get_erc20_contract() : '';
 
@@ -1895,51 +1916,82 @@ class NMMPRO_Blockchain {
 			);
 		}
 
+		$chainId = NMMPRO_Cryptocurrencies::evm_chain_id($cryptoId);
 		$host = isset(self::$blockscoutHosts[$cryptoId]) ? self::$blockscoutHosts[$cryptoId] : 'eth.blockscout.com';
+		$query = 'module=account&action=tokentx&address=' . rawurlencode($address) . '&contractaddress=' . $contract . '&page=1&offset=100&sort=desc';
 
-		$request = 'https://' . $host . '/api?module=account&action=tokentx&address=' . rawurlencode($address) . '&contractaddress=' . $contract . '&page=1&offset=100&sort=desc';
+		$result = self::get_tokentx_page('https://' . $host . '/api?' . $query, $address, $contract);
+		if ($result['result'] === 'success') {
+			return $result;
+		}
+
+		$lookbackSec = (int) $lookbackSec > 0 ? (int) $lookbackSec : self::ERC20_DEFAULT_LOOKBACK_SEC;
+		$result = NMMPRO_Evm_Transfers::fetch($chainId, $contract, $address, $lookbackSec);
+		if ($result['result'] === 'success') {
+			NMMPRO_Util::log(__FILE__, __LINE__, $cryptoId . ': Blockscout could not answer; transfers were read from the JSON-RPC node ' . $result['source'] . '.', 'warning');
+			return $result;
+		}
+
+		return array(
+			'result' => 'error',
+			'message' => 'No source could list the transfers',
+		);
+	}
+
+	// The lookback the JSON-RPC source covers when a caller does not say how
+	// far back it reasons: longer than the matcher's window, so the answer
+	// can only cover more than is needed, never less.
+	const ERC20_DEFAULT_LOOKBACK_SEC = 21600;
+
+	/**
+	 * One Etherscan-style tokentx page (as Blockscout serves it) as incoming
+	 * transfers of $contract to $address. Any transport
+	 * failure or unexpected body is an error, never an empty success, so the
+	 * caller can try its next source.
+	 */
+	private static function get_tokentx_page($request, $address, $contract) {
+		$error = array(
+			'result' => 'error',
+			'total_received' => '',
+		);
 
 		$response = self::api_get($request);
 
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
 
-			$result = array(
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
+			return $error;
 		}
 
 		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
 
-		$rawTransactions = $body->result;
+		$rawTransactions = (is_object($body) && isset($body->result)) ? $body->result : null;
 		if (!is_array($rawTransactions)) {
-			$result = array(
+			return array(
 				'result' => 'error',
 				'message' => 'No transactions found',
 			);
-
-			return $result;
 		}
 
 		// Report the RAW page (both directions) for the truncation check -
 		// the incoming-only subset below can look short while the page the
 		// explorer served was full.
 		$rawOldestTs = null;
-		foreach ($rawTransactions as $rawTransaction) {
-			$ts = isset($rawTransaction->timeStamp) ? (int) $rawTransaction->timeStamp : null;
-			if ($ts !== null && ($rawOldestTs === null || $ts < $rawOldestTs)) {
-				$rawOldestTs = $ts;
-			}
-		}
-		self::note_raw_page(count($rawTransactions), $rawOldestTs);
-
 		$transactions = array();
 
-		foreach($rawTransactions as $rawTransaction) {
+		foreach ($rawTransactions as $rawTransaction) {
+			// A row without the fields the matcher relies on means this is
+			// not the response we asked for: fail, so another source is tried.
+			if (!is_object($rawTransaction)
+				|| !isset($rawTransaction->to, $rawTransaction->value, $rawTransaction->confirmations, $rawTransaction->timeStamp, $rawTransaction->hash)
+				|| !is_string($rawTransaction->to) || !is_string($rawTransaction->hash)) {
+				return $error;
+			}
 
+			$ts = (int) $rawTransaction->timeStamp;
+			if ($rawOldestTs === null || $ts < $rawOldestTs) {
+				$rawOldestTs = $ts;
+			}
 
 			if (strtolower($rawTransaction->to) === strtolower($address)
 				&& isset($rawTransaction->contractAddress)
@@ -1948,16 +2000,44 @@ class NMMPRO_Blockchain {
 				$transactions[] = new NMMPRO_Transaction($rawTransaction->value,
 												  $rawTransaction->confirmations,
 												  $rawTransaction->timeStamp,
-												  $rawTransaction->hash);
+												  strtolower($rawTransaction->hash));
 			}
 		}
 
-		$result = array (
+		self::note_raw_page(count($rawTransactions), $rawOldestTs);
+
+		return array(
 			'result' => 'success',
 			'transactions' => $transactions,
 		);
+	}
 
-		return $result;
+	/**
+	 * One JSON-RPC call to an EVM node, for NMMPRO_Evm_Transfers. Returns
+	 * array('result' => 'success', 'value' => mixed) or array('result' =>
+	 * 'error'). The per-host backoff and the nmmpro_api_url filter apply as
+	 * for every other request.
+	 */
+	public static function evm_rpc($url, $method, $params) {
+		$response = self::api_post($url, array(
+			'headers'    => array('Content-Type' => 'application/json'),
+			'user-agent' => self::get_user_agent_string(),
+			'body'       => wp_json_encode(array('jsonrpc' => '2.0', 'id' => 1, 'method' => $method, 'params' => $params)),
+		));
+
+		if (is_wp_error($response) || $response['response']['code'] !== 200) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($url) . ' ' . $method . ' ): ' . NMMPRO_Util::summarize_response($response));
+			return array('result' => 'error');
+		}
+
+		$body = json_decode($response['body'], true);
+
+		if (!is_array($body) || isset($body['error']) || !array_key_exists('result', $body)) {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'JSON-RPC error ( ' . NMMPRO_Util::redact_url($url) . ' ' . $method . ' ): ' . NMMPRO_Util::summarize_response($response));
+			return array('result' => 'error');
+		}
+
+		return array('result' => 'success', 'value' => $body['result']);
 	}
 
 	public static function get_trc20_usdt_address_transactions($address) {

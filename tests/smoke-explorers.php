@@ -23,7 +23,13 @@ nmmpro_test_require_plugin(array(
 	'src/NMMPRO_Blockchain.php',
 	'src/NMMPRO_Exchange.php',
 	'src/NMMPRO_Hd_Evidence.php',
+	'src/NMMPRO_Compat.php',
+	'src/NMMPRO_Evm_Transfers.php',
 ));
+
+if (!function_exists('wp_json_encode')) {
+	function wp_json_encode($data) { return json_encode($data); }
+}
 
 // SOL verification touches the durable retry store; offline it no-ops (no $wpdb).
 if (!defined('NMMPRO_SOL_RETRY_TABLE')) { define('NMMPRO_SOL_RETRY_TABLE', 'nmmpro_sol_retry'); }
@@ -184,6 +190,76 @@ foreach ($multinet as $mnId => $mnInfo) {
 	if ($mnAddr === '') { printf("%-22s %-5s %s\n", $mnId, 'FAIL', 'no recipient harvested'); $failures[] = $mnId; continue; }
 	sleep(5);
 	check($mnId . ' ' . $mnInfo[0], NMMPRO_Blockchain::get_erc20_address_transactions($mnId, $mnAddr));
+}
+
+// --- ERC-20 fallback sources (issue #17) ---
+// Used only when Blockscout cannot answer, so they are probed directly here:
+// every JSON-RPC node of every chain must list a recent recipient's
+// transfers over the matcher's lookback. The recipient is harvested from a node, not from
+// Blockscout, so this section does not depend on the primary being up.
+if ($run('FALLBACK')) {
+	$fallbackTokens = array(
+		1     => array('USDT',    '0xdAC17F958D2ee523a2206206994597C13D831ec7', 5),
+		137   => array('USDTPOL', '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', 20),
+		42161 => array('USDTARB', '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', 40),
+		8453  => array('USDCBAS', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', 5),
+	);
+	$fetchFrom = new ReflectionMethod('NMMPRO_Evm_Transfers', 'fetch_from');
+	$fetchFrom->setAccessible(true);
+
+	foreach ($fallbackTokens as $chainId => $token) {
+		$nodes = NMMPRO_Evm_Transfers::nodes($chainId);
+
+		// Up to three distinct recent recipients, newest first. Public nodes
+		// rate-limit bursts, so two rounds with a pause between them.
+		$recipients = array();
+		for ($round = 0; $round < 2 && !$recipients; $round++) {
+			if ($round > 0) { sleep(20); $GLOBALS['nmmpro_test_transients'] = array(); }
+			foreach ($nodes as $node) {
+				$tip = NMMPRO_Blockchain::evm_rpc($node[0], 'eth_blockNumber', array());
+				if ($tip['result'] !== 'success') { continue; }
+				$tipNumber = hexdec(substr($tip['value'], 2));
+				$recent = NMMPRO_Blockchain::evm_rpc($node[0], 'eth_getLogs', array(array(
+					'address' => $token[1], 'fromBlock' => '0x' . dechex($tipNumber - $token[2]), 'toBlock' => '0x' . dechex($tipNumber),
+					'topics' => array(NMMPRO_Evm_Transfers::TRANSFER_TOPIC),
+				)));
+				if ($recent['result'] !== 'success' || !is_array($recent['value'])) { continue; }
+				foreach (array_reverse($recent['value']) as $log) {
+					$candidate = '0x' . substr($log['topics'][2], 26);
+					if (!in_array($candidate, $recipients, true)) { $recipients[] = $candidate; }
+					if (count($recipients) === 3) { break; }
+				}
+				if ($recipients) { break; }
+			}
+		}
+		if (!$recipients) { printf("%-22s %-5s %s\n", $token[0] . ' json-rpc', 'FAIL', 'no recipient harvested'); $failures[] = $token[0] . ' json-rpc'; continue; }
+
+		// A node passes when it lists one of these recipients completely. A
+		// very busy address can legitimately exceed the request budget (on
+		// Arbitrum every transfer needs a header), so a failure counts only
+		// when all three fail, each retried once after a pause.
+		foreach ($nodes as $node) {
+			$host = (string) parse_url($node[0], PHP_URL_HOST);
+			$result = array('result' => 'error', 'message' => 'not tried');
+			$reasons = array();
+			foreach ($recipients as $recipient) {
+				for ($attempt = 0; $attempt < 2; $attempt++) {
+					sleep($attempt > 0 ? 20 : 1);
+					if ($attempt > 0) { $GLOBALS['nmmpro_test_transients'] = array(); }
+					try {
+						$result = $fetchFrom->invoke(null, $node[0], $node[1], $chainId, strtolower($token[1]), strtolower($recipient), 3 * 3600 + NMMPRO_Evm_Transfers::MARGIN_SEC);
+					} catch (\Throwable $e) {
+						$result = array('result' => 'error', 'message' => $e->getMessage());
+					}
+					NMMPRO_Blockchain::take_raw_page_meta();
+					if ($result['result'] === 'success') { break 2; }
+				}
+				$reasons[] = substr($recipient, 0, 10) . ': ' . (isset($result['message']) ? $result['message'] : 'failed');
+			}
+			if ($result['result'] !== 'success') { echo '   ' . $host . ' - ' . implode('; ', $reasons) . "\n"; }
+			check($token[0] . ' ' . $host, $result);
+		}
+	}
 }
 
 // --- HD (privacy mode) evidence adapters ---
