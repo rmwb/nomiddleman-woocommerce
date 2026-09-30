@@ -98,7 +98,7 @@ jobs:
             php-stubs/wordpress-stubs:6.9.4 \
             php-stubs/woocommerce-stubs:10.9.4
       - name: Analyse plugin code (new findings only, see phpstan-baseline.neon)
-        run: vendor/bin/phpstan analyse -c phpstan.neon.dist --no-progress --memory-limit=1G
+        run: vendor/bin/phpstan analyse -c phpstan.neon.dist --no-progress --memory-limit=2G
 
   hd-derivation:
     name: HD address derivation (offline)
