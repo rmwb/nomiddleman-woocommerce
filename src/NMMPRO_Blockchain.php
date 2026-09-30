@@ -128,324 +128,92 @@ class NMMPRO_Blockchain {
 	}
 
 
-	public static function get_blockchaininfo_total_received_for_btc_address($address, $requiredConfirmations) {
-		$userAgentString = self::get_user_agent_string();
-		$request = 'https://blockchain.info/q/getreceivedbyaddress/' . rawurlencode($address) . '?confirmations=' . $requiredConfirmations;
+	/**
+	 * BlockCypher's address summary, for a Privacy Mode clean-address check.
+	 * Returns the raw counters (decoded with big integers kept as strings) so
+	 * the caller can validate every one; 'error' on any transport or HTTP
+	 * failure. Never cached: a clean check must see the chain as it is now.
+	 *
+	 * Per BlockCypher's documentation total_received and n_tx count CONFIRMED
+	 * activity only; unconfirmed_n_tx, unconfirmed_balance and final_n_tx
+	 * cover the mempool.
+	 */
+	public static function get_blockcypher_address_summary($chain, $address) {
+		$request = 'https://api.blockcypher.com/v1/' . rawurlencode($chain) . '/main/addrs/' . rawurlencode($address) . '/balance' . self::blockcypher_token_query(false);
 
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-
+		$response = self::api_get($request, array('user-agent' => self::get_user_agent_string()));
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
+			return array('result' => 'error');
 		}
 
-		$totalReceivedSatoshi = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
-		$result = array (
-			'result' => 'success',
-			'total_received' => NMMPRO_Amount::from_units((string) $totalReceivedSatoshi, 8),
-		);
+		$body = json_decode($response['body'], true, 512, JSON_BIGINT_AS_STRING);
+		if (!is_array($body)) {
+			return array('result' => 'error');
+		}
 
-		return $result;
+		return array('result' => 'success', 'source' => 'blockcypher', 'body' => $body);
 	}
 
-	public static function get_mempoolspace_total_received_for_btc_address($address) {
-		$userAgentString = self::get_user_agent_string();
+	/**
+	 * One page of BlockCypher's address history, for Privacy Mode evidence.
+	 * Confirmed references come newest first in `txrefs`; unconfirmed ones in
+	 * `unconfirmed_txrefs`. `before` pages downward by block height (exclusive)
+	 * and `hasMore` says whether older references exist. Decoded with big
+	 * integers kept as strings; never cached.
+	 */
+	public static function get_blockcypher_address_page($chain, $address, $before = null, $limit = 50) {
+		$query = '?limit=' . (int) $limit . ($before !== null ? '&before=' . (int) $before : '');
+		$request = 'https://api.blockcypher.com/v1/' . rawurlencode($chain) . '/main/addrs/' . rawurlencode($address) . $query . self::blockcypher_token_query(true);
 
-		$request = 'https://mempool.space/api/address/' . rawurlencode($address);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
+		$response = self::api_get($request, array('user-agent' => self::get_user_agent_string()));
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
+			return array('result' => 'error');
 		}
 
-		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
-
-		if (!isset($body->chain_stats->funded_txo_sum)) {
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceivedSatoshi = $body->chain_stats->funded_txo_sum;
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => NMMPRO_Amount::from_units((string) $totalReceivedSatoshi, 8),
-		);
-
-		return $result;
+		$body = json_decode($response['body'], true, 512, JSON_BIGINT_AS_STRING);
+		return is_array($body) ? array('result' => 'success', 'body' => $body) : array('result' => 'error');
 	}
 
-	public static function get_blockstream_total_received_for_btc_address($address) {
-		$userAgentString = self::get_user_agent_string();
+	/**
+	 * BlockCypher's chain summary (its `height` is the current tip), recorded
+	 * when a Privacy Mode address is bound. Never cached.
+	 */
+	public static function get_blockcypher_chain($chain) {
+		$request = 'https://api.blockcypher.com/v1/' . rawurlencode($chain) . '/main' . self::blockcypher_token_query(false);
 
-		$request = 'https://blockstream.info/api/address/' . rawurlencode($address);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
+		$response = self::api_get($request, array('user-agent' => self::get_user_agent_string()));
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
+			return array('result' => 'error');
 		}
 
-		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
-
-		if (!isset($body->chain_stats->funded_txo_sum)) {
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceivedSatoshi = $body->chain_stats->funded_txo_sum;
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => NMMPRO_Amount::from_units((string) $totalReceivedSatoshi, 8),
-		);
-
-		return $result;
+		$body = json_decode($response['body'], true, 512, JSON_BIGINT_AS_STRING);
+		return is_array($body) ? array('result' => 'success', 'body' => $body) : array('result' => 'error');
 	}
 
-	public static function get_blockcypher_total_received_for_ltc_address($address, $requiredConfirmations) {
-		$userAgentString = self::get_user_agent_string();
+	/**
+	 * A GET against an Esplora API (mempool.space, litecoinspace), for
+	 * Privacy Mode evidence. $json false returns the trimmed body (the tip
+	 * height endpoint answers in plain text). Never cached.
+	 */
+	public static function get_esplora($base, $path, $json = true) {
+		$request = rtrim($base, '/') . $path;
 
-		$request = 'https://api.blockcypher.com/v1/ltc/main/addrs/' . rawurlencode($address) . '?confirmations=' . $requiredConfirmations . self::blockcypher_token_query(true);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
+		$response = self::api_get($request, array('user-agent' => self::get_user_agent_string()));
 		if (is_wp_error($response) || $response['response']['code'] !== 200) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
+			return array('result' => 'error');
 		}
 
-		$totalReceivedMmltc = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING)->total_received;
-		$totalReceived = NMMPRO_Amount::from_units((string) $totalReceivedMmltc, 8);
+		if (!$json) {
+			return array('result' => 'success', 'body' => trim((string) $response['body'], " \n\r\t\v\x00"));
+		}
 
-		$result = array (
-			'result' => 'success',
-			'total_received' => $totalReceived,
-		);
-
-		return $result;
+		$body = json_decode($response['body'], true, 512, JSON_BIGINT_AS_STRING);
+		return is_array($body) ? array('result' => 'success', 'body' => $body) : array('result' => 'error');
 	}
-
-	public static function get_litecoinspace_total_received_for_ltc_address($address) {
-		$userAgentString = self::get_user_agent_string();
-
-		$request = 'https://litecoinspace.org/api/address/' . rawurlencode($address);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
-
-		if (!isset($body->chain_stats->funded_txo_sum)) {
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceived = NMMPRO_Amount::from_units((string) $body->chain_stats->funded_txo_sum, 8);
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => $totalReceived,
-		);
-
-		return $result;
-	}
-
-	public static function get_qtuminfo_total_received_for_qtum_address($address) {
-		$userAgentString = self::get_user_agent_string();
-
-		$request = 'https://qtum.info/api/address/' . rawurlencode($address);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceived = NMMPRO_Amount::from_units((string) json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING)->totalReceived, 8);
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => $totalReceived,
-		);
-
-		return $result;
-	}
-
-	public static function get_dashblockexplorer_total_received_for_dash_address($address) {
-		$userAgentString = self::get_user_agent_string();
-
-		$request = 'https://insight.dash.org/insight-api/addr/' . rawurlencode($address) . '/totalReceived';
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceived = NMMPRO_Amount::from_units((string) json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING), 8);
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => $totalReceived,
-		);
-
-		return $result;
-	}
-
-	public static function get_blockcypher_total_received_for_doge_address($address) {
-		$userAgentString = self::get_user_agent_string();
-
-		$request = 'https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($address) . '/balance' . self::blockcypher_token_query(false);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$body = json_decode($response['body'], false, 512, JSON_BIGINT_AS_STRING);
-
-		if (!isset($body->total_received)) {
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => NMMPRO_Amount::from_units((string) $body->total_received, 8),
-		);
-
-		return $result;
-	}
-
-
-	public static function get_chainz_total_received_for_btx_address($address) {
-		$userAgentString = self::get_user_agent_string();
-
-		// chainz answers this query keyless; returns a plain decimal BTX amount.
-		// Their API etiquette asks for at most one request every 10 seconds.
-		$request = 'https://chainz.cryptoid.info/btx/api.dws?q=getreceivedbyaddress&a=' . rawurlencode($address);
-
-		$args = array(
-			'user-agent' => $userAgentString
-		);
-
-		$response = self::api_get($request, $args);
-		if (is_wp_error($response) || $response['response']['code'] !== 200 || !is_numeric(trim($response['body'], " \n\r\t\v\x00"))) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'FAILED API CALL ( ' . NMMPRO_Util::redact_url($request) . ' ): ' . NMMPRO_Util::summarize_response($response));
-			$result = array (
-				'result' => 'error',
-				'total_received' => '',
-			);
-
-			return $result;
-		}
-
-		$totalReceived = NMMPRO_Amount::normalize(trim($response['body'], " \n\r\t\v\x00"));
-
-		$result = array (
-			'result' => 'success',
-			'total_received' => $totalReceived,
-		);
-
-		return $result;
-	}
-
 
 	public static function get_ada_address_transactions($address) {
 		// Koios public tier: list txs for the address, then fetch each tx's outputs

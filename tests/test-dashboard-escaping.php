@@ -35,6 +35,7 @@ if (!defined('ABSPATH')) { define('ABSPATH', sys_get_temp_dir() . '/'); }
 if (!defined('NMMPRO_REDUX_ID')) { define('NMMPRO_REDUX_ID', 'nmmpro_redux_options'); }
 if (!defined('NMMPRO_REDUX_SLUG')) { define('NMMPRO_REDUX_SLUG', 'nmmpro_options'); }
 if (!defined('NMMPRO_PAYMENT_TABLE')) { define('NMMPRO_PAYMENT_TABLE', 'nmmpro_payments'); }
+if (!defined('NMMPRO_HD_TABLE')) { define('NMMPRO_HD_TABLE', 'nmmpro_hd_addresses'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
 if (!defined('HOUR_IN_SECONDS')) { define('HOUR_IN_SECONDS', 3600); }
 
@@ -90,6 +91,8 @@ function get_option($key, $default = array()) {
 		'nmmpro_autopay_scan_covered_at'  => array('BTC' => time() - 60),
 		'nmmpro_autopay_unfenced'         => $GLOBALS['nmmpro_test_unfenced'],
 		'nmmpro_autopay_scan_lane'        => $GLOBALS['nmmpro_test_lane'],
+		// Privacy Mode schema in place, so the wallet-recovery section renders.
+		'nmmpro_hd_table_version'         => '1.5',
 		'date_format'                  => 'Y-m-d',
 		'time_format'                  => 'H:i',
 	);
@@ -124,6 +127,14 @@ class NMMPRO_Test_Wpdb {
 		return (strpos($query, 'SHOW TABLES') !== false) ? $this->prefix . 'woocommerce_log' : null;
 	}
 
+	// The Privacy Mode wallet-recovery summary (NMMPRO_Hd_Repo::index_summary).
+	public function get_row($query, $output = null) {
+		if (strpos($query, 'MAX(`mpk_index`) AS derived') !== false) {
+			return array('derived' => '41', 'issued' => '37', 'unused_issued' => '12');
+		}
+		return null;
+	}
+
 	public function get_results($query, $output = null) {
 		if (strpos($query, 'woocommerce_log') !== false) {
 			return array(
@@ -151,6 +162,9 @@ require $root . '/src/NMMPRO_Cryptocurrencies.php';
 require $root . '/src/NMMPRO_Settings.php';
 require $root . '/src/NMMPRO_Payment_Repo.php';
 require $root . '/src/NMMPRO_Log_Repo.php';
+require $root . '/src/NMMPRO_Hd_Schema.php';
+require $root . '/src/NMMPRO_Hd_Evidence.php';
+require $root . '/src/NMMPRO_Hd_Repo.php';
 require $root . '/src/NMMPRO_Dashboard.php';
 
 $failed = false;
@@ -185,6 +199,10 @@ dok('quotes and ampersands in a log message are escaped',
 // start a real tag or an HTML comment.
 dok('no data-derived tag survived into the markup',
 	preg_match('/<(?!\/?(?:div|h1|h2|p|a|table|thead|tbody|tr|th|td|br|strong|code|em|span|!--)\b)/i', $html) === 0);
+
+// Privacy Mode wallet recovery: the scan range is shown for the HD coin.
+dok('the wallet-recovery scan range is shown',
+	strpos($html, 'Privacy Mode wallet recovery') !== false && strpos($html, '<td>37</td>') !== false && strpos($html, '<td>41</td>') !== false);
 
 // Secrets: the screen reports that an MPK exists, never what it is.
 dok('the master public key is never printed',

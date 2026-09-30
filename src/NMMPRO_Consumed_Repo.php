@@ -156,6 +156,142 @@ class NMMPRO_Consumed_Repo {
             return NMMPRO_Payment_Repo::CLAIM_DB_ERROR;
         }
     }
+    /**
+     * Ownership of each transaction identity, for Privacy Mode: the order id
+     * that consumed it (0 = consumed by an older release or imported history,
+     * owner unknown), or null when nobody has. Any read failure throws: an
+     * unknown owner must never be read as "unclaimed".
+     *
+     * @param string[] $hashes
+     * @return array<string, int|null> hash => owner
+     */
+    public static function owners($coin, $address, $hashes) {
+        self::prepare($coin, $address);
+        global $wpdb;
+        $table = self::table();
+        $out = array();
+        foreach ($hashes as $hash) {
+            $owner = $wpdb->get_var($wpdb->prepare("SELECT order_id FROM `$table` WHERE identity=%s", self::identity($coin, $address, $hash)));
+            if ($wpdb->last_error !== '') { throw new RuntimeException('Unable to read consumed history'); }
+            $out[$hash] = $owner === null ? null : (int) $owner;
+        }
+        return $out;
+    }
+
+    /**
+     * Privacy Mode claim: in ONE InnoDB transaction, record this order as the
+     * owner of every contributing transaction, mark the contributing evidence
+     * credited, and move the address row to 'completing' - or do none of it.
+     *
+     * A transaction this order already owns (a completion that failed after
+     * an earlier claim) is kept, not re-inserted, so a same-order retry works.
+     * Every other identity is written with the strict INSERT, which fails on an
+     * identity recorded meanwhile by anyone - another order, Autopay, or an
+     * import - at any isolation level; the whole claim then rolls back. The
+     * address row moves only from an open state and only for this order.
+     *
+     * Caller holds the per-address match lock and has already excluded
+     * transactions owned by anyone else.
+     *
+     * @param string[] $hashes       contributing transaction hashes
+     * @param int[]    $evidenceIds  contributing evidence row ids
+     * @return string NMMPRO_Hd_Repo::CLAIM_* constant
+     */
+    public static function claim_hd($coin, $address, $orderId, $hdId, $hashes, $evidenceIds, $creditedUnits) {
+        global $wpdb;
+        try {
+            self::prepare($coin, $address);
+            $hdTable = $wpdb->prefix . NMMPRO_HD_TABLE;
+            $evidenceTable = NMMPRO_Hd_Schema::evidence_table();
+            foreach (array($hdTable, $evidenceTable, self::table()) as $tableName) {
+                if (NMMPRO_Hd_Schema::engine($tableName) !== 'innodb') { throw new RuntimeException('Privacy Mode claim requires InnoDB tables'); }
+            }
+            if (count($hashes) === 0 || count($evidenceIds) === 0) {
+                throw new InvalidArgumentException('A payment claim needs at least one transaction');
+            }
+            if ($wpdb->query('START TRANSACTION') === false) { throw new RuntimeException('Unable to start payment claim'); }
+
+            $owners = self::owners($coin, $address, $hashes);
+            foreach ($owners as $hash => $owner) {
+                if ($owner === (int) $orderId) {
+                    continue;
+                }
+                if ($owner !== null) {
+                    throw new RuntimeException(esc_html('Transaction ' . $hash . ' is already owned by ' . ($owner === 0 ? 'an unknown earlier owner' : 'order ' . $owner)));
+                }
+                self::write($coin, $address, $hash, $orderId, true);
+            }
+
+            $placeholders = implode(',', array_fill(0, count($evidenceIds), '%d'));
+            $args = array_merge(array(NMMPRO_Hd_Evidence_Repo::CREDITED, (int) $hdId), array_map('intval', $evidenceIds));
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the table is wpdb's prefix plus a plugin constant, and $placeholders is only literal %d markers; every value is bound by prepare().
+            $sql = "UPDATE `$evidenceTable` SET `state` = %s WHERE `hd_id` = %d AND `state` <> 'conflict' AND `id` IN ($placeholders)";
+            $marked = $wpdb->query($wpdb->prepare($sql, $args)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- prepared in this call; see above.
+            if ($marked === false) { throw new RuntimeException('Unable to mark evidence credited'); }
+
+            $moved = $wpdb->query($wpdb->prepare(
+                "UPDATE `$hdTable` SET `status` = 'completing', `last_checked` = UNIX_TIMESTAMP(), `credited_units` = %s
+                 WHERE `id` = %d AND `order_id` = %d AND `assignment_version` IS NOT NULL
+                 AND `status` IN ('assigned', 'underpaid', 'completing')",
+                $creditedUnits, $hdId, $orderId
+            ));
+            if ($moved === false) { throw new RuntimeException('Unable to record recoverable completion'); }
+            if ($moved !== 1) {
+                // MySQL counts only CHANGED rows: resuming a 'completing' row of
+                // this order within the same second changes nothing. What
+                // matters is the row's state now, read under the row lock.
+                $now = $wpdb->get_row($wpdb->prepare("SELECT `status`, `order_id` FROM `$hdTable` WHERE `id` = %d FOR UPDATE", $hdId), ARRAY_A);
+                if (!is_array($now) || $now['status'] !== 'completing' || (int) $now['order_id'] !== (int) $orderId) {
+                    $wpdb->query('ROLLBACK');
+                    return NMMPRO_Hd_Repo::CLAIM_ALREADY;
+                }
+            }
+
+            if ($wpdb->query('COMMIT') === false) { throw new RuntimeException('Payment claim commit failed'); }
+            return NMMPRO_Hd_Repo::CLAIM_CLAIMED;
+        } catch (Throwable $e) {
+            $wpdb->query('ROLLBACK');
+            NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode claim for order ' . (int) $orderId . ' rolled back: ' . $e->getMessage(), 'error');
+            return NMMPRO_Hd_Repo::CLAIM_DB_ERROR;
+        }
+    }
+
+    /**
+     * Manual reconciliation: record, in one transaction, that $orderId owns
+     * each of $hashes (verified on chain by a person). Identities this order
+     * already owns are kept; one owned by any other order - or by an unknown
+     * earlier owner - refuses the whole call, so a manual action can never
+     * move funds between orders. Strict inserts arbitrate any race.
+     *
+     * @return array{recorded: string[], already: string[]}
+     * @throws RuntimeException When refused or on a database failure (nothing recorded).
+     */
+    public static function record_manual($coin, $address, $orderId, $hashes) {
+        global $wpdb;
+        self::prepare($coin, $address);
+        if (NMMPRO_Hd_Schema::engine(self::table()) !== 'innodb') { throw new RuntimeException('The consumed-transaction table must be InnoDB'); }
+        if ($wpdb->query('START TRANSACTION') === false) { throw new RuntimeException('Unable to start the reconciliation'); }
+        try {
+            $out = array('recorded' => array(), 'already' => array());
+            foreach (self::owners($coin, $address, $hashes) as $hash => $owner) {
+                if ($owner === (int) $orderId) {
+                    $out['already'][] = $hash;
+                    continue;
+                }
+                if ($owner !== null) {
+                    throw new RuntimeException(esc_html('Transaction ' . $hash . ' is already recorded against ' . ($owner === 0 ? 'an unknown earlier owner' : 'order ' . $owner) . '; nothing was recorded.'));
+                }
+                self::write($coin, $address, $hash, $orderId, true);
+                $out['recorded'][] = $hash;
+            }
+            if ($wpdb->query('COMMIT') === false) { throw new RuntimeException('Unable to commit the reconciliation'); }
+            return $out;
+        } catch (Throwable $e) {
+            $wpdb->query('ROLLBACK');
+            throw new RuntimeException(esc_html($e->getMessage()));
+        }
+    }
+
     public static function drop() {
         global $wpdb;
         $table = self::table(); unset(self::$ready[$table]);

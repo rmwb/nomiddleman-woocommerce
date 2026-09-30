@@ -3,7 +3,8 @@
 # The analysis toolchain is installed ad hoc (the repo deliberately carries no
 # composer.json - bundled libraries live in src/vendor): CI runs `composer init`
 # in the workspace root and requires phpstan/phpstan, szepeviktor/phpstan-wordpress
-# (which registers the WordPress stubs itself) and php-stubs/woocommerce-stubs,
+# (which registers the WordPress stubs itself), php-stubs/woocommerce-stubs and
+# php-stubs/wp-cli-stubs,
 # so `vendor/` below resolves to that throwaway install.
 #
 # phpstan-baseline.neon holds the pre-existing findings from the first run;
@@ -32,3 +33,5 @@ parameters:
 
 	scanFiles:
 		- vendor/php-stubs/woocommerce-stubs/woocommerce-stubs.php
+		# WP_CLI and WP_CLI\Utils, for the Privacy Mode operator commands
+		- vendor/php-stubs/wp-cli-stubs/wp-cli-stubs.php

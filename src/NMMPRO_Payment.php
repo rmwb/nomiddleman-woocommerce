@@ -68,7 +68,7 @@ class NMMPRO_Payment {
 	 * @return array{state: string, order: WC_Order|null} state is 'ok',
 	 *         'absent' (confirmed not to exist) or 'error' (could not tell).
 	 */
-	private static function read_order_authoritatively($orderId) {
+	public static function read_order_authoritatively($orderId) {
 		global $wpdb;
 
 		$orderId = (int) $orderId;
@@ -1269,8 +1269,8 @@ class NMMPRO_Payment {
 		// miscalculation) sends no single tx that clears the order amount, so
 		// the per-transaction loop above matches nothing - the funds land
 		// on-chain but the order would sit unpaid until expiry cancelled it.
-		// Privacy Mode already credits the cumulative total_received; this pass
-		// gives Autopay the same semantics. It runs AFTER the single-tx loop on
+		// Privacy Mode likewise sums every attributable transaction to its
+		// address; this pass gives Autopay the same semantics. It runs AFTER the single-tx loop on
 		// purpose: an order completed above is no longer unpaid, and a hash
 		// consumed above no longer contributes to any sum.
 		$aggregated = self::aggregate_split_payment($crypto, $address, $transactions, $transactionLifetime, $paymentRepo, $nmmSettings);

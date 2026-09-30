@@ -96,7 +96,8 @@ jobs:
           composer require --quiet --dev phpstan/phpstan:2.2.5 \
             szepeviktor/phpstan-wordpress:2.0.3 \
             php-stubs/wordpress-stubs:6.9.4 \
-            php-stubs/woocommerce-stubs:10.9.4
+            php-stubs/woocommerce-stubs:10.9.4 \
+            php-stubs/wp-cli-stubs:2.12.0
       - name: Analyse plugin code (new findings only, see phpstan-baseline.neon)
         run: vendor/bin/phpstan analyse -c phpstan.neon.dist --no-progress --memory-limit=2G
 
@@ -261,7 +262,7 @@ jobs:
       - name: Durable history, payment integrity, upgrade compatibility and Autopay safety
         run: |
           set -e
-          for entry in 'test-consumed-history.php:CONSUMED-HISTORY CHECKS PASSED' 'test-payment-integrity.php:PAYMENT-INTEGRITY CHECKS PASSED' 'test-upgrade-compat.php:UPGRADE-COMPAT CHECKS PASSED' 'test-autopay-safety.php:AUTOPAY-SAFETY CHECKS PASSED'; do
+          for entry in 'test-consumed-history.php:CONSUMED-HISTORY CHECKS PASSED' 'test-payment-integrity.php:PAYMENT-INTEGRITY CHECKS PASSED' 'test-upgrade-compat.php:UPGRADE-COMPAT CHECKS PASSED' 'test-autopay-safety.php:AUTOPAY-SAFETY CHECKS PASSED' 'test-hd-migration.php:HD-MIGRATION CHECKS PASSED' 'test-hd-allocation.php:HD-ALLOCATION CHECKS PASSED' 'test-hd-evidence.php:HD-EVIDENCE CHECKS PASSED' 'test-hd-historical.php:HD-HISTORICAL CHECKS PASSED' 'test-hd-monitor.php:HD-MONITOR CHECKS PASSED' 'test-hd-audit.php:HD-AUDIT CHECKS PASSED'; do
             script="${entry%%:*}"
             marker="${entry#*:}"
             OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/$script" --path=wp 2>&1)

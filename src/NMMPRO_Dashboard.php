@@ -85,6 +85,7 @@ class NMMPRO_Dashboard {
 			<?php
 			self::render_cryptocurrency_section($settings, $backlog);
 			self::render_unconfigured_backlog_section($settings, $backlog);
+			self::render_hd_recovery_section($settings);
 			self::render_background_job_section();
 			self::render_log_section();
 			?>
@@ -155,7 +156,63 @@ class NMMPRO_Dashboard {
 			</tbody>
 		</table>
 		<p class="description">
-			<?php esc_html_e('"Autopay verifiable" and "Privacy verifiable" say whether a working public API still exists for that coin in that mode. A coin configured in a mode it cannot verify will never confirm an order automatically.', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
+			<?php esc_html_e('"Autopay verifiable" says whether a working public API still exists for that coin. "Privacy verifiable" says whether a reviewed source provides the per-transaction evidence Privacy Mode needs to tell a new payment from funds received before. A coin configured in a mode it cannot verify is not offered at checkout in that mode.', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * Wallet-recovery facts for each Privacy Mode wallet. Privacy Mode never
+	 * reuses an address, so abandoned checkouts leave issued-but-unused
+	 * addresses behind; a wallet restored from its seed must scan at least as
+	 * far as the highest issued index to find every payment.
+	 */
+	private static function render_hd_recovery_section($settings) {
+		if (!current_user_can(self::CAPABILITY) || !NMMPRO_Hd_Schema::ready()) {
+			return;
+		}
+
+		$rows = array();
+		foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
+			$cid = $crypto->get_id();
+			if (!$crypto->has_hd() || !$settings->crypto_selected($cid) || !$settings->hd_enabled($cid) || $settings->get_mpk($cid) === '') {
+				continue;
+			}
+			$repo = new NMMPRO_Hd_Repo($cid, $settings->get_mpk($cid), $settings->get_hd_mode($cid));
+			$rows[$cid] = $repo->index_summary();
+		}
+
+		if ($rows === array()) {
+			return;
+		}
+		?>
+		<h2><?php esc_html_e('Privacy Mode wallet recovery', 'nomiddleman-crypto-payments-for-woocommerce'); ?></h2>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th scope="col"><?php esc_html_e('Cryptocurrency', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
+					<th scope="col"><?php esc_html_e('Highest index issued to an order', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
+					<th scope="col"><?php esc_html_e('Highest index derived', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
+					<th scope="col"><?php esc_html_e('Issued, retired, never paid', 'nomiddleman-crypto-payments-for-woocommerce'); ?></th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php foreach ($rows as $cid => $summary) : ?>
+					<tr>
+						<td><?php echo esc_html($cid); ?></td>
+						<?php if ($summary === null) : ?>
+							<td colspan="3"><?php esc_html_e('Could not be read.', 'nomiddleman-crypto-payments-for-woocommerce'); ?></td>
+						<?php else : ?>
+							<td><?php echo esc_html($summary['issued'] === null ? self::not_applicable() : number_format_i18n($summary['issued'])); ?></td>
+							<td><?php echo esc_html($summary['derived'] === null ? self::not_applicable() : number_format_i18n($summary['derived'])); ?></td>
+							<td><?php echo esc_html(number_format_i18n($summary['unused_issued'])); ?></td>
+						<?php endif; ?>
+					</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
+		<p class="description">
+			<?php esc_html_e('Privacy Mode never gives an address to a second order, so abandoned checkouts leave unused addresses between paid ones. If you restore this wallet from its seed, make it scan at least up to the highest index derived (for Electrum, raise the gap limit accordingly), or some payments will not appear. Indexes count from 0 on the external (receive) chain.', 'nomiddleman-crypto-payments-for-woocommerce'); ?>
 		</p>
 		<?php
 	}

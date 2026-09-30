@@ -89,10 +89,28 @@ function NMMPRO_do_cron_job() {
 		NMMPRO_warm_price_caches($nmmSettings);
 
 		NMMPRO_Carousel_Repo::init();
+
+		// Rows an older release wrote (for example during a downgrade) are put
+		// under the legacy policy every tick, before any HD pass can see them:
+		// unvalidated pool rows retire and unvalidated assignments go to manual
+		// review. Idempotent, conditional UPDATEs; a failure is logged and the
+		// passes below still only ever act on validated rows.
+		if (NMMPRO_Hd_Schema::ready()) {
+			NMMPRO_Hd_Schema::apply_legacy_policy($GLOBALS['wpdb']->prefix . NMMPRO_HD_TABLE);
+			NMMPRO_Hd::settle_review_rows();
+		}
+
 		foreach (NMMPRO_Cryptocurrencies::get() as $crypto) {
 			$cryptoId = $crypto->get_id();
 
-			if ($nmmSettings->hd_enabled($cryptoId)) {
+			if ($nmmSettings->hd_enabled($cryptoId) && !NMMPRO_Hd::automatic_available($cryptoId)) {
+				// Once an hour per coin, not every tick.
+				if (get_transient('nmmpro_hd_unavailable_logged_' . $cryptoId) === false) {
+					NMMPRO_Util::log(__FILE__, __LINE__, 'Privacy Mode is enabled for ' . $cryptoId . ' but automatic verification is unavailable (' . NMMPRO_Hd::automatic_unavailable_reason($cryptoId) . '); skipping its HD passes.', 'warning');
+					set_transient('nmmpro_hd_unavailable_logged_' . $cryptoId, 1, HOUR_IN_SECONDS);
+				}
+			}
+			elseif ($nmmSettings->hd_enabled($cryptoId)) {
 				NMMPRO_Util::log(__FILE__, __LINE__, 'Starting Hd stuff for: ' . $cryptoId);
 				$mpk = $nmmSettings->get_mpk($cryptoId);
 				$hdMode = $nmmSettings->get_hd_mode($cryptoId);
@@ -106,13 +124,12 @@ function NMMPRO_do_cron_job() {
 				NMMPRO_Hd::buffer_ready_addresses($cryptoId, $mpk, $hdBufferAddressCount, $hdMode);
 				NMMPRO_Hd::cancel_expired_addresses($cryptoId, $mpk, $hdOrderCancellationTimeSec, $hdMode);
 
-				// Re-verify quarantined (abandoned, unpaid) addresses with fresh
-				// explorer checks spaced at least this far apart, and past the
-				// payment expiry, before any are recycled. Filterable so a
-				// merchant can lengthen the wait.
-				$hdQuarantinePeriodSec = NMMPRO_Compat::filter('nmmpro_hd_quarantine_seconds', max($hdOrderCancellationTimeSec, 6 * HOUR_IN_SECONDS), $cryptoId);
-				$hdQuarantineBatch = (int) NMMPRO_Compat::filter('nmmpro_hd_quarantine_batch', 25, $cryptoId);
-				NMMPRO_Hd::process_quarantined_addresses($cryptoId, $mpk, $hdRequiredConfirmations, $hdMode, $hdQuarantinePeriodSec, $hdQuarantineBatch);
+				// Retired and held addresses can still be paid: keep collecting
+				// their evidence and tell the merchant (read-only, bounded).
+				NMMPRO_Hd_Verifier::monitor_wallet($cryptoId, $mpk, $hdMode);
+
+				// No quarantine pass: an issued address is never recycled; an
+				// ended order's address is retired (NMMPRO_Hd_Verifier).
 			}
 		}
 

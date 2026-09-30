@@ -127,18 +127,6 @@ parameters:
 			path: src/NMMPRO_Gateway.php
 
 		-
-			message: '#^Negated boolean expression is always true\.$#'
-			identifier: booleanNot.alwaysTrue
-			count: 1
-			path: src/NMMPRO_Hd.php
-
-		-
-			message: '#^Parameter \#2 \$is_customer_note of method WC_Order\:\:add_order_note\(\) expects int, true given\.$#'
-			identifier: argument.type
-			count: 3
-			path: src/NMMPRO_Hd.php
-
-		-
 			message: '#^Call to function is_array\(\) with array\<mixed\> will always evaluate to true\.$#'
 			identifier: function.alreadyNarrowedType
 			count: 1

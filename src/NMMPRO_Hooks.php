@@ -131,13 +131,16 @@ function NMMPRO_order_status_ajax() {
 		$tableName = $wpdb->prefix . NMMPRO_HD_TABLE;
 
 		$row = $wpdb->get_row($wpdb->prepare(
-			"SELECT `status`, `total_received`, `order_amount` FROM `$tableName` WHERE `order_id` = %d ORDER BY `id` DESC LIMIT 1",
+			"SELECT `status`, `cryptocurrency`, `credited_units`, `order_amount` FROM `$tableName` WHERE `order_id` = %d ORDER BY `id` DESC LIMIT 1",
 			$orderId
 		), ARRAY_A);
 
-		if ($row && $row['status'] === 'underpaid') {
+		// The amount credited to THIS order - confirmed payments made after its
+		// address was issued - never the address's lifetime receipts.
+		$cryptos = NMMPRO_Cryptocurrencies::get();
+		if ($row && $row['status'] === 'underpaid' && $row['credited_units'] !== null && isset($cryptos[$row['cryptocurrency']])) {
 			$underpaid = true;
-			$received = $row['total_received'];
+			$received = NMMPRO_Amount::from_units($row['credited_units'], $cryptos[$row['cryptocurrency']]->get_round_precision());
 			$expected = $row['order_amount'];
 		}
 	}

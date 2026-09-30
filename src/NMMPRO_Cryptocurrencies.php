@@ -14,12 +14,10 @@ class NMMPRO_Cryptocurrencies {
 	// stopped answering, DeepOnion's remaining explorer times out, Myriad's
 	// blockbook now serves a parked page, and insight.bitcore.cc returns 521.
 	// The request code for all five was removed rather than left pointing at
-	// dead hosts; chainz.cryptoid.info still covers BTX balances for Privacy
-	// Mode.
+	// dead hosts. (BTX's Privacy Mode used chainz.cryptoid.info's lifetime
+	// balance, which cannot attribute payments to orders; it was removed with
+	// the other lifetime-total checks - see NMMPRO_Hd_Evidence.)
 	private static $autopayUnverifiable = array('LSK', 'XEM', 'ONION', 'XMY', 'BTX');
-
-	// Coins whose Privacy Mode (HD) balance API no longer exists
-	private static $hdUnverifiable = array('XMY');
 
 	// EVM chain ids for coins that live on a chain other than Ethereum mainnet
 	private static $evmChainIds = array(
@@ -46,7 +44,7 @@ class NMMPRO_Cryptocurrencies {
 		return !in_array($cryptoId, self::$autopayUnverifiable, true);
 	}
 
-	// The coin supports Privacy Mode AND a working balance API exists for it
+	// The coin supports Privacy Mode AND has a reviewed evidence adapter
 	public static function hd_verifiable($cryptoId) {
 		$cryptos = self::get();
 
@@ -54,7 +52,10 @@ class NMMPRO_Cryptocurrencies {
 			return false;
 		}
 
-		return !in_array($cryptoId, self::$hdUnverifiable, true);
+		// A reviewed per-output evidence adapter (NMMPRO_Hd_Evidence's
+		// capability matrix). A lifetime balance is NOT enough: it cannot tell
+		// a new order's payment from funds the address received earlier.
+		return NMMPRO_Hd_Evidence::has_adapter($cryptoId);
 	}
 
 	public static function get() {

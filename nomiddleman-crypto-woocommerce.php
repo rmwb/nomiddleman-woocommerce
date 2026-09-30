@@ -31,6 +31,12 @@ require_once plugin_dir_path(__FILE__) . 'src/NMMPRO_Compat.php';
 require_once plugin_dir_path(__FILE__) . 'src/NMMPRO_Autoloader.php';
 NMMPRO_Autoloader::register(plugin_dir_path(__FILE__) . 'src');
 
+// Privacy Mode operator commands: a read-only audit and manual reconciliation
+// (docs/HD-RECONCILIATION.md). Only registered under WP-CLI.
+if (defined('WP_CLI') && WP_CLI) {
+    WP_CLI::add_command('nmmpro-hd', 'NMMPRO_Hd_Cli');
+}
+
 add_action('init', 'NMMPRO_load_textdomain');
 add_action('plugins_loaded', 'NMMPRO_init_gateways');
 add_action('before_woocommerce_init', 'NMMPRO_declare_wc_feature_compatibility');
@@ -360,6 +366,10 @@ function NMMPRO_verify_site_tables() {
     // the shipped migrations rebuild it to the current schema.
     $schemaOptions = array(
         $wpdb->prefix . NMMPRO_HD_TABLE        => array('nmmpro_hd_table_version'),
+        // Created by the HD 1.4 -> 1.5 step, so a missing evidence table
+        // re-runs the HD migrations (every step is idempotent, and the legacy
+        // policy only ever retires or holds rows for review).
+        NMMPRO_Hd_Schema::evidence_table()     => array('nmmpro_hd_table_version'),
         $wpdb->prefix . NMMPRO_PAYMENT_TABLE   => array('nmmpro_payment_index_version', 'nmmpro_payment_lease_schema'),
         $wpdb->prefix . NMMPRO_CAROUSEL_TABLE  => array(),
         $wpdb->prefix . NMMPRO_SOL_RETRY_TABLE => array('nmmpro_sol_retry_schema', 'nmmpro_sol_retry_table_created'),
@@ -563,7 +573,14 @@ function NMMPRO_drop_mpk_address_table() {
     NMMPRO_for_each_site(function () {
         global $wpdb;
         $wpdb->query("DROP TABLE IF EXISTS `" . $wpdb->prefix . NMMPRO_HD_TABLE . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
+        $wpdb->query("DROP TABLE IF EXISTS `" . NMMPRO_Hd_Schema::evidence_table() . "`"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL built only from $wpdb->prefix and a plugin constant; a table name cannot be a prepare() placeholder and no user input reaches this statement.
         NMMPRO_Compat::delete_option('nmmpro_hd_table_version');
+        NMMPRO_Compat::delete_option(NMMPRO_Hd_Schema::LEGACY_REPORT_OPTION);
+        NMMPRO_Compat::delete_option('nmmpro_hd_review_cursor');
+        NMMPRO_Compat::delete_option('nmmpro_hd_allocation_limit');
+        // Each pass's round-robin position per wallet (NMMPRO_Hd_Verifier).
+        $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE `option_name` LIKE %s", $wpdb->esc_like(NMMPRO_Hd_Verifier::CURSOR_OPTION_PREFIX) . '%'));
+        wp_cache_delete('alloptions', 'options');
     });
 }
 
@@ -715,6 +732,17 @@ function NMMPRO_update_hd_table() {
         }
         else {
             NMMPRO_Util::log(__FILE__, __LINE__, 'HD composite-index migration did not complete (' . $wpdb->last_error . '); leaving version at 1.3 to retry.', 'error');
+        }
+    }
+
+    // 1.4 -> 1.5: attributable payment evidence (see NMMPRO_Hd_Schema). The
+    // upgrade confirms every column, engine and the legacy row policy itself
+    // and reports false on anything short of that; automatic HD processing is
+    // gated on this version, so until it moves nothing reaches the payment
+    // path and the step simply retries on the next load.
+    if (NMMPRO_Compat::get_option('nmmpro_hd_table_version', '1.0') === '1.4') {
+        if (NMMPRO_Hd_Schema::upgrade($tableName, NMMPRO_Hd_Schema::evidence_table())) {
+            NMMPRO_Compat::update_option('nmmpro_hd_table_version', NMMPRO_Hd_Schema::VERSION);
         }
     }
 
@@ -1065,6 +1093,7 @@ function NMMPRO_site_health_db_tables() {
 
     $requiredTables = array(
         $wpdb->prefix . NMMPRO_HD_TABLE,
+        NMMPRO_Hd_Schema::evidence_table(),
         $wpdb->prefix . NMMPRO_PAYMENT_TABLE,
         $wpdb->prefix . NMMPRO_CAROUSEL_TABLE,
         $wpdb->prefix . NMMPRO_SOL_RETRY_TABLE,

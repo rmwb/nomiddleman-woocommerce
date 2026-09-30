@@ -62,7 +62,7 @@ class NMMPRO_Carousel_Repo {
 	/**
 	 * Atomically claim the next carousel seat and advance the counter.
 	 *
-	 * Compare-and-swap, the same idiom NMMPRO_Hd_Repo::claim_oldest_ready uses: read
+	 * Compare-and-swap, the same idiom NMMPRO_Hd_Repo::reserve_candidate uses: read
 	 * the stored index, then conditionally advance it ONLY if it has not changed
 	 * since the read. The seat returned is the value that was read. Two concurrent
 	 * checkouts can no longer share a seat: whichever writes second finds the
