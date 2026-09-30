@@ -2044,6 +2044,7 @@ class NMMPRO_Payment {
 			'address' => $address,
 			'gen'     => $lease['gen'],
 			'from'    => $order->get_status(),
+			'object'  => $order,
 			'passed'  => false,
 			'tripped' => false,
 		);
@@ -2070,7 +2071,7 @@ class NMMPRO_Payment {
 			$tripped = self::take_cancel_fence_tripped();
 		}
 		if ($tripped) {
-			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: lost exclusive access while cancelling order ' . $orderId . '; the cancellation was not saved and its record is left for recovery.', 'warning');
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: a save of order ' . $orderId . ' was refused while cancelling it (exclusive access lost, or the order changed); its record is left for recovery, which settles it from the order as stored.', 'warning');
 			return;
 		}
 
@@ -2091,7 +2092,7 @@ class NMMPRO_Payment {
 	 * Only ever one: a cancellation reached from inside another (through a
 	 * WooCommerce hook) is refused - see cancel_expired_payments().
 	 *
-	 * @var array{order: int, amount: string, crypto: string, address: string, gen: int, from: string, passed: bool, tripped: bool}|null
+	 * @var array{order: int, amount: string, crypto: string, address: string, gen: int, from: string, object: WC_Order, passed: bool, tripped: bool}|null
 	 */
 	private static $cancelFence = null;
 
@@ -2135,30 +2136,47 @@ class NMMPRO_Payment {
 	 * stock or integration side effects for a cancellation that did not
 	 * happen. The lease stays for recovery, which settles it under the lock.
 	 *
-	 * It judges ONE save: the first that would store the order as cancelled.
-	 * Once that has passed, the cancellation is approved and being written,
-	 * and later saves of the same order within this update_status() are not
-	 * cancellations to judge. WooCommerce's own woocommerce_order_status_cancelled
-	 * handling saves a second copy of the order under HPOS (coupon usage
-	 * bookkeeping), and an integration may save the order again from a status
-	 * hook; both see it already stored as cancelled, which the check above
-	 * would misread as "the order changed".
+	 * Only the canceller's OWN save (the object update_status() was called
+	 * on) can approve the cancellation. Any other cancelled save of the order
+	 * reaching this callback first is judged by the same rules but approves
+	 * nothing, so it cannot use up the check on the canceller's behalf.
+	 *
+	 * Once approved, the order may be saved again within the same
+	 * update_status(): WooCommerce's own woocommerce_order_status_cancelled
+	 * handling saves a second copy under HPOS (coupon usage bookkeeping), and
+	 * an integration may re-save the object from a status hook. Those saves
+	 * see the order already stored as cancelled, which the first check would
+	 * misread as "the order changed". So a later cancelled save still needs
+	 * both locks, and is allowed only while the order is STORED as cancelled -
+	 * which also proves the approved save really landed. A save that would
+	 * put 'cancelled' back over anything else (a payment saved in between)
+	 * is refused like any stale cancellation.
 	 *
 	 * @param WC_Order $order
 	 * @throws RuntimeException When the cancellation must not be saved.
 	 */
 	public static function fence_cancellation_save($order) {
 		$fence = self::$cancelFence;
-		if ($fence === null || $fence['passed'] || (int) $order->get_id() !== $fence['order'] || $order->get_status() !== 'cancelled') {
+		if ($fence === null || (int) $order->get_id() !== $fence['order'] || $order->get_status() !== 'cancelled') {
 			return;
 		}
-		$lease = (new NMMPRO_Payment_Repo())->lease_state($fence['order'], $fence['amount']);
-		$still = NMMPRO_Util::address_match_lock_owned($fence['crypto'], $fence['address'])
-			&& NMMPRO_Util::cron_fence_held()
-			&& is_array($lease) && $lease['status'] === 'cancelling' && $lease['gen'] === $fence['gen']
-			&& self::order_still_stored_as($fence['order'], $fence['from']);
+		$exclusive = NMMPRO_Util::address_match_lock_owned($fence['crypto'], $fence['address'])
+			&& NMMPRO_Util::cron_fence_held();
+		if ($fence['passed']) {
+			// A later save within the approved cancellation: harmless only if
+			// it changes no status, i.e. the order is stored as cancelled now.
+			$still = $exclusive && self::order_still_stored_as($fence['order'], 'cancelled');
+		}
+		else {
+			$lease = (new NMMPRO_Payment_Repo())->lease_state($fence['order'], $fence['amount']);
+			$still = $exclusive
+				&& is_array($lease) && $lease['status'] === 'cancelling' && $lease['gen'] === $fence['gen']
+				&& self::order_still_stored_as($fence['order'], $fence['from']);
+			if ($still && $order === $fence['object']) {
+				self::$cancelFence['passed'] = true;
+			}
+		}
 		if ($still) {
-			self::$cancelFence['passed'] = true;
 			return;
 		}
 		self::$cancelFence['tripped'] = true;

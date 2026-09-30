@@ -1184,10 +1184,79 @@ foreach (array(array($o46, 'copy', 'a second copy'), array($o47, 'same', 'the sa
 	asok('  and the customer was told it was cancelled', $told);
 }
 
+// --- 34. only the canceller's own save approves; later saves stay checked -------
+// (Codex round 6, M1.) Approval belongs to the save the canceller made, and a
+// later cancelled save is allowed only while the order is stored as cancelled.
+$recoverCancel = function () {
+	NMMPRO_Compat::update_option('nmmpro_cancellation_cursor', 0, false);
+	NMMPRO_Payment::recover_interrupted_cancellations();
+};
+
+// 34a. Before the canceller's own save is judged, a listener saves a cancelled
+// copy (which must not approve anything) and then a payment is saved.
+list($o48) = $make('_copy_then_paid', 'pending', $expiredAt);
+$GLOBALS['as_fired48'] = false;
+$copyThenPaid = function ($order) use ($o48, $setStoredStatus) {
+	if ($order->get_id() !== $o48 || $order->get_status() !== 'cancelled' || $GLOBALS['as_fired48']) { return; }
+	$GLOBALS['as_fired48'] = true;
+	$copy = new WC_Order($o48);
+	$copy->set_status('cancelled');
+	$copy->save();
+	$setStoredStatus($o48, 'wc-processing');   // another request saves the payment
+};
+add_action('woocommerce_before_order_object_save', $copyThenPaid, 1);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_before_order_object_save', $copyThenPaid, 1);
+asok('a copy cancelled, then paid, before our save: payment not overwritten', $GLOBALS['as_fired48'] && as_stored($o48) === 'wc-processing', 'stored=' . as_stored($o48));
+asok('  its lease is left for recovery', as_row($o48) === 'cancelling', 'row=' . as_row($o48));
+$recoverCancel();
+asok('  which settles it paid', as_row($o48) === 'paid', 'row=' . as_row($o48));
+
+// 34b. Our cancellation is written; during its status hooks another request
+// saves the payment, then a stale copy saves 'cancelled' again.
+list($o49) = $make('_paid_then_stale', 'pending', $expiredAt);
+$GLOBALS['as_fired49'] = false;
+$paidThenStale = function ($orderId) use ($o49, $setStoredStatus) {
+	if ((int) $orderId !== $o49 || $GLOBALS['as_fired49']) { return; }
+	$GLOBALS['as_fired49'] = true;
+	$setStoredStatus($o49, 'wc-processing');   // another request saves the payment
+	$stale = new WC_Order($o49);
+	$stale->set_status('cancelled');            // a stale cancellation of it
+	$stale->save();
+};
+add_action('woocommerce_order_status_cancelled', $paidThenStale, 20);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_order_status_cancelled', $paidThenStale, 20);
+asok('paid after our cancellation, then a stale cancel: payment kept', $GLOBALS['as_fired49'] && as_stored($o49) === 'wc-processing', 'stored=' . as_stored($o49));
+asok('  its lease is left for recovery', as_row($o49) === 'cancelling', 'row=' . as_row($o49));
+$recoverCancel();
+asok('  which settles it paid', as_row($o49) === 'paid', 'row=' . as_row($o49));
+
+// 34c. A cancelled copy saved before our own save, and nothing else: the copy
+// is judged but approves nothing, so our own save finds the order changed.
+list($o50) = $make('_copy_only', 'pending', $expiredAt);
+$GLOBALS['as_fired50'] = false;
+$copyOnly = function ($order) use ($o50) {
+	if ($order->get_id() !== $o50 || $order->get_status() !== 'cancelled' || $GLOBALS['as_fired50']) { return; }
+	$GLOBALS['as_fired50'] = true;
+	$copy = new WC_Order($o50);
+	$copy->set_status('cancelled');
+	$copy->save();
+};
+add_action('woocommerce_before_order_object_save', $copyOnly, 1);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_before_order_object_save', $copyOnly, 1);
+asok('a cancelled copy saved first does not approve our own save', $GLOBALS['as_fired50'] && as_row($o50) === 'cancelling', 'row=' . as_row($o50) . ' stored=' . as_stored($o50));
+$recoverCancel();
+asok('  recovery settles it from the stored order', as_row($o50) === 'cancelled' && as_stored($o50) === 'wc-cancelled', 'row=' . as_row($o50) . ' stored=' . as_stored($o50));
+
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47, $o48, $o49, $o50) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }
