@@ -110,6 +110,40 @@ class NMMPRO_Payment_Repo {
 		return $oldest;
 	}
 
+	/**
+	 * Per-currency unpaid backlog: how many payment rows are still awaiting
+	 * payment for each coin, and when the oldest of them was created. Feeds the
+	 * read-only status screen (NMMPRO_Dashboard), which must not build SQL of its
+	 * own - every table access stays behind this class.
+	 *
+	 * One grouped, index-served query (the status prefix of unpaid_expiry) so a
+	 * large backlog is aggregated in MySQL rather than loaded into PHP to be
+	 * counted. Read-only: the status screen never writes.
+	 *
+	 * Returns ['CRYPTO' => ['unpaid_count' => int, 'oldest_ordered_at' => int]],
+	 * ordered by currency so the screen's row order is stable.
+	 */
+	public function unpaid_backlog_by_crypto() {
+		global $wpdb;
+
+		$table = $this->tableName;
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the only interpolation is the table name ($wpdb->prefix + a plugin constant); the statement binds no values, so there is nothing for $wpdb->prepare() to escape.
+		$sql = "SELECT `cryptocurrency`, COUNT(*) AS `unpaid_count`, MIN(`ordered_at`) AS `oldest_ordered_at` FROM `$table` WHERE `status` = 'unpaid' GROUP BY `cryptocurrency` ORDER BY `cryptocurrency`";
+		$rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is the constant statement built above; it takes no values.
+
+		$backlog = array();
+		if (is_array($rows)) {
+			foreach ($rows as $row) {
+				$backlog[$row['cryptocurrency']] = array(
+					'unpaid_count'      => (int) $row['unpaid_count'],
+					'oldest_ordered_at' => (int) $row['oldest_ordered_at'],
+				);
+			}
+		}
+
+		return $backlog;
+	}
+
 	// Number of distinct unpaid (cryptocurrency, address) pairs. A single scalar,
 	// so the cron can size its per-tick budget without loading the whole backlog
 	// into PHP.
@@ -294,6 +328,185 @@ class NMMPRO_Payment_Repo {
 		));
 	}
 
+	/**
+	 * set_status() for changes that originate OUTSIDE the verifier - an admin
+	 * editing the order, a webhook, another plugin - via the order-status hook.
+	 *
+	 * ONE statement, so nothing can land between its parts: it bumps the row's
+	 * lease_gen and applies the new status, except to a row in one of the two
+	 * lease states. 'completing' holds a verified, recorded payment whose order
+	 * is not confirmed complete yet; 'cancelling' holds an expiry whose order
+	 * is not confirmed cancelled yet. Each has an owner that settles it from an
+	 * authoritative read of the order (NMMPRO_Payment::settle_lease) - the only
+	 * trustworthy answer, because current WooCommerce fires the status hooks
+	 * even when saving the order failed. The bump is what stops that owner
+	 * overwriting this event: its settlement is conditional on the lease_gen
+	 * it read before reading the order, so it fails and re-reads instead.
+	 *
+	 * Neither assignment reads the other's new value, so the statement is
+	 * correct under MySQL's left-to-right SET evaluation and under MariaDB's
+	 * SIMULTANEOUS_ASSIGNMENT mode alike.
+	 *
+	 * The column comes from a migration, which runs only at safe boundaries
+	 * (the site's own load and activation) - never from here: this runs
+	 * inside an order save, possibly inside a caller's transaction, and an
+	 * ALTER TABLE would commit that transaction implicitly. On a site where
+	 * the migration has not run yet (a multisite runner that switched blogs
+	 * before that site's own load, or a migration that failed) the event is
+	 * applied with the pre-lease_gen statement, which leaves leased rows
+	 * alone, and the generation does not move. The gate is the recorded
+	 * migration (the option), not the column: where the column exists but the
+	 * option does not, this still takes the fallback. NMMPRO_Payment therefore
+	 * settles no lease and starts no cancellation until the option is set -
+	 * leased rows wait for the migration: late, never wrong.
+	 */
+	public function set_status_from_order_event($orderId, $orderAmount, $status) {
+		global $wpdb;
+		NMMPRO_Util::log(__FILE__, __LINE__, 'order event: updating ' . $orderId . ' to ' . $status);
+
+		$applied = false;
+		if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') === '1') {
+			$applied = $wpdb->query($wpdb->prepare(
+				"UPDATE `$this->tableName`
+				 SET `lease_gen` = `lease_gen` + 1,
+				     `status` = IF(`status` IN ('completing', 'cancelling'), `status`, %s)
+				 WHERE `order_amount` = %s
+				 AND `order_id` = %d",
+				$status, $orderAmount, $orderId
+			));
+			if ($applied === false) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'order event for ' . $orderId . ' could not use lease_gen (' . $wpdb->last_error . '); applying it without.', 'warning');
+			}
+		}
+		if ($applied === false) {
+			$fallback = $wpdb->query($wpdb->prepare(
+				"UPDATE `$this->tableName`
+				 SET `status` = %s
+				 WHERE `order_amount` = %s
+				 AND `order_id` = %d
+				 AND `status` NOT IN ('completing', 'cancelling')",
+				$status, $orderAmount, $orderId
+			));
+			if ($fallback === false) {
+				NMMPRO_Util::log(__FILE__, __LINE__, 'order event for ' . $orderId . ' could not be recorded on its payment record (' . $wpdb->last_error . ').', 'error');
+			}
+		}
+	}
+
+	/**
+	 * A leased row's current status and lease_gen, read together. Returns
+	 * array('status' => string, 'gen' => int), null when the row does not
+	 * exist, or false when the read failed.
+	 *
+	 * @phpstan-impure
+	 */
+	public function lease_state($orderId, $orderAmount) {
+		global $wpdb;
+
+		$row = $wpdb->get_row($wpdb->prepare(
+			"SELECT `status`, `lease_gen` FROM `$this->tableName`
+			 WHERE `order_amount` = %s AND `order_id` = %d",
+			$orderAmount, $orderId
+		), ARRAY_A);
+		if ($wpdb->last_error !== '') {
+			return false;
+		}
+		if (!is_array($row)) {
+			return null;
+		}
+		return array('status' => (string) $row['status'], 'gen' => (int) $row['lease_gen']);
+	}
+
+	/**
+	 * The status and ordered_at of a row as they are now, for re-judging an
+	 * expiry under the address lock. Returns array('status' => string,
+	 * 'ordered_at' => int), null when the row does not exist, or false when
+	 * the read failed.
+	 *
+	 * @phpstan-impure
+	 */
+	public function expiry_state($orderId, $orderAmount) {
+		global $wpdb;
+
+		$row = $wpdb->get_row($wpdb->prepare(
+			"SELECT `status`, `ordered_at` FROM `$this->tableName`
+			 WHERE `order_amount` = %s AND `order_id` = %d",
+			$orderAmount, $orderId
+		), ARRAY_A);
+		if ($wpdb->last_error !== '') {
+			return false;
+		}
+		if (!is_array($row)) {
+			return null;
+		}
+		return array('status' => (string) $row['status'], 'ordered_at' => (int) $row['ordered_at']);
+	}
+
+	/**
+	 * Settle a leased row: move it from $fromStatus to $toStatus only while it
+	 * is still in $fromStatus, no order event has bumped lease_gen since $gen
+	 * was read, AND the order is still stored exactly as it was when the
+	 * decision was made - the same status ($observedStatus, as
+	 * WC_Order::get_status() returned it), or still absent ($observedStatus
+	 * null). The condition is read by this same statement from WooCommerce's
+	 * authoritative order storage.
+	 *
+	 * Comparing with what was actually read, not with a status list rebuilt
+	 * in SQL, keeps the SQL and the PHP decision in agreement whatever the
+	 * status is - custom statuses, and paid-ness decided per order by the
+	 * woocommerce_order_is_paid filter, included. It is also what makes a
+	 * lost order event harmless: if an admin's change was saved but its
+	 * payment-row update failed, the generation never moved, yet the stored
+	 * status did, and a settlement decided from the earlier read matches
+	 * nothing.
+	 *
+	 * Returns the affected-row count (0 means something moved first - re-read),
+	 * or false on a database error.
+	 */
+	public function settle_lease($orderId, $orderAmount, $fromStatus, $gen, $toStatus, $observedStatus) {
+		global $wpdb;
+
+		$require = self::order_stored_as($orderId, $observedStatus);
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the payment table is $wpdb->prefix plus a plugin constant; $require['sql'] is built by order_stored_as() from WooCommerce's own order table name and literal %s/%d markers only; every value is bound below.
+		$sql = "UPDATE `$this->tableName` SET `status` = %s WHERE `order_amount` = %s AND `order_id` = %d AND `status` = %s AND `lease_gen` = %d AND " . $require['sql'];
+		$args = array_merge(array($toStatus, $orderAmount, $orderId, $fromStatus, $gen), $require['args']);
+		return $wpdb->query($wpdb->prepare($sql, $args)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is prepared in this call; see the note above.
+	}
+
+	/**
+	 * The SQL condition (with its bound values) that order $orderId is stored
+	 * with status $status - as WC_Order::get_status() reports it, so stored
+	 * either with WooCommerce's 'wc-' prefix or, like 'trash', without - or,
+	 * for a null $status, that it is not stored at all. Reads WooCommerce's
+	 * authoritative order storage: the HPOS orders table, or posts.
+	 *
+	 * @return array{sql: string, args: array<int, int|string>}
+	 */
+	public static function order_stored_as($orderId, $status) {
+		global $wpdb;
+
+		$orderUtil = '\Automattic\WooCommerce\Utilities\OrderUtil';
+		if (class_exists($orderUtil) && $orderUtil::custom_orders_table_usage_is_enabled()) {
+			$table = $orderUtil::get_table_for_orders();
+			$idCol = '`id`';
+			$statusCol = '`status`';
+		}
+		else {
+			$table = $wpdb->posts;
+			$idCol = '`ID`';
+			$statusCol = '`post_status`';
+		}
+		if ($status === null) {
+			return array('sql' => "NOT EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d)", 'args' => array((int) $orderId));
+		}
+		$status = (string) $status;
+		$bare = strpos($status, 'wc-') === 0 ? substr($status, 3) : $status;
+		return array(
+			'sql'  => "EXISTS (SELECT 1 FROM `$table` WHERE $idCol = %d AND $statusCol IN (%s, %s))",
+			'args' => array((int) $orderId, 'wc-' . $bare, $bare),
+		);
+	}
+
 	// Tri-state result of a conditional claim. CLAIMED: this call moved the row.
 	// ALREADY: the row was conclusively transitioned out of 'unpaid' by another
 	// worker (cancelled or paid) - a definite, retry-free outcome. DB_ERROR: the
@@ -338,6 +551,21 @@ class NMMPRO_Payment_Repo {
 		return $this->claim_from_unpaid($orderId, $orderAmount, 'cancelled');
 	}
 
+	/**
+	 * Expiry's side of the race when it is about to cancel a live order: move
+	 * the row 'unpaid' -> 'cancelling' rather than straight to 'cancelled'.
+	 * The row must not be terminal until WooCommerce has actually cancelled the
+	 * order - if the request dies, or the cancellation fails, in between, a
+	 * terminal record would sit under an order still awaiting payment, and
+	 * since both the matcher and expiry read only 'unpaid', a payment arriving
+	 * afterwards would never be credited. 'cancelling' is equally invisible to
+	 * both, and NMMPRO_Payment::recover_interrupted_cancellations() settles
+	 * anything left in it. Returns one of the CLAIM_* constants.
+	 */
+	public function claim_for_cancellation_lease($orderId, $orderAmount) {
+		return $this->claim_from_unpaid($orderId, $orderAmount, 'cancelling');
+	}
+
 	// Verifier's side of the race: claim the row for payment. Returns one of the
 	// CLAIM_* constants; only CLAIM_CLAIMED means this caller may complete the
 	// order. On CLAIM_ALREADY the row was cancelled/paid elsewhere; on
@@ -378,6 +606,10 @@ class NMMPRO_Payment_Repo {
 		));
 	}
 
+	// Called only when an order is reopened for payment. Re-dates a
+	// 'cancelling' row too: if the owner then hands it back to 'unpaid', the
+	// reopened order must get a fresh payment window rather than re-expire at
+	// once. Never re-dates 'completing', whose payment is already verified.
 	public function set_ordered_at($orderId, $orderAmount, $orderedAt) {
 		global $wpdb;
 
@@ -385,7 +617,8 @@ class NMMPRO_Payment_Repo {
 			"UPDATE `$this->tableName`
 			 SET `ordered_at` = %d
 			 WHERE `order_amount` = %s
-			 AND `order_id` = %d",
+			 AND `order_id` = %d
+			 AND `status` <> 'completing'",
 			$orderedAt, $orderAmount, $orderId
 		));
 	}

@@ -1,4 +1,44 @@
 # External-service documentation audit
+## Litecoin Foundation response — recorded 16 September 2026
+
+The maintainer received a direct response from the Litecoin Foundation confirming that it maintains Litecoin Space and permits commercial use provided the service is not abused. The reply gives the same non-abuse condition for request limits, with no numerical quota. It states nginx logs are retained for one week and no further logs/data are kept. It suggests a donation if useful; it does not make donation or attribution a condition of use.
+
+Operator identity and commercial permission are now confirmed by direct correspondence. The reply supplies logging-retention information but does not specify the nginx log fields or provide public terms/privacy URLs. README records the confirmation as correspondence rather than implying a published policy exists. The remaining directory-review task is to obtain a public statement/link covering the API or seek the Plugins Team's acceptance of the operator confirmation. No API behavior or payment mode has changed.
+
+## Binance privacy PDF — 16 September 2026
+
+Iframe inspection of https://www.binance.com/en/about-legal/New-Privacy-Notice-05January2026 revealed a 22-page Privacy Notice, updated 8 December 2025 and effective 5 January 2026. Its opening definition of the Binance Platform expressly includes Binance API. The document was retrieved and read directly; the earlier navigation-only capture missed the embedded viewer. README now links to the notice page as well as the regional privacy portal.
+
+Embedded PDF: https://bin.bnbstatic.com/static/cms/cg08ou2ak0tn7mcplvfg/file/e65b60eef16f1dbb14597ca88917a11819d922d22c19f2c90d140e76f98b9539.pdf
+
+## Gate replacement links — 15 September 2026
+
+The maintainer supplied https://www.gate.com/legal/privacy-policy and https://www.gate.com/legal/user-agreement. Both documents were readable through the web reader, with substantive privacy and user-agreement content. Their opening sections explicitly include Gate APIs in the described services. Automated local Chrome still returned HTTP 403 Access Denied for both, so browser access may vary. README now uses these gate.com legal URLs in place of the older gate.io links. This verifies policy content and corrects the links; it is not a blanket approval of all API uses or a change to the configured price endpoint.
+
+
+## Complete Chrome pass — 14–15 September 2026
+
+CoinGecko: the maintainer confirmed both existing terms/privacy links work in normal Chrome on 15 September. Automated Chrome still receives a human-verification screen. Retain the links and distinguish this access limitation from missing/broken policies; the automated recheck did not independently verify current policy content.
+
+See [the per-URL Chrome audit](chrome-policy-audit.md) for 54 rendered checks plus three discovered links. mempool and Waves policy content is now verified; HTTP 201 did not prevent Waves from serving its policies. Automated Chrome still encountered access controls on CoinGecko, HitBTC, Gate, Blockchair and TronScan. Binance terms initially appeared as navigation only; subsequent iframe inspection verified the embedded 73-page Terms of Use PDF, effective 21 July 2026 (see the linked audit). These access limitations are not evidence that policies are missing.
+
+TzKT website policies explicitly exclude APIs; endpoint policies still need to be supplied. Poloniex privacy is no longer missing, but its User Agreement restricts API use to trading on Poloniex and disallows other commercial use. Clarify merchant price-query permission with the operator. All payment modes remain enabled.
+
+## Round 3 update — 14 September 2026
+
+Blockstream follow-up: both https://blockstream.com/terms/ and https://blockstream.com/privacy/ rendered their full policy content in Chrome after the maintainer confirmed they worked. The terms cover Blockstream websites and services/resources enabled through them; the privacy policy covers Blockstream-owned and operated sites and describes automatic IP/access-time logging. Both display an effective/update date of 16 January 2018. The privacy policy's example domain list does not explicitly name blockstream.info; this check establishes readable operator policies, not a separate API-specific agreement. Existing README links are retained. The historical SSL errors below describe the earlier fetch method, not broken policy pages.
+
+Poloniex follow-up: https://www.poloniex.com/support/privacy was verified in Chrome after the maintainer supplied the working URL. JavaScript rendering exposes the full Poloniex Privacy Policy (displayed revision date: 4 May 2020), covering its site and provision of services and describing automatic IP/request logging. The earlier text-only fetch returned an empty application shell; that was a retrieval limitation, not evidence of a missing policy. README now links the verified page. Poloniex is removed from the missing-privacy-document list.
+
+WordPress.org's 13 September review rejected inaccessible Blockchair/Waves policy links and missing terms/privacy documentation for several hosted endpoints. All payment modes remain enabled at the maintainer's request while operator policies are pursued. This revision is not ready for resubmission.
+
+- Frankfurter's official https://frankfurter.dev/#faq now explicitly describes commercial use and the API's privacy behavior. README links to those statements as an API FAQ, not as separate legal documents. Underlying data-provider terms still apply.
+- https://www.exchangerate-api.com/terms includes both terms and a Privacy Policy section, and explicitly covers er-api.com and its subdomains. README now labels both links explicitly. Its open-access documentation at https://www.exchangerate-api.com/docs/free also requires attribution on pages using its rates; attribution placement remains to be resolved before submission.
+- Blockchair publishes its privacy policy at https://github.com/Blockchair/Blockchair.Support/blob/master/PRIVACY.md. That document explicitly identifies the repository as a publication location and discusses short-term IP storage for API rate limiting. README uses this accessible official privacy link; the terms URL still returned 401 and requires operator follow-up.
+- Waves website terms do not establish applicability to nodes.wavesnodes.com. README now states that limitation rather than implying verified endpoint coverage.
+- Hosted endpoint policy questions remain for EOSRIO Hyperion, TzKT, LitecoinSpace, dcrdata, DigiExplorer, Qtum.info, BlackCoin, Greymass, Groestlsight and the Solana public RPC default. TzKT API attribution requirements also need confirmation for background payment verification.
+
+The local round-3 bundle contains the source-linked research, published contact routes and unsent operator enquiries. No operator confirmation has yet been received. Historic findings below are evidence of earlier checks, not a claim that every link currently works or applies to its endpoint.
 
 Reviewed 5 September 2026 against the first-party HTTP call sites in `src/NMMPRO_Exchange.php`, `src/NMMPRO_Blockchain.php`, `src/NMMPRO_Monero.php`, and `src/NMMPRO_Cron.php`.
 

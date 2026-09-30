@@ -72,9 +72,23 @@ foreach ($xmrAddrs as $a) {
 // transient. The multi-order collision warning asserted below is a constant
 // string (no order ids in it), so a rerun inside that window would observe no
 // warning at all. Clear the log throttles up front - and again at the end -
-// so consecutive runs behave identically.
-$pmThrottleWipe = "DELETE FROM `{$wpdb->options}` WHERE option_name LIKE '\_transient\_nmm\_log\_%' OR option_name LIKE '\_transient\_timeout\_nmm\_log\_%'";
-$wpdb->query($pmThrottleWipe);
+// so consecutive runs behave identically. The key prefix must track
+// NMMPRO_Util::log() exactly: this wipe once still said nmm_log_ after the
+// NMMPRO_ rename, matched nothing, and every rerun failed. The cleanup pass
+// asserts the wipe really deletes the row the collision warning wrote.
+// Returns the number of option rows deleted.
+function pm_clear_log_throttle($wpdb) {
+	$n = (int) $wpdb->query($wpdb->prepare(
+		"DELETE FROM `{$wpdb->options}` WHERE option_name LIKE %s OR option_name LIKE %s",
+		$wpdb->esc_like('_transient_nmmpro_log_') . '%',
+		$wpdb->esc_like('_transient_timeout_nmmpro_log_') . '%'
+	));
+	// get_transient() reads through the object cache, so the row delete alone
+	// is not enough in-process or on a site with a persistent cache.
+	wp_cache_flush();
+	return $n;
+}
+pm_clear_log_throttle($wpdb);
 
 // The matching tolerance is a store setting; pin it to the shipped default
 // (0.1% shortfall) through the same filter the matcher applies, so a harness
@@ -354,7 +368,13 @@ foreach ($pmAddrs as $a) {
 foreach ($xmrAddrs as $a) {
 	delete_option('nmmpro_XMR_transactions_consumed_for_' . $a);
 }
-$wpdb->query($pmThrottleWipe);
+// With no persistent object cache the collision warning's throttle is an
+// options row, so the wipe must delete at least one: zero means its key
+// prefix has drifted from NMMPRO_Util::log() and reruns will fail again.
+$pmThrottleRows = pm_clear_log_throttle($wpdb);
+if (!wp_using_ext_object_cache()) {
+	pmok('log-throttle wipe matches the logger\'s key',  $pmThrottleRows > 0, 'rows=' . $pmThrottleRows);
+}
 $wpdb->query("DELETE FROM `$pt`");
 
 echo $GLOBALS['pm_ok'] ? "\nPAYMENT-MATCHER CHECKS PASSED\n" : "\nPAYMENT-MATCHER CHECKS FAILED\n";

@@ -18,6 +18,15 @@ function NMMPRO_do_cron_job() {
 	// never wedge the cron. The lock name is scoped to this site (database +
 	// table prefix) so neither sites sharing a MySQL server nor subsites on
 	// one multisite network block one another.
+	// Paused by the operator (for example before a downgrade - see
+	// docs/DOWNGRADE.md): do nothing at all, not even take the lock. Nothing
+	// else runs matching, completion recovery or expiry, so a paused store has
+	// no Autopay worker once any pass already in flight has finished.
+	if (NMMPRO_Compat::get_option('nmmpro_background_paused', false)) {
+		NMMPRO_Util::log(__FILE__, __LINE__, 'Background job paused (nmmpro_background_paused); skipping this tick.');
+		return;
+	}
+
 	$lockName = NMMPRO_Util::cron_lock_name();
 	$lockAcquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName));
 
@@ -34,6 +43,34 @@ function NMMPRO_do_cron_job() {
 	}
 
 	try {
+		// Re-check the pause now that the lock is held, straight from the table
+		// (not the object cache): a pass that read "not paused" and then waited
+		// for the lock must not start work after the operator paused and saw
+		// the lock free. Together with the check above, a paused store starts no
+		// new work once the lock has been seen free. A read that FAILS is not
+		// "not paused": get_var() answers null for a missing option and for a
+		// failed query alike, so the error is checked and the pass exits. Both
+		// exits are inside the try, so the lock is released in finally.
+		$pausedNow = $wpdb->get_var($wpdb->prepare("SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s", 'nmmpro_background_paused'));
+		if ($wpdb->last_error !== '') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Could not read the background pause state (' . $wpdb->last_error . '); exiting this tick without doing anything.', 'warning');
+			return;
+		}
+		if ($pausedNow !== null && $pausedNow !== '' && $pausedNow !== '0') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Background job paused while waiting for the lock; exiting.');
+			return;
+		}
+
+		// Automatic expiry acts on sweep coverage, and coverage is only
+		// trustworthy if this pass is really the only one writing it. Without a
+		// held, still-owned cron lock this pass matches (which fails closed on
+		// its own per-address lock) but certifies and cancels nothing; the
+		// status screen reports why.
+		$fence = NMMPRO_Util::begin_cron_fence($lockAcquired);
+		if ($fence !== 'held') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Cron pass is not exclusive (' . $fence . '); Autopay will match payments but not expire orders this tick.', 'warning');
+		}
+
 		$nmmSettings = new NMMPRO_Settings(NMMPRO_Compat::get_option(NMMPRO_REDUX_ID));
 		// Number of clean addresses in the database at all times for faster thank you page load times
 		$hdBufferAddressCount = 4;
@@ -80,8 +117,10 @@ function NMMPRO_do_cron_job() {
 		}
 
 		NMMPRO_Payment::resume_verified_orders();
+		NMMPRO_Payment::recover_interrupted_cancellations();
 		NMMPRO_Payment::check_all_addresses_for_matching_payment($autoPaymentTransactionLifetimeSec);
 		NMMPRO_Payment::cancel_expired_payments();
+		NMMPRO_Payment::purge_lapsed_deferrals();
 
 		// Reclaim durable Solana retry rows for addresses no longer scanned at all
 		// (SOL disabled, or a carousel address removed/replaced) once they are far
@@ -99,6 +138,25 @@ function NMMPRO_do_cron_job() {
 		NMMPRO_Util::log(__FILE__, __LINE__, 'total time for cron job: ' . NMMPRO_get_time_passed($startTime));
 	}
 	finally {
+		// Record how the pass ENDED for the Status screen. Judging at the start
+		// would hide a pass that began exclusive and lost its lock part-way,
+		// which certifies and cancels nothing just the same.
+		// Re-ask the server rather than trusting the last answer: a connection
+		// dropped after the last certified write still means this pass was not
+		// exclusive to the end.
+		if (NMMPRO_Util::cron_fence_state() === 'held') {
+			NMMPRO_Util::cron_fence_held();
+		}
+		$fenceAtEnd = NMMPRO_Util::cron_fence_state();
+		if ($fenceAtEnd === 'held') {
+			if (NMMPRO_Compat::get_option('nmmpro_autopay_unfenced', false) !== false) {
+				NMMPRO_Compat::delete_option('nmmpro_autopay_unfenced');
+			}
+		}
+		elseif ($fenceAtEnd !== null) {
+			NMMPRO_Compat::update_option('nmmpro_autopay_unfenced', array('at' => time(), 'reason' => $fenceAtEnd), false);
+		}
+		NMMPRO_Util::end_cron_fence();
 		// Release only the lock we actually acquired. RELEASE_LOCK is a no-op
 		// for any connection that does not own it, but we guard anyway so a
 		// degraded (unlocked) run never touches another connection's lock.

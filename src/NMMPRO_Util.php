@@ -117,6 +117,200 @@ class NMMPRO_Util {
 		return 'nmm_cron_' . substr(md5(DB_NAME . '|' . $wpdb->prefix), 0, 12);
 	}
 
+	/**
+	 * The cron pass's exclusivity, for the writes that authorise cancelling an
+	 * order: coverage stamps, exclusion sets and the expiry pass itself. Null
+	 * outside a cron pass. 'held' latches to false the first time it is found
+	 * lost - a lock that came back would not undo what a concurrent pass may
+	 * have written meanwhile.
+	 *
+	 * @var array{held: bool, reason: string}|null
+	 */
+	private static $cronFence = null;
+
+	/**
+	 * Start a cron pass's fence from the raw GET_LOCK result for the cron lock.
+	 *
+	 * Holding the lock is not enough on its own. Before MySQL 5.7.5 (and
+	 * MariaDB 10.0.2) a connection could hold only ONE named lock: taking a
+	 * second released the first. The pass takes a per-address lock for every
+	 * address it matches, so on such a server the cron lock is gone from the
+	 * first address onward and two passes can both believe they are exclusive.
+	 * Probe the behaviour instead of trusting a version string (forks report
+	 * those differently): take one more lock, then ask whether this connection
+	 * still owns the cron lock. Only the cron-lock holder ever probes, so the
+	 * probe lock is uncontended.
+	 *
+	 * Returns 'held', or why the pass is unfenced: 'unavailable' (no advisory
+	 * locks on this host) or 'single-lock' (the server drops the first lock).
+	 */
+	public static function begin_cron_fence($lockAcquired) {
+		global $wpdb;
+
+		if ($lockAcquired !== '1') {
+			self::$cronFence = array('held' => false, 'reason' => 'unavailable');
+			return 'unavailable';
+		}
+
+		// Derived from the cron lock's own (already site-scoped) name.
+		$probe = 'nmm_fprobe_' . substr(md5(self::cron_lock_name()), 0, 12);
+		$probed = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $probe));
+		$stillHeld = self::cron_lock_owned();
+		if ($probed === '1') {
+			$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $probe));
+		}
+
+		self::$cronFence = $stillHeld
+			? array('held' => true, 'reason' => 'held')
+			: array('held' => false, 'reason' => 'single-lock');
+		return self::$cronFence['reason'];
+	}
+
+	/**
+	 * May this pass still write state that authorises cancellation? True
+	 * outside a cron pass (direct calls behave as they always have). Inside
+	 * one, re-asks the server every time: WordPress reconnects silently after
+	 * a dropped connection, and every advisory lock dies with the old one.
+	 *
+	 * @phpstan-impure Asks the database each call; the answer can change.
+	 */
+	public static function cron_fence_held() {
+		if (self::$cronFence === null) {
+			return true;
+		}
+		if (!self::$cronFence['held']) {
+			return false;
+		}
+		if (!self::cron_lock_owned()) {
+			self::$cronFence = array('held' => false, 'reason' => 'lost');
+			self::log(__FILE__, __LINE__, 'Cron lock lost mid-pass; this pass certifies and cancels nothing further.', 'warning');
+			return false;
+		}
+		return true;
+	}
+
+	public static function end_cron_fence() {
+		self::$cronFence = null;
+	}
+
+	/**
+	 * The current pass's fence as 'held', 'unavailable', 'single-lock' or
+	 * 'lost'; null outside a cron pass. Does not re-query the server.
+	 */
+	public static function cron_fence_state() {
+		return self::$cronFence === null ? null : self::$cronFence['reason'];
+	}
+
+	/**
+	 * Write an option that authorises expiry - coverage, exclusions, the sweep
+	 * cursor and start - ONLY if this connection still owns the cron lock at
+	 * the moment of the write. The ownership test is part of the statement
+	 * itself (INSERT ... SELECT ... WHERE IS_USED_LOCK() = CONNECTION_ID()), so
+	 * no check-then-write gap exists: a pass that lost its lock a microsecond
+	 * earlier writes nothing. A refused or failed write latches the fence lost,
+	 * so every later certification write in the pass is skipped as well.
+	 *
+	 * Outside a cron pass this is a plain option update, as before.
+	 *
+	 * Returns true when the value is stored (or was already stored) under an
+	 * owned lock, false otherwise.
+	 */
+	public static function fenced_update_option($name, $value) {
+		global $wpdb;
+
+		if (self::$cronFence === null) {
+			NMMPRO_Compat::update_option($name, $value, false);
+			// update_option() returns false for "unchanged" as well as "failed",
+			// and get_option() can answer from a stale cache, so confirm against
+			// the stored bytes themselves. WordPress stores a scalar as its
+			// string form and anything else serialized.
+			$stored = $wpdb->get_var($wpdb->prepare("SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s", $name));
+			return $stored !== null && $stored === (string) maybe_serialize($value);
+		}
+		if (!self::$cronFence['held']) {
+			return false;
+		}
+
+		// 'off' is the non-autoload value from WordPress 6.6; 'no' before it.
+		$autoload = function_exists('wp_autoload_values_to_autoload') ? 'off' : 'no';
+		$serialized = maybe_serialize($value);
+		$affected = $wpdb->query($wpdb->prepare(
+			"INSERT INTO `{$wpdb->options}` (`option_name`, `option_value`, `autoload`)
+			 SELECT %s, %s, %s FROM DUAL WHERE IS_USED_LOCK(%s) = CONNECTION_ID()
+			 ON DUPLICATE KEY UPDATE `option_value` = VALUES(`option_value`)",
+			$name, $serialized, $autoload, self::cron_lock_name()
+		));
+		// The write bypassed the options API, so drop every cached copy.
+		wp_cache_delete($name, 'options');
+		$notoptions = wp_cache_get('notoptions', 'options');
+		if (is_array($notoptions) && isset($notoptions[$name])) {
+			unset($notoptions[$name]);
+			wp_cache_set('notoptions', $notoptions, 'options');
+		}
+		wp_cache_delete('alloptions', 'options');
+
+		if ($affected === false) {
+			self::$cronFence = array('held' => false, 'reason' => 'lost');
+			self::log(__FILE__, __LINE__, 'Could not write ' . $name . ' (' . $wpdb->last_error . '); this pass certifies nothing further.', 'error');
+			return false;
+		}
+		if ($affected > 0) {
+			return true;
+		}
+		// 0 rows: either the stored value was already identical, or the lock
+		// was not ours and nothing was written. Only ownership tells them apart.
+		if (!self::cron_lock_owned()) {
+			self::$cronFence = array('held' => false, 'reason' => 'lost');
+			self::log(__FILE__, __LINE__, 'Cron lock lost before writing ' . $name . '; this pass certifies nothing further.', 'warning');
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Is a cron pass running right now on this site? true / false, or null
+	 * when the server cannot say (advisory locks unavailable, or the query
+	 * failed) - which must be read as "unknown", never as "drained". Used by
+	 * the downgrade procedure after the background job is paused.
+	 *
+	 * @phpstan-impure
+	 */
+	public static function cron_pass_running() {
+		global $wpdb;
+
+		$free = $wpdb->get_var($wpdb->prepare('SELECT IS_FREE_LOCK(%s)', self::cron_lock_name()));
+		if ($free === '0') {
+			return true;
+		}
+		if ($free === '1') {
+			return false;
+		}
+		return null;
+	}
+
+	/**
+	 * Does THIS connection still own the per-address match lock? A worker that
+	 * took the lock and then paused can have lost it to a silent reconnect,
+	 * after which another worker may own the address. Checked immediately
+	 * before an irreversible WooCommerce side effect.
+	 *
+	 * @phpstan-impure Asks the database each call.
+	 */
+	public static function address_match_lock_owned($cryptoId, $address) {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', self::address_match_lock_name($cryptoId, $address))) === '1';
+	}
+
+	// Ownership, not mere use: IS_USED_LOCK returns the OWNER's connection id,
+	// so "somebody holds it" is not proof that we do. One query, so both values
+	// come from the same moment.
+	private static function cron_lock_owned() {
+		global $wpdb;
+
+		return $wpdb->get_var($wpdb->prepare('SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', self::cron_lock_name())) === '1';
+	}
+
 	// Per-order advisory lock name. Scoped to this site AND this order so distinct
 	// orders never share a lock, and neither do same-numbered orders on different
 	// sites. The table prefix ($wpdb->prefix) is blog-specific on multisite, where
@@ -180,14 +374,35 @@ class NMMPRO_Util {
 	public static function acquire_address_match_lock($cryptoId, $address, $timeoutSeconds = 0) {
 		global $wpdb;
 
-		return $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', self::address_match_lock_name($cryptoId, $address), $timeoutSeconds));
+		$name = self::address_match_lock_name($cryptoId, $address);
+		// Named locks are recursive per connection (MySQL 5.7.5+, MariaDB
+		// 10.0.2+): a second GET_LOCK from this same connection "succeeds".
+		// Code reached from inside an address's work - a WooCommerce hook
+		// fired by a cancellation or a completion - must see it as busy, or a
+		// recovery pass could settle the very lease its caller still holds.
+		if (isset(self::$heldAddressLocks[$name])) {
+			return '0';
+		}
+		$acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', $name, $timeoutSeconds));
+		if ($acquired === '1') {
+			self::$heldAddressLocks[$name] = true;
+		}
+		return $acquired;
 	}
 
 	public static function release_address_match_lock($cryptoId, $address) {
 		global $wpdb;
 
-		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::address_match_lock_name($cryptoId, $address)));
+		$name = self::address_match_lock_name($cryptoId, $address);
+		if (!isset(self::$heldAddressLocks[$name])) {
+			return; // never ours (busy or unavailable): nothing to release
+		}
+		unset(self::$heldAddressLocks[$name]);
+		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
 	}
+
+	/** @var array<string, true> address locks this process currently holds */
+	private static $heldAddressLocks = array();
 
 	/**
 	 * The pinned request currently in flight: the token that identifies it, the

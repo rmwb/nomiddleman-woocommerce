@@ -98,7 +98,7 @@ jobs:
             php-stubs/wordpress-stubs:6.9.4 \
             php-stubs/woocommerce-stubs:10.9.4
       - name: Analyse plugin code (new findings only, see phpstan-baseline.neon)
-        run: vendor/bin/phpstan analyse -c phpstan.neon.dist --no-progress --memory-limit=1G
+        run: vendor/bin/phpstan analyse -c phpstan.neon.dist --no-progress --memory-limit=2G
 
   hd-derivation:
     name: HD address derivation (offline)
@@ -175,6 +175,8 @@ jobs:
         run: php tests/test-amount.php
       - name: Exchange-rate consensus (median, outlier rejection, stale tier) tests
         run: php tests/test-exchange-rate.php
+      - name: Status screen (escaping + capability) tests
+        run: php tests/test-dashboard-escaping.php
 
   db-integration:
     name: Autopay + retry queue (WordPress + WooCommerce + MariaDB)
@@ -256,13 +258,19 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "test-hd-verify: skipped" && { echo "::error::hd-verify test skipped"; exit 1; } || true
           echo "$OUT" | grep -q "HD-VERIFY CHECKS PASSED" || { echo "::error::hd-verify test did not pass"; exit 1; }
-      - name: Durable history, payment integrity and upgrade compatibility
+      - name: Durable history, payment integrity, upgrade compatibility and Autopay safety
         run: |
           set -e
-          for entry in 'test-consumed-history.php:CONSUMED-HISTORY CHECKS PASSED' 'test-payment-integrity.php:PAYMENT-INTEGRITY CHECKS PASSED' 'test-upgrade-compat.php:UPGRADE-COMPAT CHECKS PASSED'; do
+          for entry in 'test-consumed-history.php:CONSUMED-HISTORY CHECKS PASSED' 'test-payment-integrity.php:PAYMENT-INTEGRITY CHECKS PASSED' 'test-upgrade-compat.php:UPGRADE-COMPAT CHECKS PASSED' 'test-autopay-safety.php:AUTOPAY-SAFETY CHECKS PASSED'; do
             script="${entry%%:*}"
             marker="${entry#*:}"
             OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/$script" --path=wp 2>&1)
             echo "$OUT"
             echo "$OUT" | grep -q "$marker" || { echo "::error::$script did not pass"; exit 1; }
           done
+      - name: QR output escaping with WordPress
+        run: |
+          set -e
+          OUT=$(wp eval-file "$GITHUB_WORKSPACE/plugin/tests/test-output-escaping.php" --path=wp 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "OUTPUT-ESCAPING CHECKS PASSED"

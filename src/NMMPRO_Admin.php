@@ -101,6 +101,11 @@ class NMMPRO_Admin {
         );
 
         add_action('load-' . $hook, array(__CLASS__, 'enqueue_assets'));
+
+        // Read-only status screen, same capability as this page. Registered
+        // here rather than on its own admin_menu callback so the parent menu
+        // exists by the time the submenu is added.
+        NMMPRO_Dashboard::register_menu();
     }
 
     public static function enqueue_assets() {

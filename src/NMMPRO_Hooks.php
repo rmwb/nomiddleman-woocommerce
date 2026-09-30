@@ -54,30 +54,30 @@ function NMMPRO_update_database_when_admin_changes_order_status( $orderId, $oldO
 
 	// If admin updates from needs-payment to has-payment, stop looking for matching transactions
 	if ($oldOrderStatus === 'pending' && $newOrderStatus === 'processing') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'paid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'paid');
 	}
 	if ($oldOrderStatus === 'pending' && $newOrderStatus === 'completed') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'paid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'paid');
 	}
 	if ($oldOrderStatus === 'on-hold' && $newOrderStatus === 'processing') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'paid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'paid');
 	}
 	if ($oldOrderStatus === 'on-hold' && $newOrderStatus === 'completed') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'paid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'paid');
 	}
 
 	// If admin updates from has-payment to needs-payment, start looking for matching transactions
 	if ($oldOrderStatus === 'processing' && $newOrderStatus === 'pending') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 	}
 	if ($oldOrderStatus === 'processing' && $newOrderStatus === 'on-hold') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 	}
 	if ($oldOrderStatus === 'completed' && $newOrderStatus === 'pending') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 	}
 	if ($oldOrderStatus === 'completed' && $newOrderStatus === 'on-hold') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 	}
 
 	// If admin updates from needs-payment to cancelled, stop looking for matching transactions
@@ -85,24 +85,24 @@ function NMMPRO_update_database_when_admin_changes_order_status( $orderId, $oldO
 		'pending|cancelled', 'pending|failed', 'on-hold|cancelled', 'on-hold|failed',
 	);
 	if (in_array($oldOrderStatus . '|' . $newOrderStatus, $retireStatuses, true)) {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'cancelled');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'cancelled');
 	}
 
 	// If admin updates from cancelled to needs-payment, start looking for matching transactions
 	if ($oldOrderStatus === 'cancelled' && $newOrderStatus === 'on-hold') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 		$paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
 	}
 	if ($oldOrderStatus === 'cancelled' && $newOrderStatus === 'pending') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 		$paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
 	}
 	if ($oldOrderStatus === 'failed' && $newOrderStatus === 'on-hold') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 		$paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
 	}
 	if ($oldOrderStatus === 'failed' && $newOrderStatus === 'pending') {
-		$paymentRepo->set_status($orderId, $paymentAmount, 'unpaid');
+		$paymentRepo->set_status_from_order_event($orderId, $paymentAmount, 'unpaid');
 		$paymentRepo->set_ordered_at($orderId, $paymentAmount, time());
 	}
 }
@@ -176,17 +176,14 @@ function NMMPRO_first_mpk_address_ajax() {
 			$message = __('You have entered a valid Segwit MPK.', 'nomiddleman-crypto-payments-for-woocommerce');
 			$message2 = __('Segwit MPKs (ypub/zpub) are not supported - please use an xpub.', 'nomiddleman-crypto-payments-for-woocommerce');
 
-			echo json_encode([$message, $message2, '']);
-			wp_die();
+			wp_send_json(array($message, $message2, ''));
 		}
 		else {
 			$firstAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 0, $hdMode);
 			$secondAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 1, $hdMode);
 			$thirdAddress = NMMPRO_Hd::create_hd_address($cryptoId, $mpk, 2, $hdMode);
 
-			echo json_encode([$firstAddress, $secondAddress, $thirdAddress]);
-
-			wp_die();
+			wp_send_json(array($firstAddress, $secondAddress, $thirdAddress));
 		}
 }
 

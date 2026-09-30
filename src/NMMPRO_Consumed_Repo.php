@@ -27,15 +27,29 @@ class NMMPRO_Consumed_Repo {
         if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to create consumed history'); }
         self::$ready[$table] = true;
     }
-    private static function write($coin, $address, $hash, $orderId = 0) {
+    /**
+     * $strict: a plain INSERT that FAILS on an identity already recorded, for
+     * payment claims. Otherwise an idempotent upsert, for history import and
+     * for consuming a hash nobody is credited with. A claim must never rely on
+     * the upsert: under READ COMMITTED a prior "is it recorded?" read takes no
+     * gap lock, so two claims could both see nothing and both upsert.
+     */
+    private static function write($coin, $address, $hash, $orderId = 0, $strict = false) {
         global $wpdb;
         if (!is_string($hash) || $hash === '' || strlen($hash) > 255 || strlen($address) > 199 || strlen($coin) > 32) {
             throw new InvalidArgumentException('Invalid consumed identity');
         }
         $table = self::table();
-        $sql = $wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at)
-            VALUES (%s,%s,%s,%s,%d,%d) ON DUPLICATE KEY UPDATE identity=VALUES(identity)",
-            self::identity($coin, $address, $hash), $hash, $address, $coin, $orderId, time());
+        $identity = self::identity($coin, $address, $hash);
+        $now = time();
+        if ($strict) {
+            $sql = $wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at)
+                VALUES (%s,%s,%s,%s,%d,%d)", $identity, $hash, $address, $coin, $orderId, $now);
+        }
+        else {
+            $sql = $wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at)
+                VALUES (%s,%s,%s,%s,%d,%d) ON DUPLICATE KEY UPDATE identity=VALUES(identity)", $identity, $hash, $address, $coin, $orderId, $now);
+        }
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is prepared immediately above; the table is only wpdb's prefix plus this class's fixed suffix.
         if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to record consumed transaction'); }
     }
@@ -98,10 +112,36 @@ class NMMPRO_Consumed_Repo {
             $payments = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
             $engine = $wpdb->get_var($wpdb->prepare('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s', $payments));
             if (strtolower((string) $engine) !== 'innodb') { throw new RuntimeException('Payment table requires InnoDB'); }
+            if (!is_array($hashes) || count($hashes) === 0) { throw new InvalidArgumentException('A payment claim needs at least one transaction'); }
             if ($wpdb->query('START TRANSACTION') === false) { throw new RuntimeException('Unable to start payment claim'); }
+            // The per-address lock and the matcher's consumed check normally keep
+            // an already-recorded hash out. This read only gives that case a
+            // clear error; the guarantee is the strict INSERT below, which fails
+            // on a recorded identity at any isolation level - a plain read takes
+            // no gap lock under READ COMMITTED, and FOR UPDATE could deadlock.
+            $table = self::table();
+            $identities = array();
+            foreach ($hashes as $hash) { $identities[] = self::identity($coin, $address, $hash); }
+            $placeholders = implode(',', array_fill(0, count($identities), '%s'));
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- the table is wpdb's prefix plus this class's fixed suffix, and $placeholders is only literal %s markers; every identity is bound by prepare().
+            $sql = "SELECT COUNT(*) FROM `$table` WHERE identity IN ($placeholders)";
+            $owned = $wpdb->get_var($wpdb->prepare($sql, $identities)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is prepared in this call; see the note above.
+            if ($owned === null || $wpdb->last_error !== '') { throw new RuntimeException('Unable to check consumed history before claiming'); }
+            if ((int) $owned !== 0) { throw new RuntimeException('A transaction in this claim is already recorded as consumed'); }
             $claim = $repo->claim_for_payment($orderId, $amount);
             if ($claim === NMMPRO_Payment_Repo::CLAIM_DB_ERROR) { throw new RuntimeException('Payment claim failed'); }
-            foreach ($hashes as $hash) { self::write($coin, $address, $hash, $orderId); }
+            if ($claim === NMMPRO_Payment_Repo::CLAIM_ALREADY) {
+                // Losing the row is only conclusive when it is TERMINAL. An
+                // expiry holding a 'cancelling' lease may still hand it back to
+                // 'unpaid' (WooCommerce refused the cancellation), and a hash
+                // consumed now could then never pay it. Consume nothing; retry.
+                $current = $wpdb->get_var($wpdb->prepare("SELECT status FROM `$payments` WHERE order_id=%d AND order_amount=%s FOR UPDATE", $orderId, $amount));
+                // null is a failed read (or a row that vanished): unknown, so
+                // retry rather than consume.
+                if ($current === null) { throw new RuntimeException('Unable to read the lost payment row'); }
+                if ($current === 'cancelling') { throw new RuntimeException('Payment row is mid-cancellation; claim retried later'); }
+            }
+            foreach ($hashes as $hash) { self::write($coin, $address, $hash, $orderId, true); }
             if ($claim === NMMPRO_Payment_Repo::CLAIM_CLAIMED) {
                 $stored = substr(implode(',', $hashes), 0, 255);
                 if ($wpdb->query($wpdb->prepare("UPDATE `$payments` SET status='completing',tx_hash=%s WHERE order_id=%d AND order_amount=%s AND status='paid'", $stored, $orderId, $amount)) !== 1) {
