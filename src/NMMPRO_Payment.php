@@ -170,6 +170,14 @@ class NMMPRO_Payment {
 	 * already settled it to, or null if it was left leased.
 	 */
 	private static function settle_lease($paymentRepo, $orderId, $orderAmount, $lease) {
+		// Until the lease_gen migration has recorded itself, order events do
+		// not bump the generation (see set_status_from_order_event()), so a
+		// generation read here would prove nothing - even where the column
+		// already exists. Leases wait for the migration: late, never wrong.
+		if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') !== '1') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: the payment lease migration has not completed; leaving the ' . $lease . ' record of order ' . $orderId . ' for a later pass.', 'warning');
+			return null;
+		}
 		for ($attempt = 0; $attempt < 3; $attempt++) {
 			$state = $paymentRepo->lease_state($orderId, $orderAmount);
 			if ($state === false) {
@@ -1959,6 +1967,12 @@ class NMMPRO_Payment {
 		// (a WooCommerce that renamed it), do not start a cancellation at all.
 		if (!self::can_refuse_cancellation($order)) {
 			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: this WooCommerce version does not let a refused cancellation be undone cleanly; not cancelling order ' . $orderId . '. Please report this.', 'error');
+			return;
+		}
+		// A cancellation could not be settled before the lease_gen migration
+		// has recorded itself (see settle_lease()); do not start one.
+		if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') !== '1') {
+			NMMPRO_Util::log(__FILE__, __LINE__, 'Autopay: the payment lease migration has not completed; not cancelling order ' . $orderId . ' this tick.', 'warning');
 			return;
 		}
 

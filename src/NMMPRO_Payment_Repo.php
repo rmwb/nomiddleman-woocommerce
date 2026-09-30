@@ -354,9 +354,11 @@ class NMMPRO_Payment_Repo {
 	 * the migration has not run yet (a multisite runner that switched blogs
 	 * before that site's own load, or a migration that failed) the event is
 	 * applied with the pre-lease_gen statement, which leaves leased rows
-	 * alone: they wait for the migration - late, never wrong. A leased row
-	 * stays safe either way: settle_lease() also requires the order to be
-	 * stored exactly as it was when the settlement was decided.
+	 * alone, and the generation does not move. The gate is the recorded
+	 * migration (the option), not the column: where the column exists but the
+	 * option does not, this still takes the fallback. NMMPRO_Payment therefore
+	 * settles no lease and starts no cancellation until the option is set -
+	 * leased rows wait for the migration: late, never wrong.
 	 */
 	public function set_status_from_order_event($orderId, $orderAmount, $status) {
 		global $wpdb;

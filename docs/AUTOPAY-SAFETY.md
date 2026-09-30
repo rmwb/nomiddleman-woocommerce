@@ -33,10 +33,19 @@ Every Autopay order has a WooCommerce order and a row in the plugin's payment ta
    - the lease generation is unchanged;
    - the order is still stored with the status the canceller read.
 
-   The last check catches a payment saved by another request whose payment-record event failed to land. If any check fails, the save is **aborted**: the hook clears WooCommerce's pending status transition and throws, and WooCommerce catches the exception before its data store writes anything. Nothing is stored: not the cancellation, and not the canceller's older status over one saved since. No status hooks fire, so no "cancelled" email is sent and no stock or integration effects run.
+   The last check catches a payment saved by another request whose payment-record event failed to land. If any check fails, the save is **aborted**: the hook clears WooCommerce's pending status transition and throws, and WooCommerce catches the exception before its data store writes the order. The order is not changed: not cancelled, and not returned to the canceller's older status over one saved since. No after-save or status hooks fire, so no "cancelled" email is sent and no stock effects run.
+
+   One thing is written: WooCommerce's exception handler adds an internal error note to the order, recording that the save failed. Anything listening for new order notes sees it. Checked against WooCommerce 10.0, 10.8, 11.0 and 11.1.
 
    Clearing the transition needs a protected WooCommerce property. Before claiming a cancellation, the canceller checks that it exists, and does not cancel at all if it does not.
-7. **Order events never run DDL.** The `lease_gen` column comes from a migration that runs only when the site loads and on activation. An order event on a site whose migration is still pending applies to ordinary rows without `lease_gen` and leaves leased rows for the migration. It never runs `ALTER TABLE`, which would implicitly commit a caller's open transaction.
+7. **Order events never run DDL.** The `lease_gen` column comes from a migration that runs only when the site loads and on activation. It never runs from an order event, where `ALTER TABLE` would implicitly commit a caller's open transaction.
+
+   Until the migration has recorded itself (the `nmmpro_payment_lease_schema` option), the generation cannot be relied on, even where the column already exists. Until then:
+   - order events apply to ordinary rows and leave leased rows alone;
+   - no lease is settled;
+   - expiry starts no cancellation.
+
+   A payment is still matched and recorded, and its order is completed; its record stays `completing` until the migration runs. The migration retries on every page load.
 8. **A background pass that cannot read the pause switch does nothing.** After taking the cron lock, the pass re-reads `nmmpro_background_paused` from the table. A failed read is treated as paused, and the lock is released.
 
 ## Known limits

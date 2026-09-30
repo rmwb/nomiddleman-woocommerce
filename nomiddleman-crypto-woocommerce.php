@@ -849,8 +849,9 @@ function NMMPRO_maybe_add_payment_indexes() {
 // same UPDATE that applies the event, and a leased row ('completing' or
 // 'cancelling') is only settled by an UPDATE conditional on the value read
 // before the order was - so an event landing in between makes the settlement
-// fail and re-read, rather than being overwritten. Until the column exists
-// those UPDATEs fail, which leaves leases in place: late, never wrong.
+// fail and re-read, rather than being overwritten. Until this migration has
+// recorded itself (the option below), no lease is settled and no cancellation
+// started, which leaves leases in place: late, never wrong.
 function NMMPRO_maybe_add_payment_lease_gen() {
     if (NMMPRO_Compat::get_option('nmmpro_payment_lease_schema') === '1') {
         return;

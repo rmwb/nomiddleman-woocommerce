@@ -51,6 +51,19 @@ function as_stored($orderId) {
 	return (string) $wpdb->get_var($wpdb->prepare("SELECT `post_status` FROM `{$wpdb->posts}` WHERE `ID` = %d", $orderId));
 }
 
+// Set (or, for null, remove) the lease migration's option in the table AND the
+// object cache. delete_option() alone clears the cache only when it deletes a
+// row, so a flag written inside a transaction that was rolled back would
+// survive in the cache and hide what the code under test does.
+function as_set_lease_flag($value) {
+	global $wpdb;
+	$wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE `option_name` = %s", 'nmmpro_payment_lease_schema'));
+	wp_cache_delete('nmmpro_payment_lease_schema', 'options');
+	wp_cache_delete('alloptions', 'options');
+	wp_cache_delete('notoptions', 'options');
+	if ($value !== null) { add_option('nmmpro_payment_lease_schema', $value); }
+}
+
 $wpdb = $GLOBALS['wpdb'];
 $pt = $wpdb->prefix . NMMPRO_PAYMENT_TABLE;
 $prefix = 'safety_' . wp_generate_password(10, false);
@@ -169,7 +182,7 @@ remove_action('woocommerce_before_order_object_save', $failSave);
 asok('failed cancellation: order still awaiting payment', as_order_status($o4) === 'pending');
 asok('  its record is back to unpaid, not stranded as cancelled', as_row($o4) === 'unpaid', 'row=' . as_row($o4));
 NMMPRO_Payment::cancel_expired_payments();
-asok('  the next pass cancels it for real', as_order_status($o4) === 'cancelled' && as_row($o4) === 'cancelled');
+asok('  the next pass cancels it for real', as_order_status($o4) === 'cancelled' && as_row($o4) === 'cancelled', 'order=' . as_order_status($o4) . ' stored=' . as_stored($o4) . ' row=' . as_row($o4));
 
 // 4b. The request dies mid-cancellation (a throwing integration): the lease
 // stays, invisible to matching, and recovery settles it from the order.
@@ -975,7 +988,7 @@ list($o40) = $make('_txn_ordinary', 'cancelled', time());
 $repo->set_status($o40, '1', 'cancelled');
 list($o41) = $make('_txn_lease', 'pending', time());
 $repo->set_status($o41, '1', 'cancelling');
-delete_option('nmmpro_payment_lease_schema');
+as_set_lease_flag(null);
 $GLOBALS['as_ddl'] = 0;
 $countDdl = function ($sql) { if (preg_match('/^\s*(ALTER|CREATE|DROP)\s/i', $sql)) { $GLOBALS['as_ddl']++; } return $sql; };
 add_filter('query', $countDdl);
@@ -986,11 +999,42 @@ $inTxn40 = as_row($o40);
 $flagInTxn = get_option('nmmpro_payment_lease_schema', null);
 $wpdb->query('ROLLBACK');
 remove_filter('query', $countDdl);
-if ($savedLeaseSchema === null) { delete_option('nmmpro_payment_lease_schema'); } else { update_option('nmmpro_payment_lease_schema', $savedLeaseSchema); }
+as_set_lease_flag($savedLeaseSchema);
 asok('migration pending: an order event runs no DDL and no migration', $GLOBALS['as_ddl'] === 0 && $flagInTxn === null, 'ddl=' . $GLOBALS['as_ddl'] . ' flag=' . var_export($flagInTxn, true));
 asok('  it still applies to an ordinary row', $inTxn40 === 'unpaid', 'row=' . $inTxn40);
 asok('  and the caller\'s rollback undoes it (nothing committed early)', as_row($o40) === 'cancelled', 'row=' . as_row($o40));
 asok('  a leased row waits for the migration', as_row($o41) === 'cancelling', 'row=' . as_row($o41));
+
+// The same with the column really missing, so a migration run from the event
+// would have to ALTER TABLE - and that would commit the caller's transaction.
+$hasLeaseGen = function () use ($wpdb, $pt) { return (bool) $wpdb->get_results("SHOW COLUMNS FROM `$pt` LIKE 'lease_gen'"); };
+list($o42) = $make('_txn_nocol_ordinary', 'cancelled', time());
+$repo->set_status($o42, '1', 'cancelled');
+list($o43) = $make('_txn_nocol_lease', 'pending', time());
+$repo->set_status($o43, '1', 'cancelling');
+$wpdb->query("ALTER TABLE `$pt` DROP COLUMN `lease_gen`");
+as_set_lease_flag(null);
+$droppedCol = !$hasLeaseGen();
+$GLOBALS['as_ddl'] = 0;
+add_filter('query', $countDdl);
+$was = $wpdb->suppress_errors(true);
+$wpdb->query('START TRANSACTION');
+$repo->set_status_from_order_event($o42, '1', 'unpaid');
+$repo->set_status_from_order_event($o43, '1', 'unpaid');
+$inTxn42 = as_row($o42);
+$wpdb->query('ROLLBACK');
+$wpdb->suppress_errors($was);
+remove_filter('query', $countDdl);
+$colAfter = $hasLeaseGen();
+$flagAfter = get_option('nmmpro_payment_lease_schema', null);
+asok('column missing: the fixture really lacks lease_gen', $droppedCol);
+asok('  an order event runs no DDL, adds no column, records no migration', $GLOBALS['as_ddl'] === 0 && !$colAfter && $flagAfter === null, 'ddl=' . $GLOBALS['as_ddl'] . ' column=' . var_export($colAfter, true) . ' flag=' . var_export($flagAfter, true));
+asok('  it applied to the ordinary row inside the transaction', $inTxn42 === 'unpaid', 'row=' . $inTxn42);
+asok('  and the rollback undid it (no implicit commit)', as_row($o42) === 'cancelled', 'row=' . as_row($o42));
+asok('  a leased row waits for the migration', as_row($o43) === 'cancelling', 'row=' . as_row($o43));
+NMMPRO_maybe_add_payment_lease_gen();                       // the load-time migration restores it
+asok('  the load-time migration then adds the column and records itself', $hasLeaseGen() && get_option('nmmpro_payment_lease_schema') === '1');
+as_set_lease_flag($savedLeaseSchema);
 
 // --- 30. a failed initial sweep start stays failed through the chain (M5) -------
 // One page, every fetch failing, a retry cap of 1: dropped retries make an
@@ -1053,17 +1097,51 @@ $notoptions = is_array($notoptions) ? $notoptions : array();
 $notoptions['nmmpro_background_paused'] = true;
 wp_cache_set('notoptions', $notoptions, 'options');
 wp_cache_delete('nmmpro_background_paused', 'options');
+$GLOBALS['as_after_lock'] = false; $GLOBALS['as_reread31'] = false;
+$seeReread = function ($sql) {
+	if (strpos($sql, 'GET_LOCK(') !== false && strpos($sql, "'nmm_cron_") !== false) { $GLOBALS['as_after_lock'] = true; }
+	elseif ($GLOBALS['as_after_lock'] && strpos($sql, "'nmmpro_background_paused'") !== false && strpos($sql, 'SELECT `option_value`') !== false) { $GLOBALS['as_reread31'] = true; }
+	return $sql;
+};
+add_filter('query', $seeReread);
 NMMPRO_do_cron_job();
+remove_filter('query', $seeReread);
 remove_filter('pre_http_request', $offline31, 10);
 delete_option('nmmpro_background_paused');
 $wpdb->query($wpdb->prepare("DELETE FROM `{$wpdb->options}` WHERE `option_name` = %s", 'nmmpro_background_paused'));
 wp_cache_delete('notoptions', 'options');
 asok('paused in the table, "not paused" in the cache: no work', (int) get_option('nmmpro_autopay_scan_last_run') === 1 && NMMPRO_Util::cron_pass_running() === false, 'last_run=' . get_option('nmmpro_autopay_scan_last_run'));
+asok('  the pass got past the cache and re-read the table after the lock', $GLOBALS['as_after_lock'] && $GLOBALS['as_reread31']);
+
+// --- 32. no lease is settled or started before the migration records itself -----
+// The column exists but the migration's option does not (it failed to save,
+// or is not yet visible): order events do not bump the generation, so a
+// generation check would prove nothing. Leases wait; expiry starts nothing.
+$savedLeaseSchema32 = get_option('nmmpro_payment_lease_schema', null);
+list($o44) = $make('_flag_missing_lease', 'on-hold', time());
+$repo->set_status($o44, '1', 'completing');
+$setStoredStatus($o44, 'wc-processing');                      // completed; only settlement is left
+list($o45) = $make('_flag_missing_expiry', 'pending', $expiredAt);
+as_set_lease_flag(null);
+NMMPRO_Compat::update_option('nmmpro_completion_cursor', 0, false);
+NMMPRO_Payment::resume_verified_orders();
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+$row44 = as_row($o44); $row45 = as_row($o45); $stored45 = as_stored($o45);
+as_set_lease_flag($savedLeaseSchema32);
+asok('migration not recorded: a completion lease is not settled', $row44 === 'completing', 'row=' . $row44);
+asok('  and expiry does not start a cancellation', $row45 === 'unpaid' && $stored45 === 'wc-pending', 'row=' . $row45 . ' stored=' . $stored45);
+NMMPRO_Compat::update_option('nmmpro_completion_cursor', 0, false);
+NMMPRO_Payment::resume_verified_orders();
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+asok('  once recorded, the lease settles paid', as_row($o44) === 'paid', 'row=' . as_row($o44));
+asok('  and the expired order is cancelled', as_row($o45) === 'cancelled' && as_stored($o45) === 'wc-cancelled', 'row=' . as_row($o45) . ' stored=' . as_stored($o45));
 
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }
