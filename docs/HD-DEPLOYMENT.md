@@ -1,6 +1,6 @@
 # Privacy Mode safety release: deployment and rollback
 
-This release changes how Privacy Mode (HD wallet) decides that an order is paid, and it changes stored data on upgrade. Deploying it is the owner's decision, after independent review. This runbook assumes that approval.
+Version 2.13.0 changes how Privacy Mode (HD wallet) decides that an order is paid, and it changes stored data on upgrade. Deploying it to a store is the owner's decision. This runbook assumes that decision has been made.
 
 ## What the upgrade does
 

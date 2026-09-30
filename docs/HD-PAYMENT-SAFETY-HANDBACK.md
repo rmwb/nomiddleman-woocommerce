@@ -1,14 +1,16 @@
 # Privacy Mode payment safety: handback for independent review
 
-This is the handback that section 15 of the specification asks for, `HD-PAYMENT-SAFETY-HANDOFF.md`. It is ready for independent testing and review; **it is not approved**. It was last updated on 30 September 2026 for the merges of the Autopay safety track (`d44d252`, then `80decf4`) the MySQL test runs and the first CI run. Nothing has been deployed or released, and no live store, customer, order or mail server was touched.
+This is the handback that section 15 of the specification asks for, `HD-PAYMENT-SAFETY-HANDOFF.md`. It was written for independent testing and review, and last updated on 30 September 2026, after the release.
+
+**Status.** The owner merged this work into `master` (pull requests #23 and #24) and released it as **2.13.0** on 30 September 2026. It has not been deployed to a store as part of this work: no live store, customer, order or mail server was touched. Deployment is a separate step with its own runbook, [HD-DEPLOYMENT.md](HD-DEPLOYMENT.md). The sections below are the record as handed back, with the results and review status that led to the release.
 
 Design and step-by-step evidence are in [HD-PAYMENT-SAFETY-REPORT.md](HD-PAYMENT-SAFETY-REPORT.md). This page is the summary and index.
 
-**About the commit references.** The commit hashes in this document and in the report are from the author's working history, which is not published: some of its earlier commits named the real order and address from the incident. The Privacy Mode work is published as one commit on top of the Autopay branch, so those hashes cannot be looked up there. The Autopay branch (`integrate/post-2.12.0`) is published with its own history, and its hashes can.
+**About the commit references.** The commit hashes in this document and in the report are from the author's working history, which is not published: some of its earlier commits named the real order and address from the incident. The Privacy Mode work is in `master` as one commit (merged by #24), so those hashes cannot be looked up there. The Autopay work was merged with its own history (#23), and its hashes can.
 
 ## 1. Branch, baseline and diff
 
-- **Branch:** `hd-payment-safety` in the author's working copy. It is published on GitHub as `public/privacy-mode-safety`: one commit with the same files, on top of `integrate/post-2.12.0` (see "About the commit references" above).
+- **Branch:** `hd-payment-safety` in the author's working copy. Its files were published as one commit on top of the Autopay branch and merged into `master` by #24 (see "About the commit references" above). The two published branches were deleted after merging.
 - **Baseline:** `90f8787`. It is the tip of the Autopay safety work, which has its own review track. The specification's baseline, `e0dda61`, is an ancestor.
 - **Commits** (`git log 90f8787..hd-payment-safety`):
 
@@ -158,7 +160,7 @@ php tests/smoke-explorers.php   # live, read-only
 | Merged code (`80decf4`): PHPStan, WPCS security, PHPCompatibility, Plugin Check | clean; Plugin Check 0 errors, 557 warnings (555 before the merges; the 2 new ones are from one new Autopay query, in existing categories) | `merge-80decf4/` |
 | **MySQL 8.4.11 (`7fa58fd`, 30 Sep): all 18 DB suites** under CPT, HPOS, and CPT with READ COMMITTED. A fresh WordPress and WooCommerce install in an empty database, so the plugin's activation and migrations ran on MySQL too. | all PASS, with the same check counts as on MariaDB; all six plugin tables created as InnoDB; both migrations recorded | `mysql84-7fa58fd/` |
 | **MySQL 8.0.46 (`7fa58fd`): the same** | all PASS, same counts | `mysql80-7fa58fd/` |
-| **GitHub CI on the published branch (30 Sep):** `php -l` on PHP 7.4, 8.0, 8.2 and 8.4; PHPStan; WPCS security; PHPCompatibility; the offline suites; and all 18 DB suites on Linux with PHP 8.3.35, MariaDB 10.6.28, WordPress 7.1.2 and WooCommerce 11.1.2 | all 13 jobs pass. The first run failed in one job: PHPStan reached CI's 1 GB memory limit. The limit is now 2 GB (`.github/workflows/ci.yml`) and the second run passed. | GitHub Actions, first on the branch `public/hd-payment-safety` (the same files, since replaced by `public/privacy-mode-safety`) |
+| **GitHub CI on the published branch (30 Sep):** `php -l` on PHP 7.4, 8.0, 8.2 and 8.4; PHPStan; WPCS security; PHPCompatibility; the offline suites; and all 18 DB suites on Linux with PHP 8.3.35, MariaDB 10.6.28, WordPress 7.1.2 and WooCommerce 11.1.2 | all 13 jobs pass. The first run failed in one job: PHPStan reached CI's 1 GB memory limit. The limit is now 2 GB (`.github/workflows/ci.yml`) and the second run passed. | GitHub Actions. The same 13 jobs later passed on both pull requests, on `master` after each merge, and in the release workflow for `v2.13.0`. |
 | The first merge (`d44d252`), the same three runs and checks | all PASS (`test-autopay-safety` 140 checks); same static and Plugin Check results | `merge-d44d252/` |
 | Autopay track before the merges (`ae8da74`): `test-autopay-safety` under CPT, HPOS, HPOS with compatibility sync, and READ COMMITTED; mutation 16/16 | all PASS; every mutation fails the suite | `autopay-r5-fixes/`, `autopay-hpos-fence/`, `autopay-r6-fix/`, `autopay-r7-tidy/` |
 | (Historical) HD suites + `test-autopay-safety` under HPOS | PASS, but **before Step H's final commit** (22:40–23:08 on 26 Sep; `d3dc8f6` was committed at 23:11, `724a203` at 23:20) | `earlier-hpos-pre-H/` |
@@ -208,7 +210,7 @@ The audit is read-only (`wp nmmpro-hd audit`); usage is in [HD-RECONCILIATION.md
 7. **Third-party hooks are not exactly-once.** `payment_complete()` side effects of other plugins can repeat if WooCommerce fails between its save and our claim settlement. This is the same limit documented for Autopay.
 8. **QTUM and BTX lose Privacy Mode.** Stores using it must switch to Classic Mode.
 9. **Manual work.** Legacy held orders and audit findings need a person.
-10. **Changelog size.** The README changelog is at 4,956 of Plugin Check's 5,000 words; the next release must trim it.
+10. **Changelog size.** With the 2.13.0 entry, the README changelog is at about 4,990 of Plugin Check's 5,000 words; the next release must trim it.
 11. **Untested paths** (from § 4 and § 5): the uncertain claim commit; a concurrent real Autopay/Privacy Mode run on one address; MySQL before 8.0; the test suites on PHP before 8.3.
 12. **Autopay limits come with the merge.** They are listed in [AUTOPAY-SAFETY.md § Known limits](AUTOPAY-SAFETY.md#known-limits). Two are new since the baseline:
     - **Lease migration.** Until the payment table's lease migration has recorded itself (`nmmpro_payment_lease_schema`), Autopay settles no in-flight record and expires no order. Payments are still matched and their orders completed. The migration retries on every page load, but a site where it can never record stays in that state. Privacy Mode does not depend on it.
@@ -272,6 +274,10 @@ The Autopay work has its own review rounds, on `integrate/post-2.12.0`. Results 
 
 Codex did not re-run the database suites in any of these rounds; it read the code and the author's logs.
 
-A reviewer's verdict is not the owner's approval. Deployment remains a separate decision (`docs/HD-DEPLOYMENT.md`).
+### Merge and release
 
-Passing mocks and a local install do not show that production is fixed. That requires the independent review, a rehearsal on a copy of the store, and a small real payment per coin after deployment.
+A reviewer's verdict is not the owner's approval. On 30 September 2026 the owner merged the Autopay work (#23) and the Privacy Mode work (#24) into `master`, then the release preparation (#25), and tagged `v2.13.0`. The release workflow passed and published the GitHub release with the installable zip. Before publication, the incident's real order number and address were removed from the files, and the Privacy Mode work was published without its working history for the same reason.
+
+Deployment remains a separate decision (`docs/HD-DEPLOYMENT.md`).
+
+Passing mocks and a local install do not show that production is fixed. That requires a rehearsal on a copy of the store, and a small real payment per coin after deployment.
