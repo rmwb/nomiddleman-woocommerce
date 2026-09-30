@@ -1253,10 +1253,68 @@ asok('a cancelled copy saved first does not approve our own save', $GLOBALS['as_
 $recoverCancel();
 asok('  recovery settles it from the stored order', as_row($o50) === 'cancelled' && as_stored($o50) === 'wc-cancelled', 'row=' . as_row($o50) . ' stored=' . as_stored($o50));
 
+// --- 35. a later save still needs both locks ------------------------------------
+// After the cancellation is approved and written, a later cancelled save is
+// allowed only while this connection still owns the address AND the cron
+// lock, even though the order is stored as cancelled.
+$resaveCopy = function ($orderId) {
+	$copy = new WC_Order($orderId);
+	$copy->update_meta_data('_nmm_late_save', 'stored');
+	$copy->save();
+};
+$refusedNote = function ($orderId) {
+	foreach (wc_get_order_notes(array('order_id' => $orderId)) as $note) {
+		if (strpos($note->content, 'refused to save') !== false) { return true; }
+	}
+	return false;
+};
+
+// 35a. The address lock is lost during the status hooks.
+list($o51, $a51) = $make('_late_no_address', 'pending', $expiredAt);
+$GLOBALS['as_fired51'] = false;
+$loseAddress = function ($orderId) use ($o51, $a51, $wpdb, $other, $lockNameFor, $resaveCopy) {
+	if ((int) $orderId !== $o51 || $GLOBALS['as_fired51']) { return; }
+	$GLOBALS['as_fired51'] = true;
+	$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockNameFor('ETH', $a51)));
+	$other->get_var($other->prepare('SELECT GET_LOCK(%s, 5)', $lockNameFor('ETH', $a51)));
+	$resaveCopy($o51);
+};
+add_action('woocommerce_order_status_cancelled', $loseAddress, 20);
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+remove_action('woocommerce_order_status_cancelled', $loseAddress, 20);
+asok('address lock lost after approval: the later save is refused', $GLOBALS['as_fired51'] && $as_meta($o51, '_nmm_late_save') === null && $refusedNote($o51), 'meta=' . var_export($as_meta($o51, '_nmm_late_save'), true));
+asok('  its lease is left for recovery', as_row($o51) === 'cancelling' && as_stored($o51) === 'wc-cancelled', 'row=' . as_row($o51) . ' stored=' . as_stored($o51));
+$other->query('SELECT RELEASE_ALL_LOCKS()');
+$recoverCancel();
+asok('  which settles it cancelled', as_row($o51) === 'cancelled', 'row=' . as_row($o51));
+
+// 35b. The cron lock is lost during the status hooks.
+list($o52) = $make('_late_no_cron', 'pending', $expiredAt);
+$GLOBALS['as_fired52'] = false;
+$loseCron = function ($orderId) use ($o52, $wpdb, $lockName, $resaveCopy) {
+	if ((int) $orderId !== $o52 || $GLOBALS['as_fired52']) { return; }
+	$GLOBALS['as_fired52'] = true;
+	$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockName));
+	$resaveCopy($o52);
+};
+add_action('woocommerce_order_status_cancelled', $loseCron, 20);
+$wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 5)', $lockName));
+$held52 = NMMPRO_Util::begin_cron_fence('1');
+$newTick();
+NMMPRO_Payment::cancel_expired_payments();
+NMMPRO_Util::end_cron_fence();
+remove_action('woocommerce_order_status_cancelled', $loseCron, 20);
+$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lockName));
+asok('cron lock lost after approval: the later save is refused', $held52 === 'held' && $GLOBALS['as_fired52'] && $as_meta($o52, '_nmm_late_save') === null && $refusedNote($o52), 'fence=' . $held52 . ' meta=' . var_export($as_meta($o52, '_nmm_late_save'), true));
+asok('  its lease is left for recovery', as_row($o52) === 'cancelling' && as_stored($o52) === 'wc-cancelled', 'row=' . as_row($o52) . ' stored=' . as_stored($o52));
+$recoverCancel();
+asok('  which settles it cancelled', as_row($o52) === 'cancelled', 'row=' . as_row($o52));
+
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47, $o48, $o49, $o50) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47, $o48, $o49, $o50, $o51, $o52) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }

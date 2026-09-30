@@ -2148,9 +2148,10 @@ class NMMPRO_Payment {
 	 * see the order already stored as cancelled, which the first check would
 	 * misread as "the order changed". So a later cancelled save still needs
 	 * both locks, and is allowed only while the order is STORED as cancelled -
-	 * which also proves the approved save really landed. A save that would
-	 * put 'cancelled' back over anything else (a payment saved in between)
-	 * is refused like any stale cancellation.
+	 * which shows the cancellation is in storage (whichever save wrote it)
+	 * rather than assuming the approved save landed. A save that would put
+	 * 'cancelled' back over anything else (a payment saved in between) is
+	 * refused like any stale cancellation.
 	 *
 	 * @param WC_Order $order
 	 * @throws RuntimeException When the cancellation must not be saved.

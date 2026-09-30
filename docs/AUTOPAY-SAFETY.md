@@ -43,7 +43,7 @@ Every Autopay order has a WooCommerce order and a row in the plugin's payment ta
    - WooCommerce itself saves a second copy of the order under HPOS, for its coupon usage bookkeeping when an order is cancelled;
    - an integration may re-save the order from a status hook.
 
-   Such a later cancelled save still needs both locks, and is allowed only while the order is stored as cancelled. That also proves the approved save really landed. A cancelled save over anything else, such as a payment saved in between, is refused like any stale cancellation.
+   Such a later cancelled save still needs both locks, and is allowed only while the order is stored as cancelled. That also shows the cancellation is stored, whichever save wrote it, instead of assuming the approved save landed. A cancelled save over anything else, such as a payment saved in between, is refused like any stale cancellation.
 
    Clearing the transition needs a protected WooCommerce property. Before claiming a cancellation, the canceller checks that it exists, and does not cancel at all if it does not.
 7. **Order events never run DDL.** The `lease_gen` column comes from a migration that runs only when the site loads and on activation. It never runs from an order event, where `ALTER TABLE` would implicitly commit a caller's open transaction.
