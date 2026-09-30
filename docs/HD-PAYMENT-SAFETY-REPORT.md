@@ -1,6 +1,6 @@
 # HD payment safety: implementation report
 
-Working record for the Privacy Mode (HD wallet) fix specified in `HD-PAYMENT-SAFETY-HANDOFF.md` (22 September 2026). The patch is not approved. It stops before release for independent review.
+Working record for the Privacy Mode (HD wallet) fix specified in `HD-PAYMENT-SAFETY-HANDOFF.md` (22 September 2026). It was written before release, for independent review. The work has since been merged and released as 2.13.0 (30 September 2026); see [Release](#release) at the end. Statements below such as "unreleased" describe the work at the time each section was written.
 
 ## Baseline
 
@@ -1007,3 +1007,13 @@ Everything before this ran on MariaDB 13.0.2. The 18 database suites were then r
 - **Result:** all 18 suites pass in all six runs, with the same number of checks per suite as on MariaDB (logs in `mysql84-7fa58fd/` and `mysql80-7fa58fd/`).
 - **Not covered:** MySQL 5.7 and earlier, and an upgrade of a real older store on MySQL.
 
+## Release
+
+On 30 September 2026 the owner merged this work into `master` and released it as 2.13.0.
+
+- **Merged:** the Autopay integration branch with its history (#23), then the Privacy Mode work as one commit (#24). Both were merged with merge commits.
+- **Published without identifiers:** before anything was pushed, the incident's real order number and address were removed from the test header, the docs and the CLI examples, and local folder paths from the docs. The Privacy Mode working history was not published, because earlier commits in it contained those identifiers.
+- **Release preparation (#25):** version 2.13.0 in the plugin header, the version constant and the readme; the changelog entry; and a regenerated translation template (294 strings, up from 173).
+- **Released:** tag `v2.13.0`. The release workflow's CI passed and it published the GitHub release with the installable zip. The zip holds the plugin only, without `docs/` or `tests/`.
+- **CI:** PHPStan needed its memory limit raised from 1 GB to 2 GB. With that, every job passes, including `php -l` on PHP 7.4, 8.0, 8.2 and 8.4 and all 18 database suites on MariaDB 10.6.
+- **Not done:** deployment to a store. The runbook is `docs/HD-DEPLOYMENT.md`.
