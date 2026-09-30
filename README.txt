@@ -5,7 +5,7 @@ Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.12.0
+Stable Tag: 2.13.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
@@ -206,7 +206,7 @@ Earlier versions judged a Privacy Mode payment by the total an address had ever 
 
 == Changelog ==
 
-= Unreleased =
+= 2.13.0 =
 * New read-only Status screen (Nomiddleman Crypto Payments > Status): each enabled coin's mode, configuration and verifiability; unpaid orders per coin, including coins you have switched off; background-job health; and recent warnings. It changes nothing and contacts no outside service
 * Autopay: an order is marked paid only once WooCommerce has actually saved it as paid, and payment records are settled from stored orders rather than WooCommerce's cache
 * Autopay: a cancellation is recorded only once WooCommerce has actually cancelled the order; a failed or interrupted one returns the order to awaiting payment, so a later payment is still credited
@@ -218,7 +218,9 @@ Earlier versions judged a Privacy Mode payment by the total an address had ever 
 * Privacy Mode: each address is checked on the blockchain before it is shown and never reused; a transaction credited to one order can never pay another
 * Privacy Mode: no cancellation unless the blockchain was read completely and shows nothing arrived; at least one confirmation required; late payments are reported, never applied
 * Privacy Mode: Qtum and Bitcore are no longer offered; orders awaiting payment at update are held for review (see the FAQ)
+* Privacy Mode: Dogecoin and Dash are checked through BlockCypher; add a BlockCypher API token to avoid its rate limit
 * WP-CLI: `wp nmmpro-hd audit` and `wp nmmpro-hd reconcile`
+* WordPress.org review: QR code output is escaped and JSON responses are sent correctly
 * Upgrade adds a column to the plugin's payment table automatically. Before downgrading to 2.12.0, pause the background job and let in-progress cancellations settle (docs/DOWNGRADE.md in the source repository)
 
 = 2.12.0 =
