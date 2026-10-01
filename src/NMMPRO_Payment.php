@@ -1645,13 +1645,13 @@ class NMMPRO_Payment {
 			$result = NMMPRO_Blockchain::get_xtz_address_transactions($address);
 		}
 		if ($cryptoId === 'REP') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('REP', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('REP', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'MLN') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('MLN', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('MLN', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'GNO') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GNO', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GNO', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'LTC') {
 			$result = NMMPRO_Blockchain::get_ltc_address_transactions($address);
@@ -1660,25 +1660,25 @@ class NMMPRO_Payment {
 			$result = NMMPRO_Blockchain::get_btc_address_transactions($address);
 		}
 		if ($cryptoId === 'BAT') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BAT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BAT', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'BNB') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BNB', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BNB', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'HOT') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('HOT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('HOT', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'LINK') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('LINK', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('LINK', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'OMG') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('OMG', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('OMG', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'ZRX') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('ZRX', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('ZRX', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'GUSD') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GUSD', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GUSD', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'WAVES') {
 			$result = NMMPRO_Blockchain::get_waves_address_transactions($address);
@@ -1693,10 +1693,10 @@ class NMMPRO_Payment {
             $result = NMMPRO_Blockchain::get_dgb_address_transactions($address);
         }
         if ($cryptoId === 'USDC') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDC', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDC', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'USDT') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDT', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'USDTTRX') {
 			$result = NMMPRO_Blockchain::get_trc20_usdt_address_transactions($address);
@@ -1712,7 +1712,7 @@ class NMMPRO_Payment {
 		if (!isset($result)) {
 			$cryptos = NMMPRO_Cryptocurrencies::get();
 			if (isset($cryptos[$cryptoId]) && $cryptos[$cryptoId]->is_erc20_token()) {
-				$result = NMMPRO_Blockchain::get_erc20_address_transactions($cryptoId, $address);
+				$result = NMMPRO_Blockchain::get_erc20_address_transactions($cryptoId, $address, $transactionLifetime);
 			}
 			else {
 				$result = array('result' => 'error', 'message' => 'No verification available');

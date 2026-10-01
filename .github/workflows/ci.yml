@@ -170,6 +170,8 @@ jobs:
 
       - name: Pinned-request transport (fail-closed) tests
         run: php tests/test-pinned-request.php
+      - name: ERC-20 transfer sources and fallback order (offline)
+        run: php tests/test-evm-transfers.php
       - name: Settings bounds (server-side clamping) tests
         run: php tests/test-settings-bounds.php
       - name: Exact decimal and atomic amounts

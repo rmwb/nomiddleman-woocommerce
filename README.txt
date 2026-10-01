@@ -142,7 +142,7 @@ Used to convert your store's prices into cryptocurrency. Only a coin ticker or a
 
 = Payment verification services =
 
-Contacted only in Autopay and Privacy Mode, and only for the coins you enable. Each request carries the order's public payment address, and for confirmation checks the public transaction identifiers seen at that address.
+Contacted only in Autopay and Privacy Mode, and only for the coins you enable. Each request carries the order's public payment address, and for confirmation checks the public transaction identifiers seen at that address. Requests to a JSON-RPC node (below) also carry the token's public contract address and block numbers.
 
 * mempool.space - Bitcoin (Autopay and Privacy Mode). Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
 * Blockstream (blockstream.info) - Bitcoin, as a fallback in Privacy Mode. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
@@ -150,6 +150,10 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * Litecoin Space (litecoinspace.org) - Litecoin. The Litecoin Foundation confirmed that it maintains the service, permits commercial use subject to avoiding abuse, and retains nginx logs for one week with no further logs/data retained. It supplied no numerical request limit. These statements were provided directly to the maintainer; public terms and privacy policy URLs are still being requested. A donation was suggested, not required.
 * BlockCypher (api.blockcypher.com) - Dogecoin and Dash in Privacy Mode, Dogecoin and Litecoin in Autopay, and Litecoin as a Privacy Mode fallback. If you configure a BlockCypher API token, it is sent with these requests. Without a token BlockCypher allows about 100 requests an hour; stores using Privacy Mode for Dogecoin or Dash should configure one. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
 * Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com) - Ethereum, Ethereum Classic, ERC-20 tokens and the multi-network stablecoins. Terms: https://eaas.blockscout.com/terms-and-conditions - Privacy: https://eaas.blockscout.com/privacy-notice
+* Public JSON-RPC nodes - used only when Blockscout cannot answer, to read the ERC-20 token transfers (the ERC-20 tokens on Ethereum, and the Polygon, Arbitrum and Base stablecoins) sent to an order's payment address in Autopay. The terms and privacy pages below were checked in a browser on 1 October 2026.
+* PublicNode (ethereum-rpc.publicnode.com, polygon-bor-rpc.publicnode.com, base-rpc.publicnode.com), operated by Allnodes Inc. - Ethereum, Polygon and Base. Terms: https://www.publicnode.com/terms - Privacy: https://www.publicnode.com/privacy - the privacy policy states that when PublicNode is used as an RPC provider, IP addresses and other data are not stored for more than 24 hours.
+* Arbitrum public RPC (arb1.arbitrum.io), operated by Offchain Labs, Inc. - Arbitrum. Terms: https://arbitrum.io/tos - Privacy: https://arbitrum.io/privacy - these cover Offchain Labs' sites and services; neither names the public RPC endpoint specifically.
+* Base public RPC (mainnet.base.org), operated by Coinbase Technologies, Inc. - Base. Terms: https://docs.base.org/terms-of-service - Privacy: https://docs.base.org/privacy-policy
 * WhatsOnChain (api.whatsonchain.com) - Bitcoin SV. Terms: https://whatsonchain.com/terms - Privacy: https://whatsonchain.com/privacy
 * Dash Insight (insight.dash.org) - Dash in Autopay. Terms: https://www.dash.org/terms-of-use/ - Privacy: https://www.dash.org/privacy/
 * XRPSCAN (api.xrpscan.com) - XRP. Terms: https://xrpscan.com/tos - Privacy: https://xrpscan.com/privacy
@@ -184,7 +188,7 @@ This almost always means the server is missing the PHP math extension Privacy Mo
 
 = Can I run payment verification against my own node instead of a public explorer? =
 
-Yes. The `nmm_api_url` filter lets you redirect any verification request to your own self-hosted instance (for example your own mempool, Blockscout, or Insight server), as long as it runs the same software the plugin expects. See the developer hooks documentation for examples: https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
+Yes. The `nmm_api_url` filter lets you redirect any verification request to your own self-hosted instance (for example your own mempool, Blockscout, or Insight server), as long as it runs the same software the plugin expects. For ERC-20 tokens you can also choose the JSON-RPC nodes used when Blockscout cannot answer, with the `nmmpro_evm_rpc_nodes` filter. See the developer hooks documentation for examples: https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
 
 Note that this filter currently covers blockchain verification requests only, not exchange-rate lookups.
 
