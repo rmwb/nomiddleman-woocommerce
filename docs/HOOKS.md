@@ -103,7 +103,9 @@ Base stablecoins) are read from the first source that answers:
 1. the chain's **Blockscout** instance;
 2. a **public JSON-RPC node**, read log by log.
 
-The node is used only when Blockscout fails. When all fail,
+The node is used only when Blockscout fails. A node's answer lets payments be
+matched, but never counts as checking the address for expiry: orders on that
+address are not cancelled until Blockscout answers again. When both fail,
 nothing is matched or expired on that address in that pass, as before.
 
 Every one of these requests passes through `nmmpro_api_url`, so you can point
@@ -132,11 +134,12 @@ add_filter( 'nmmpro_evm_rpc_nodes', function ( $nodes, $chain_id ) {
 }, 10, 2 );
 ```
 
-A node must be following the chain: one whose newest block is more than 15
-minutes old is refused. An address that received more than about 30 transfers
-of one token on Arbitrum within the lookback cannot be read this way (that
-node does not stamp its logs, so each transfer costs a request), and waits for
-an explorer.
+A node must be following the chain: one whose newest block is more than 5
+minutes old is refused. Each block that holds a transfer is checked against
+its header by hash, and the tip is read again at the end, so a reorganisation
+during the read fails the fetch. A fetch is limited to 40 requests and one
+minute per node; an address whose transfers within the lookback sit in more
+than about 30 blocks cannot be read this way, and waits for Blockscout.
 
 ### `nmmpro_sol_allow_private_rpc` — permit a local Solana RPC in the setting
 

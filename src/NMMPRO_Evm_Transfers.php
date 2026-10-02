@@ -11,32 +11,40 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * An explorer hands back "the newest transfers of this address". A node can
  * only be asked "the Transfer logs of this contract to this address between
- * block A and block B", so this class has to prove what an explorer's answer
- * takes for granted: that the range it read really covers the period the
- * matcher and the expiry pass are about to reason over. Every rule below
- * exists so that an answer from here is never weaker than the explorer's:
+ * block A and block B", so this class has to establish what an explorer's
+ * answer takes for granted:
  *
  *  - All or nothing. Any chunk, header or field that cannot be read fails the
- *    whole fetch. A partial view must never let expiry conclude that nothing
- *    arrived.
+ *    whole fetch, and a reply of the wrong JSON type (an object where a list
+ *    of logs belongs) is unreadable, not empty.
  *  - Proven coverage. The starting block's own timestamp must be at or before
  *    the start of the lookback; assumed block times only size the first guess.
- *  - A live tip. A node whose newest block is old is lagging, and would hide a
- *    recent payment; it is refused.
- *  - One snapshot. The range ends at the tip's block NUMBER, never 'latest',
- *    so every chunk describes the same chain state, and confirmations are
- *    counted from that tip.
+ *  - A live tip. A node whose newest block is more than a few minutes old is
+ *    lagging, and is refused.
+ *  - One chain. Blocks are requested by number, so every block a transfer is
+ *    taken from is checked by hash: its header must carry the block hash the
+ *    log names, and the tip read at the start must still be the block at that
+ *    height at the end. A reorganisation replaces a suffix of the chain, so
+ *    an unchanged tip means no block in the range was replaced while it was
+ *    read.
  *  - Strict parsing. Only the token contract's own logs, the standard
  *    three-topic Transfer layout with a 32-byte value, addressed to the
- *    queried address. A log flagged 'removed' (reorged out) is ignored.
- *  - Times that fit. Every transfer's time must lie between the starting
- *    block's and the tip's. A log's own blockTimestamp is used only if it
- *    does (Arbitrum's public node sends 0x0); otherwise the header is read.
+ *    queried address, inside the block range asked. A log flagged 'removed'
+ *    (reorged out) is ignored. Transaction hashes must be lower-case hex, the
+ *    form Blockscout serves, because the consumed-transaction ledger compares
+ *    them exactly; nothing is re-cased.
+ *  - Times from headers. A transfer's time is its verified block header's,
+ *    never the log's own blockTimestamp (Arbitrum's public node sends 0x0
+ *    there, and any node could send a plausible wrong value), and it must lie
+ *    between the starting block's and the tip's.
  *
- * Nothing here decides a payment: it returns the same NMMPRO_Transaction list
- * the explorer adapters do, and reports its page through
- * NMMPRO_Blockchain::note_raw_page() so the matcher's truncation check applies
- * unchanged.
+ * An answer from here lets payments be matched, but never certifies an
+ * address as covered for expiry: the page is reported through
+ * NMMPRO_Blockchain::note_raw_page() as not certifiable, so
+ * NMMPRO_Payment::page_possibly_truncated() keeps the address out of the
+ * coverage stamp. A node may lag or hold back a block without that being
+ * detectable here; that can delay a payment, and expiry waits for
+ * Blockscout - late, never wrong.
  */
 class NMMPRO_Evm_Transfers {
 
@@ -49,9 +57,9 @@ class NMMPRO_Evm_Transfers {
 	// matcher's truncation check treats as "possibly more below".
 	const MAX_ROWS = 100;
 
-	// JSON-RPC calls one fetch may make against one node: tip, tip header,
-	// up to COVERAGE_TRIES start headers, the log chunks, and one header per
-	// block that holds a kept transfer when the node omits blockTimestamp.
+	// JSON-RPC calls one fetch may make against one node: the tip, its
+	// header (read again at the end), up to COVERAGE_TRIES start headers, the
+	// log chunks, and one header per block that holds a kept transfer.
 	const MAX_REQUESTS = 40;
 
 	// Read this much further back than asked, so clock differences between
@@ -59,7 +67,11 @@ class NMMPRO_Evm_Transfers {
 	const MARGIN_SEC = 1800;
 
 	// A tip older than this means the node is not following the chain.
-	const MAX_TIP_AGE_SEC = 900;
+	const MAX_TIP_AGE_SEC = 300;
+
+	// Wall-clock time one fetch from one node may take, on top of the call
+	// budget: a slow node must not hold a cron pass for minutes.
+	const MAX_FETCH_SEC = 60;
 
 	// How often the starting block may be moved further back to reach the
 	// lookback before the fetch gives up.
@@ -161,20 +173,21 @@ class NMMPRO_Evm_Transfers {
 	}
 
 	private static function fetch_from($url, $maxSpan, $chainId, $contract, $address, $lookbackSec) {
-		$calls = 0;
 		$now = time();
+		$budget = array('calls' => 0, 'until' => $now + self::MAX_FETCH_SEC);
 
 		// ---- the tip, and proof that the node is following the chain ----
-		$tipHex = self::call($url, 'eth_blockNumber', array(), $calls);
+		$tipHex = self::call($url, 'eth_blockNumber', array(), $budget, 'scalar');
 		if (!self::is_quantity($tipHex)) {
 			return self::error('no tip');
 		}
 		$tip = self::to_int($tipHex);
 
-		$tipTime = self::block_time($url, $tip, $calls);
-		if ($tipTime === null) {
+		$tipHeader = self::block_header($url, $tip, $budget);
+		if ($tipHeader === null) {
 			return self::error('no tip header');
 		}
+		$tipTime = $tipHeader['time'];
 		if ($tipTime < $now - self::MAX_TIP_AGE_SEC) {
 			return self::error('node is behind the chain (tip is ' . ($now - $tipTime) . 's old)');
 		}
@@ -192,10 +205,11 @@ class NMMPRO_Evm_Transfers {
 
 		for ($try = 0; $try < self::COVERAGE_TRIES; $try++) {
 			$candidate = max(0, $tip - $span);
-			$time = self::block_time($url, $candidate, $calls);
-			if ($time === null) {
+			$header = self::block_header($url, $candidate, $budget);
+			if ($header === null) {
 				return self::error('no header for the starting block');
 			}
+			$time = $header['time'];
 			if ($time <= $cutoff || $candidate === 0) {
 				$from = $candidate;
 				$fromTime = $time;
@@ -223,7 +237,7 @@ class NMMPRO_Evm_Transfers {
 				'fromBlock' => self::to_hex($start),
 				'toBlock'   => self::to_hex($end),
 				'topics'    => $topics,
-			)), $calls);
+			)), $budget, 'list');
 
 			if (!is_array($chunk)) {
 				return self::error('logs ' . $start . '-' . $end . ' unreadable');
@@ -249,41 +263,53 @@ class NMMPRO_Evm_Transfers {
 		});
 		$logs = array_slice($logs, 0, self::MAX_ROWS);
 
-		// ---- block times for the kept rows ----
-		$times = array();
+		// ---- each kept transfer's block, verified by hash ----
+		$headers = array();
 		$transactions = array();
 		$oldest = null;
 
 		foreach ($logs as $row) {
 			$block = $row['block'];
-			if (!isset($times[$block])) {
-				// A block inside [from, tip] cannot be older than the start
-				// block or newer than the tip. A log's own blockTimestamp is
-				// used only when it fits - some nodes send 0x0 there - and
-				// otherwise the header is read; a header that does not fit
-				// either means the node's answers do not describe one chain.
-				$time = $row['time'];
-				if ($time === null || $time < $fromTime || $time > $tipTime) {
-					$time = self::block_time($url, $block, $calls);
-					if ($time === null) {
-						return self::error('no header for block ' . $block);
-					}
-					if ($time < $fromTime || $time > $tipTime) {
-						return self::error('block ' . $block . ' has a time outside the range read');
-					}
+			if (!isset($headers[$block])) {
+				$header = self::block_header($url, $block, $budget);
+				if ($header === null) {
+					return self::error('no header for block ' . $block);
 				}
-				$times[$block] = $time;
+				// A block inside [from, tip] cannot be older than the start
+				// block or newer than the tip; one that is means the node's
+				// answers do not describe one chain.
+				if ($header['time'] < $fromTime || $header['time'] > $tipTime) {
+					return self::error('block ' . $block . ' has a time outside the range read');
+				}
+				$headers[$block] = $header;
 			}
 
-			$time = $times[$block];
+			if ($row['block_hash'] !== $headers[$block]['hash']) {
+				return self::error('a transfer in block ' . $block . ' names a different block hash than its header');
+			}
+
+			$time = $headers[$block]['time'];
 			if ($oldest === null || $time < $oldest) {
 				$oldest = $time;
 			}
 
-			$transactions[] = new NMMPRO_Transaction($row['value'], $tip - $block + 1, $time, $row['hash']);
+			// Counted as Blockscout counts them (tip minus block), so the
+			// required-confirmations setting means the same for both sources.
+			$transactions[] = new NMMPRO_Transaction($row['value'], $tip - $block, $time, $row['hash']);
 		}
 
-		NMMPRO_Blockchain::note_raw_page(count($logs), $oldest);
+		// ---- the tip is still the tip: nothing in the range was replaced ----
+		$tipAgain = self::block_header($url, $tip, $budget);
+		if ($tipAgain === null) {
+			return self::error('no tip header at the end');
+		}
+		if ($tipAgain['hash'] !== $tipHeader['hash']) {
+			return self::error('the chain changed while it was read');
+		}
+
+		// Reported as NOT certifiable: matching may use this answer, expiry
+		// must not (see the class comment).
+		NMMPRO_Blockchain::note_raw_page(count($logs), $oldest, false);
 
 		return array(
 			'result'       => 'success',
@@ -293,11 +319,11 @@ class NMMPRO_Evm_Transfers {
 	}
 
 	/**
-	 * One log as array(block, index, hash, value, time|null); null for a log
-	 * to skip (reorged out); false for anything that is not exactly a
+	 * One log as array(block, index, hash, block_hash, value); null for a
+	 * log to skip (reorged out); false for anything that is not exactly a
 	 * standard Transfer of this contract to this address inside the range.
 	 *
-	 * @return array{block: int, index: int, hash: string, value: string, time: int|null}|null|false
+	 * @return array{block: int, index: int, hash: string, block_hash: string, value: string}|null|false
 	 */
 	private static function parse_log($log, $contract, $paddedTo, $start, $end) {
 		if (!is_array($log)) {
@@ -309,13 +335,14 @@ class NMMPRO_Evm_Transfers {
 
 		$topics = isset($log['topics']) ? $log['topics'] : null;
 
-		if (!isset($log['address'], $log['data'], $log['blockNumber'], $log['transactionHash'], $log['logIndex'])
+		if (!isset($log['address'], $log['data'], $log['blockNumber'], $log['blockHash'], $log['transactionHash'], $log['logIndex'])
 			|| !is_string($log['address']) || strtolower($log['address']) !== $contract
 			|| !is_array($topics) || count($topics) !== 3
 			|| !is_string($topics[0]) || strtolower($topics[0]) !== self::TRANSFER_TOPIC
 			|| !is_string($topics[2]) || strtolower($topics[2]) !== $paddedTo
 			|| !is_string($log['data']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['data'])
-			|| !is_string($log['transactionHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['transactionHash'])
+			|| !self::is_hash($log['transactionHash'])
+			|| !is_string($log['blockHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['blockHash'])
 			|| !self::is_quantity($log['blockNumber']) || !self::is_quantity($log['logIndex'])) {
 			return false;
 		}
@@ -325,56 +352,64 @@ class NMMPRO_Evm_Transfers {
 			return false; // outside what was asked for: the node is not answering the question
 		}
 
-		$time = null;
-		if (isset($log['blockTimestamp'])) {
-			if (!self::is_quantity($log['blockTimestamp'])) {
-				return false;
-			}
-			$time = self::to_int($log['blockTimestamp']);
-		}
-
 		return array(
-			'block' => $block,
-			'index' => self::to_int($log['logIndex']),
-			'hash'  => strtolower($log['transactionHash']),
-			'value' => self::hex_to_decimal(substr($log['data'], 2)),
-			'time'  => $time,
+			'block'      => $block,
+			'index'      => self::to_int($log['logIndex']),
+			'hash'       => $log['transactionHash'],
+			'block_hash' => strtolower($log['blockHash']),
+			'value'      => self::hex_to_decimal(substr($log['data'], 2)),
 		);
 	}
 
 	/**
-	 * A block's timestamp, or null when the header cannot be read.
+	 * A block header as array(time, hash), or null when it cannot be read or
+	 * is not the header of block $block.
+	 *
+	 * @return array{time: int, hash: string}|null
 	 */
-	private static function block_time($url, $block, &$calls) {
-		$header = self::call($url, 'eth_getBlockByNumber', array(self::to_hex($block), false), $calls);
+	private static function block_header($url, $block, &$budget) {
+		$header = self::call($url, 'eth_getBlockByNumber', array(self::to_hex($block), false), $budget, 'object');
 
-		if (!is_array($header) || !isset($header['timestamp'], $header['number'])
+		if (!is_array($header) || !isset($header['timestamp'], $header['number'], $header['hash'])
 			|| !self::is_quantity($header['timestamp']) || !self::is_quantity($header['number'])
+			|| !is_string($header['hash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $header['hash'])
 			|| self::to_int($header['number']) !== (int) $block) {
 			return null;
 		}
 
 		$time = self::to_int($header['timestamp']);
 
-		return $time > 0 ? $time : null;
+		return $time > 0 ? array('time' => $time, 'hash' => strtolower($header['hash'])) : null;
 	}
 
 	/**
-	 * One JSON-RPC call; null on any failure, including the request budget.
+	 * One JSON-RPC call whose result must be of JSON type $kind ('list',
+	 * 'object' or 'scalar'); null on any failure, a result of another type,
+	 * or an exhausted budget (calls or time).
 	 */
-	private static function call($url, $method, $params, &$calls) {
-		if ($calls >= self::MAX_REQUESTS) {
+	private static function call($url, $method, $params, &$budget, $kind) {
+		if ($budget['calls'] >= self::MAX_REQUESTS || time() > $budget['until']) {
 			return null;
 		}
-		$calls++;
+		$budget['calls']++;
 
 		$answer = NMMPRO_Blockchain::evm_rpc($url, $method, $params);
 
-		return $answer['result'] === 'success' ? $answer['value'] : null;
+		if ($answer['result'] !== 'success' || $answer['kind'] !== $kind) {
+			return null;
+		}
+
+		return $answer['value'];
 	}
 
 	private static function error($message) {
 		return array('result' => 'error', 'message' => $message);
+	}
+
+	// A transaction hash in the form Blockscout serves: 0x and 64 lower-case
+	// hex digits. The consumed-transaction ledger keys on the exact string.
+	private static function is_hash($value) {
+		return is_string($value) && preg_match('/^0x[0-9a-f]{64}$/', $value) === 1;
 	}
 
 	private static function is_address($value) {

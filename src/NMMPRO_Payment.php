@@ -991,14 +991,23 @@ class NMMPRO_Payment {
 	 * When an adapter reports no raw metadata (not yet instrumented), the
 	 * filtered result is used as a floor - it can only under-detect, so
 	 * instrumenting an adapter strictly tightens the check.
+	 *
+	 * A source that reported its page as not certifiable (the ERC-20 JSON-RPC
+	 * fallback, whose node may lag or hold back blocks undetectably) is
+	 * treated as possibly truncated whatever its size: its payments are
+	 * matched, but the address is not certified until an explorer answers.
 	 */
 	public static function page_possibly_truncated($cryptoId, $fetchResult, $transactionLifetime, $now) {
+		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
+		if (is_array($pageMeta) && array_key_exists(2, $pageMeta) && $pageMeta[2] === false) {
+			return true;
+		}
+
 		$cap = NMMPRO_Blockchain::adapter_page_cap($cryptoId);
 		if ($cap < 1) {
 			return false;
 		}
 
-		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
 		$transactions = isset($fetchResult['transactions']) ? $fetchResult['transactions'] : array();
 
 		if (is_array($pageMeta)) {

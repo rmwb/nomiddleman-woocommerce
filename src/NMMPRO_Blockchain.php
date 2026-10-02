@@ -1939,8 +1939,9 @@ class NMMPRO_Blockchain {
 	}
 
 	// The lookback the JSON-RPC source covers when a caller does not say how
-	// far back it reasons: longer than the matcher's window, so the answer
-	// can only cover more than is needed, never less.
+	// far back it reasons. The Autopay sweep always passes its own (possibly
+	// widened) lifetime; this default only serves other callers, and covers
+	// six hours, no more.
 	const ERC20_DEFAULT_LOOKBACK_SEC = 21600;
 
 	/**
@@ -1997,10 +1998,13 @@ class NMMPRO_Blockchain {
 				&& isset($rawTransaction->contractAddress)
 				&& strtolower($rawTransaction->contractAddress) === strtolower($contract)) {
 
+				// The hash is passed through exactly as served: the
+				// consumed-transaction ledger compares it exactly, and
+				// identities recorded by earlier releases used this form.
 				$transactions[] = new NMMPRO_Transaction($rawTransaction->value,
 												  $rawTransaction->confirmations,
 												  $rawTransaction->timeStamp,
-												  strtolower($rawTransaction->hash));
+												  $rawTransaction->hash);
 			}
 		}
 
@@ -2014,8 +2018,11 @@ class NMMPRO_Blockchain {
 
 	/**
 	 * One JSON-RPC call to an EVM node, for NMMPRO_Evm_Transfers. Returns
-	 * array('result' => 'success', 'value' => mixed) or array('result' =>
-	 * 'error'). The per-host backoff and the nmmpro_api_url filter apply as
+	 * array('result' => 'success', 'value' => mixed, 'kind' => 'list' |
+	 * 'object' | 'scalar' | 'null') or array('result' => 'error'). 'kind' is
+	 * the JSON type of the result: decoded to PHP arrays, an empty list and
+	 * an empty object look alike, and a log list must never be confused with
+	 * an object. The per-host backoff and the nmmpro_api_url filter apply as
 	 * for every other request.
 	 */
 	public static function evm_rpc($url, $method, $params) {
@@ -2037,7 +2044,22 @@ class NMMPRO_Blockchain {
 			return array('result' => 'error');
 		}
 
-		return array('result' => 'success', 'value' => $body['result']);
+		$typed = json_decode($response['body'], false);
+		$result = (is_object($typed) && property_exists($typed, 'result')) ? $typed->result : null;
+		if (is_array($result)) {
+			$kind = 'list';
+		}
+		elseif (is_object($result)) {
+			$kind = 'object';
+		}
+		elseif ($result === null) {
+			$kind = 'null';
+		}
+		else {
+			$kind = 'scalar';
+		}
+
+		return array('result' => 'success', 'value' => $body['result'], 'kind' => $kind);
 	}
 
 	public static function get_trc20_usdt_address_transactions($address) {
@@ -2756,10 +2778,18 @@ class NMMPRO_Blockchain {
 	// short. Consumed (and cleared) by the verifier via take_raw_page_meta()
 	// immediately after each fetch, so a value can never leak from one
 	// address's fetch to another's.
+	//
+	// A source whose answer may be used for matching but must never certify
+	// coverage for expiry (the JSON-RPC fallback, NMMPRO_Evm_Transfers)
+	// passes $certifies = false; the metadata then carries a third element,
+	// false, which NMMPRO_Payment::page_possibly_truncated() honours.
 	private static $lastRawPage = null;
 
-	public static function note_raw_page($count, $oldestTs) {
+	public static function note_raw_page($count, $oldestTs, $certifies = true) {
 		self::$lastRawPage = array((int) $count, ($oldestTs === null) ? null : (int) $oldestTs);
+		if (!$certifies) {
+			self::$lastRawPage[] = false;
+		}
 	}
 
 	public static function take_raw_page_meta() {

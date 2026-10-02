@@ -210,7 +210,7 @@ if ($run('FALLBACK')) {
 	foreach ($fallbackTokens as $chainId => $token) {
 		$nodes = NMMPRO_Evm_Transfers::nodes($chainId);
 
-		// Up to three distinct recent recipients, newest first. Public nodes
+		// Up to six distinct recent recipients, newest first. Public nodes
 		// rate-limit bursts, so two rounds with a pause between them.
 		$recipients = array();
 		for ($round = 0; $round < 2 && !$recipients; $round++) {
@@ -227,7 +227,7 @@ if ($run('FALLBACK')) {
 				foreach (array_reverse($recent['value']) as $log) {
 					$candidate = '0x' . substr($log['topics'][2], 26);
 					if (!in_array($candidate, $recipients, true)) { $recipients[] = $candidate; }
-					if (count($recipients) === 3) { break; }
+					if (count($recipients) === 6) { break; }
 				}
 				if ($recipients) { break; }
 			}
@@ -237,7 +237,7 @@ if ($run('FALLBACK')) {
 		// A node passes when it lists one of these recipients completely. A
 		// very busy address can legitimately exceed the request budget (on
 		// Arbitrum every transfer needs a header), so a failure counts only
-		// when all three fail, each retried once after a pause.
+		// when all six fail, each retried once after a pause.
 		foreach ($nodes as $node) {
 			$host = (string) parse_url($node[0], PHP_URL_HOST);
 			$result = array('result' => 'error', 'message' => 'not tried');
