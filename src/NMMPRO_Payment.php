@@ -722,6 +722,28 @@ class NMMPRO_Payment {
 				$promoted[$failedKey] = true;
 			}
 
+			// This tick's head rows OPEN the sweep now starting (its start is
+			// stamped at this tick), so the next sweep counts their visit here
+			// as its own - and the next wrap's head page can be shorter than
+			// this one (take minus a different tail), so nothing guarantees
+			// they are visited again before it. Seed the next sweep's builder
+			// and coin-level dirty set with this tick's incompleteness, or a
+			// head row whose only visit in that sweep was incomplete would
+			// lose its exclusion while its coin is stamped. Conservative: this
+			// tick's tail rows are carried too, and simply stay excluded until
+			// the following wrap (one extra sweep of deferral, never a missed
+			// one). Same cap as the builder: overflow falls back to the coin.
+			$carryIncomplete = array();
+			$carryDirty = $coinDirty;
+			foreach (array_keys($incompleteKeys) as $incompleteKey) {
+				if (count($carryIncomplete) >= 500) {
+					$incompleteParts = explode('|', $incompleteKey, 2);
+					$carryDirty[$incompleteParts[0]] = true;
+					continue;
+				}
+				$carryIncomplete[$incompleteKey] = true;
+			}
+
 			// Coverage is the one write that authorises cancelling somebody's
 			// order, so it goes LAST, after everything it depends on is durable.
 			// Each step is fenced in its own statement; stopping after any of
@@ -729,10 +751,10 @@ class NMMPRO_Payment {
 			// far still make safe - every address they dropped was verified
 			// cleanly during this sweep, after that stamp.
 			$published = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete', $promoted)
-				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', array())
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', $carryIncomplete)
 				// The next sweep begins with the head rows this tick just fetched.
 				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_sweep_start', $now)
-				&& (empty($excludedCryptos) || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', array()));
+				&& ((empty($excludedCryptos) && empty($carryDirty)) || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', $carryDirty));
 
 			if ($published) {
 				$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());

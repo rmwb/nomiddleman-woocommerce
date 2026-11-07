@@ -808,6 +808,100 @@ as_tick(3 * 3600); // wraps to xmrp_00,01,02
 sok('window 0 disables the lane',                count($GLOBALS['as_checked']) === 3 && !in_array('xmrp_09', $GLOBALS['as_checked'], true), 'checked=' . implode(',', $GLOBALS['as_checked']));
 remove_all_filters('nmmpro_autopay_priority_window');
 
+// --- wrap tick: its head rows belong to the NEXT sweep too ------------------
+// A wrap tick's page is the tail of the ending sweep plus head rows that open
+// the next one, and the next sweep's start is stamped at this tick - so the
+// next sweep counts those head rows as visited. Their incompleteness must be
+// carried into the next sweep's builder, not only the ending sweep's: the next
+// wrap's head page can be SHORTER (take minus a different tail count), and
+// then a head row whose only visit in that sweep was a truncated page would
+// lose its exclusion while its coin is stamped with that sweep's start.
+// Rows (budget 3): btcwrap_a0, btcwrap_a1, btcwrap_h, xmrwrap_0..2. The full
+// in-window BTC page is served for btcwrap_h only; the others get short pages.
+$GLOBALS['bwr_full'] = true;
+$btcMockWrap = function ($pre, $args, $url) use ($btrPage) {
+	if (strpos($url, 'mempool.space/api/blocks/tip/height') !== false) {
+		return array('response' => array('code' => 200), 'body' => '105', 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'mempool.space/api/address/') !== false) {
+		$txs = (strpos($url, 'btcwrap_h') !== false && $GLOBALS['bwr_full']) ? $btrPage(25, 1800) : $btrPage(3, 1800);
+		return array('response' => array('code' => 200), 'body' => json_encode($txs), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $btcMockWrap, 10, 3);
+add_filter('nmmpro_autopay_priority_window', '__return_zero'); // the lane would revisit rows every tick
+add_filter('nmmpro_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+remove_all_filters('nmmpro_autopay_scan_budget');
+add_filter('nmmpro_autopay_scan_budget', function () { return 3; });
+
+$bwrReset = function () use ($wpdb, $pt) {
+	$wpdb->query("DELETE FROM `$pt`");
+	foreach (array('cursor', 'retry', 'covered_at', 'sweep_start', 'dirty', 'incomplete', 'incomplete_next') as $opt) {
+		delete_option('nmmpro_autopay_scan_' . $opt);
+	}
+	foreach (array('btcwrap_a0', 'btcwrap_a1', 'btcwrap_h') as $i => $addr) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,'0.00100000',0)", $addr, time() - 2 * HOUR_IN_SECONDS, 790000 + $i));
+	}
+	for ($i = 0; $i < 3; $i++) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrwrap_%d', $i), time() - 2 * HOUR_IN_SECONDS, 790100 + $i));
+	}
+};
+$bwrGrow = function () use ($wpdb, $pt) { // backlog grows by two rows after the first wrap
+	for ($i = 3; $i < 5; $i++) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrwrap_%d', $i), time() - 2 * HOUR_IN_SECONDS, 790100 + $i));
+	}
+};
+
+$bwrReset();
+$GLOBALS['as_checked'] = array();
+as_tick(3 * 3600); // a0,a1,h
+as_tick(3 * 3600); // xmrwrap_0..2 (page exactly full: no wrap)
+as_tick(3 * 3600); // empty tail -> head page of THREE: a0,a1,h  (wrap W1)
+sok('wrap head: W1 head page reached btcwrap_h',   $GLOBALS['as_checked'] === array('btcwrap_a0', 'btcwrap_a1', 'btcwrap_h', 'xmrwrap_0', 'xmrwrap_1', 'xmrwrap_2', 'btcwrap_a0', 'btcwrap_a1', 'btcwrap_h'), 'checked=' . implode(',', $GLOBALS['as_checked']));
+sok('wrap head: truncated h excluded after W1',    as_excluded('BTC|btcwrap_h'), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+$bwrGrow();
+$GLOBALS['as_checked'] = array();
+as_tick(3 * 3600); // xmrwrap_0..2
+as_tick(3 * 3600); // xmrwrap_3,4 + head page of ONE: a0  (wrap W2)
+$covMapW = get_option('nmmpro_autopay_scan_covered_at', array());
+sok('wrap head: W2 head page is shorter (no h)',   !in_array('btcwrap_h', $GLOBALS['as_checked'], true) && end($GLOBALS['as_checked']) === 'btcwrap_a0', 'checked=' . implode(',', $GLOBALS['as_checked']));
+sok('wrap head: W2 stamps BTC',                    is_array($covMapW) && isset($covMapW['BTC']), 'map=' . (is_array($covMapW) ? implode(',', array_keys($covMapW)) : '(scalar)'));
+sok('wrap head: h (truncated at W1) still excluded at W2', as_excluded('BTC|btcwrap_h'), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+
+// The carried exclusion is not sticky: once a sweep visits h with a complete
+// page, the following wrap drops it.
+$GLOBALS['bwr_full'] = false;
+as_tick(3 * 3600); // a1,h,xmrwrap_0
+as_tick(3 * 3600); // xmrwrap_1..3
+as_tick(3 * 3600); // xmrwrap_4 + head a0,a1  (wrap W3)
+sok('wrap head: clean revisit drops h at W3',      !as_excluded('BTC|btcwrap_h'), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+
+// Coin-level twin: once the address builder is full (500), a further
+// incomplete address falls back to its coin's dirty marker. A coin dirtied
+// at a wrap tick must also stay dirty for the next sweep, or W2 would stamp
+// BTC although btcwrap_h's only visit in that sweep (W1) was incomplete.
+$GLOBALS['bwr_full'] = true;
+$bwrReset();
+as_tick(3 * 3600); // a0,a1,h
+as_tick(3 * 3600); // xmrwrap_0..2
+$bwrFill = array();
+for ($i = 0; $i < 500; $i++) { $bwrFill['ZZZ|fill_' . $i] = true; }
+update_option('nmmpro_autopay_scan_incomplete_next', $bwrFill, false); // builder at its cap
+as_tick(3 * 3600); // head a0,a1,h  (wrap W1): h overflows -> BTC dirty
+$covMapW = get_option('nmmpro_autopay_scan_covered_at', array());
+sok('wrap head overflow: W1 does not stamp BTC',   !(is_array($covMapW) && isset($covMapW['BTC'])), 'map=' . (is_array($covMapW) ? implode(',', array_keys($covMapW)) : '(scalar)'));
+$bwrGrow();
+$GLOBALS['bwr_full'] = false; // nothing in sweep 2 is incomplete except h's W1 visit
+as_tick(3 * 3600); // xmrwrap_0..2
+as_tick(3 * 3600); // xmrwrap_3,4 + head a0  (wrap W2)
+$covMapW = get_option('nmmpro_autopay_scan_covered_at', array());
+sok('wrap head overflow: W2 still does not stamp BTC', !(is_array($covMapW) && isset($covMapW['BTC'])), 'map=' . (is_array($covMapW) ? implode(',', array_keys($covMapW)) : '(scalar)'));
+
+remove_filter('pre_http_request', $btcMockWrap, 10);
+remove_all_filters('nmmpro_autopay_priority_window');
+foreach (array('btcwrap_a0', 'btcwrap_a1', 'btcwrap_h') as $addr) { delete_option('nmmpro_BTC_transactions_consumed_for_' . $addr); }
+
 remove_all_filters('nmmpro_xmr_account_transactions');
 remove_all_filters('nmmpro_autopay_scan_budget');
 remove_all_actions('nmmpro_autopay_address_checked');
