@@ -8,5 +8,38 @@ $ok = $ok && NMMPRO_Consumed_Repo::contains($coin, $address, 'tx_0' . str_repeat
 $ok = $ok && !NMMPRO_Consumed_Repo::contains($coin, 'other-address', 'tx_0' . str_repeat('x', 32));
 NMMPRO_Consumed_Repo::add_many($coin, $address, array('atomic_a' . str_repeat('a', 32), 'atomic_b' . str_repeat('b', 32)));
 $ok = $ok && NMMPRO_Consumed_Repo::contains($coin, $address, 'atomic_a' . str_repeat('a', 32));
+$check = function ($label, $pass) use (&$ok) { echo str_pad($label, 72) . ($pass ? 'ok' : 'FAIL') . "\n"; $ok = $ok && $pass; };
+
+// EVM hashes (0x + 64 hex) are one transaction in any case: a hash recorded in
+// one case is found in another, whichever EVM source served it.
+$evm = '0x' . str_repeat('Ab', 32);
+NMMPRO_Consumed_Repo::add('USDTPOL', '0xaddr', $evm);
+$check('an EVM hash recorded in mixed case is found in lower case', NMMPRO_Consumed_Repo::contains('USDTPOL', '0xaddr', strtolower($evm)));
+$check('  and in upper case', NMMPRO_Consumed_Repo::contains('USDTPOL', '0xaddr', '0x' . strtoupper(substr($evm, 2))));
+$check('  but not for another address', !NMMPRO_Consumed_Repo::contains('USDTPOL', '0xother', strtolower($evm)));
+$other = 'AbCdEf' . str_repeat('1', 58); // not an EVM hash: case is significant
+NMMPRO_Consumed_Repo::add('XMR', 'addr', $other);
+$check('another coin\'s hash is still matched exactly', NMMPRO_Consumed_Repo::contains('XMR', 'addr', $other) && !NMMPRO_Consumed_Repo::contains('XMR', 'addr', strtolower($other)));
+
+// A row recorded by an earlier release, whose identity came from the hash
+// exactly as served, gets its folded twin before anything is read.
+global $wpdb;
+$table = NMMPRO_Consumed_Repo::table();
+$legacy = '0x' . str_repeat('Cd', 32);
+$legacyIdentity = hash('sha256', json_encode(array('USDCBAS', '0xlegacy', $legacy)));
+$wpdb->query($wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at) VALUES (%s,%s,'0xlegacy','USDCBAS',4242,1)", $legacyIdentity, $legacy));
+delete_option(NMMPRO_Consumed_Repo::CASE_MIGRATION);
+$ready = new ReflectionProperty('NMMPRO_Consumed_Repo', 'ready');
+$ready->setAccessible(true);
+$ready->setValue(null, array());
+$check('a legacy mixed-case identity is found in lower case after the upgrade', NMMPRO_Consumed_Repo::contains('USDCBAS', '0xlegacy', strtolower($legacy)));
+$check('  its twin keeps the original owner', NMMPRO_Consumed_Repo::owners('USDCBAS', '0xlegacy', array(strtolower($legacy))) === array(strtolower($legacy) => 4242));
+$check('  and the folding is marked done', get_option(NMMPRO_Consumed_Repo::CASE_MIGRATION) === '1');
+$ready->setValue(null, array());
+delete_option(NMMPRO_Consumed_Repo::CASE_MIGRATION);
+$rowsBefore = (int) $wpdb->get_var("SELECT COUNT(*) FROM `$table`");
+NMMPRO_Consumed_Repo::contains('USDCBAS', '0xlegacy', $legacy);
+$check('  running it again adds nothing', (int) $wpdb->get_var("SELECT COUNT(*) FROM `$table`") === $rowsBefore);
+
 echo $ok ? "CONSUMED-HISTORY CHECKS PASSED\n" : "CONSUMED-HISTORY CHECKS FAILED\n";
 exit($ok ? 0 : 1);

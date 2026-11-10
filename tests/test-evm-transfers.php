@@ -91,14 +91,19 @@ function et_reset($overrides = array()) {
 		'logs'         => array(),    // see et_log()
 		'busy'         => array(),    // blocks holding a transfer of the token to someone else
 		'busy_extra'   => array(),    // fields overriding those transfers' logs
+		'busy_anywhere'=> false,      // serve those transfers whatever block range was asked
 		'log_time'     => null,       // null: no blockTimestamp; 'zero': 0x0; an int: that many seconds before now
 		'header_shift' => array(),    // block => seconds added to that block's header time
 		'blockscout'   => 500,        // HTTP status, a string body, or an array body for a 200
-		'fail_chunk'   => array(),    // url host => index of the eth_getLogs call to fail
+		'fail_chunk'   => array(),    // url host => index of the address's eth_getLogs call to fail (index-proof queries not counted)
+		'fail_proof'   => false,      // the index-proof queries (no recipient filter) fail
 		'fail_method'  => array(),    // url host => method that always fails
 		'fail_header'  => null,       // a block whose header read fails
 		'wrong_number' => null,       // a block whose header names another block number
 		'reorg_tip'    => false,      // the tip's hash differs on the second read
+		'replaced'     => null,       // a block whose hash differs from its second header read on
+		'lag_calls'    => 0,          // the first this-many eth_getLogs calls come from an index LAG blocks behind
+		'lag'          => 1000,
 		'logs_kind'    => 'list',     // 'object': eth_getLogs answers {} instead of a list
 		'header_kind'  => 'object',   // 'list': headers answered as a JSON list
 		'calls'        => array(),    // every request, in order
@@ -117,6 +122,16 @@ function et_calls($method, $host = null) {
 		if ($c['method'] === $method && ($host === null || $c['host'] === $host)) { $out[] = $c; }
 	}
 	return $out;
+}
+// Only the queries that filter on the recipient: the address's own range reads.
+function et_addr_logs($host = null) {
+	$out = array();
+	foreach (et_calls('eth_getLogs', $host) as $c) { if (isset($c['params'][0]['topics'][2])) { $out[] = $c; } }
+	return $out;
+}
+// The horizon an answer certifies when its node is current.
+function et_horizon() {
+	return $GLOBALS['et']['now'] - $GLOBALS['et']['tip_age'] - NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC;
 }
 function et_headers_of($block) {
 	$n = 0;
@@ -155,6 +170,7 @@ $GLOBALS['nmmpro_http_handler'] = function ($url, $method, $postBody, $headers) 
 			return $json(array('jsonrpc' => '2.0', 'id' => 1, 'error' => array('code' => -32000, 'message' => 'header unavailable')));
 		}
 		$variant = ($block === $s['tip'] && $s['reorg_tip'] && et_headers_of($block) > 1) ? '-reorged' : '';
+		if ($s['replaced'] === $block && et_headers_of($block) > 1) { $variant = '-other-branch'; }
 		$header = array(
 			'number'    => '0x' . dechex($s['wrong_number'] === $block ? $block + 1 : $block),
 			'hash'      => et_block_hash($block, $variant),
@@ -166,12 +182,16 @@ $GLOBALS['nmmpro_http_handler'] = function ($url, $method, $postBody, $headers) 
 		if ($s['logs_kind'] === 'object') {
 			return array('body' => '{"jsonrpc":"2.0","id":1,"result":{}}', 'response' => array('code' => 200));
 		}
-		$nth = count(et_calls('eth_getLogs', $host)) - 1;
+		if ($s['fail_proof'] && !isset($p[0]['topics'][2])) {
+			return $json(array('jsonrpc' => '2.0', 'id' => 1, 'error' => array('code' => -32000, 'message' => 'proof refused')));
+		}
+		$nth = count(et_addr_logs($host)) - 1;
 		if (isset($s['fail_chunk'][$host]) && $s['fail_chunk'][$host] === $nth) {
 			return $json(array('jsonrpc' => '2.0', 'id' => 1, 'error' => array('code' => -32000, 'message' => 'range too large')));
 		}
 		$from = hexdec(substr($p[0]['fromBlock'], 2));
 		$to = hexdec(substr($p[0]['toBlock'], 2));
+		if (count(et_calls('eth_getLogs')) <= $s['lag_calls']) { $to = min($to, $s['tip'] - $s['lag']); }
 		// The address's own transfers are served whatever the filter says (so
 		// the parser's checks can be reached); other people's transfers only
 		// to a query that does not filter on the recipient.
@@ -181,7 +201,8 @@ $GLOBALS['nmmpro_http_handler'] = function ($url, $method, $postBody, $headers) 
 		}
 		$out = array();
 		foreach ($all as $log) {
-			if ($log['block'] < $from || $log['block'] > $to) { continue; }
+			$outOfRangeOk = $s['busy_anywhere'] && $log['to'] === ET_OTHER;
+			if (!$outOfRangeOk && ($log['block'] < $from || $log['block'] > $to)) { continue; }
 			$row = array(
 				'address'         => $s['contract'],
 				'topics'          => array(ET_TOPIC, et_pad(ET_OTHER), et_pad($log['to'])),
@@ -283,11 +304,11 @@ ok('  confirmations are counted as Blockscout counts them (tip - block)', $t[0]-
 ok('  time is the verified block header\'s', $t[0]->get_time_stamp() === et_block_time(999990) && $t[1]->get_time_stamp() === et_block_time(999000));
 ok('  the hash is exactly as the node sent it', $t[0]->get_hash() === et_hash(999990 * 1000 + 7));
 // The newer transfer is also the token's latest near the tip, so it serves as the index proof.
-ok('  the page is reported: 2 rows, oldest time, certifiable up to the horizon', $meta === array(2, et_block_time(999000), $GLOBALS['et']['now'] - $GLOBALS['et']['tip_age'] - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC));
+ok('  the page is reported: 2 rows, oldest time, certifiable up to the horizon', $meta === array(2, et_block_time(999000), et_horizon()));
 
 et_reset(array('logs' => array(et_log(999990, '0f4240', 1), et_log(999990, '0f4240', 2))));
 $r = et_fetch();
-ok('two transfers in one block: both rows, one header read for it', count($r['transactions']) === 2 && et_headers_of(999990) === 1);
+ok('two transfers in one block: both rows, its header read once, and once again at the end', count($r['transactions']) === 2 && et_headers_of(999990) === 2);
 
 et_reset();
 $r = et_fetch();
@@ -308,17 +329,17 @@ $tipTime = function () { return $GLOBALS['et']['now'] - $GLOBALS['et']['tip_age'
 
 et_reset(array('busy' => array(999999)));
 $visit = et_visit(et_fetch());
-$horizon = $tipTime() - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC;
+$horizon = et_horizon();
 ok('a busy token near the tip: the answer certifies', NMMPRO_Payment::page_possibly_truncated('USDTPOL', $visit, $LOOKBACK, time()) === false);
 ok('  but only up to the tip time minus the margin', NMMPRO_Payment::page_certifies_until($visit) === $horizon, 'until=' . var_export(NMMPRO_Payment::page_certifies_until($visit), true) . ' want=' . $horizon);
-ok('  the margin is at least five minutes', NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC >= 300);
+ok('  the margin is ten minutes', NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC >= 600);
 ok('  the proof asks for the token\'s Transfers to anyone, ending at the tip', count(et_proofs()) === 1 && et_proofs()[0]['params'][0]['address'] === ET_POL
 	&& et_proofs()[0]['params'][0]['topics'] === array(ET_TOPIC) && et_proofs()[0]['params'][0]['toBlock'] === '0x' . dechex(1000000));
 ok('  and the block it relies on is checked by header', et_headers_of(999999) >= 1);
 
 et_reset(array('logs' => array(et_log(999990)), 'busy' => array(999999)));
 $visit = et_visit(et_fetch());
-ok('with a payment in the answer: certifies up to the horizon too', NMMPRO_Payment::page_possibly_truncated('USDTPOL', $visit, $LOOKBACK, time()) === false && NMMPRO_Payment::page_certifies_until($visit) === $tipTime() - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC);
+ok('with a payment in the answer: certifies up to the horizon too', NMMPRO_Payment::page_possibly_truncated('USDTPOL', $visit, $LOOKBACK, time()) === false && NMMPRO_Payment::page_certifies_until($visit) === et_horizon());
 
 et_reset();
 $visit = et_visit(et_fetch());
@@ -328,7 +349,7 @@ ok('  (a lagging log index looks exactly like this)', count(et_proofs()) === cou
 // Polygon is sized at 1.5 s a block: block 999975 is outside the 6 s window (4 blocks), inside the 60 s one (40).
 et_reset(array('busy' => array(999975)));
 $visit = et_visit(et_fetch());
-ok('a quieter token: the longer window is tried and certifies', NMMPRO_Payment::page_certifies_until($visit) === $tipTime() - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC && count(et_proofs()) === 2);
+ok('a quieter token: the longer window is tried and certifies', NMMPRO_Payment::page_certifies_until($visit) === et_horizon() && count(et_proofs()) === 2);
 et_reset(array('busy' => array(999999)));
 et_fetch(); NMMPRO_Blockchain::take_raw_page_meta();
 ok('  but only when the short window is empty', count(et_proofs()) === 1);
@@ -363,7 +384,40 @@ foreach ($GLOBALS['et_proof_extra'] as $label => $extra) {
 	ok('a proof log from ' . $label . ': no certification', NMMPRO_Payment::page_certifies_until($visit) === null);
 }
 
-et_reset(array('busy' => array(999999), 'fail_chunk' => array($polygonNode => 1)));
+// The proof comes before the address is read: an index that catches up
+// mid-fetch must not certify the range it served while it was behind.
+et_reset(array('busy' => array(999999), 'logs' => array(et_log(999500))));
+et_fetch();
+$order = array();
+foreach (et_calls('eth_getLogs') as $c) { $order[] = isset($c['params'][0]['topics'][2]) ? 'address' : 'proof'; }
+ok('the index proof is asked for before the address\'s own ranges', $order !== array() && $order[0] === 'proof' && in_array('address', $order, true), implode(',', $order));
+et_reset(array('busy' => array(999999), 'logs' => array(et_log(999500)), 'lag_calls' => 1));
+$r = et_fetch();
+$visit = et_visit($r);
+ok('an index 1000 blocks behind for the first query only: never a certified answer that misses the payment',
+	$r['result'] === 'success' && (count($r['transactions']) === 1 || NMMPRO_Payment::page_certifies_until($visit) === null));
+et_reset(array('busy' => array(999999), 'logs' => array(et_log(999500)), 'lag_calls' => 2));
+$r = et_fetch();
+$visit = et_visit($r);
+ok('  behind for both proof windows: not certified', $r['result'] === 'success' && NMMPRO_Payment::page_certifies_until($visit) === null);
+
+// A node that answers the proof with logs outside the window it was asked
+// for, or with a block dated after the tip, proves nothing - even when that
+// block's time would otherwise sit between the horizon and the tip.
+et_reset(array('busy' => array(999800), 'busy_anywhere' => true));
+$visit = et_visit(et_fetch());
+ok('a proof log below the window asked for: not certified', NMMPRO_Payment::page_certifies_until($visit) === null);
+et_reset(array('busy' => array(1000005), 'busy_anywhere' => true, 'header_shift' => array(1000005 => -20)));
+$visit = et_visit(et_fetch());
+ok('a proof log above the tip: not certified', NMMPRO_Payment::page_certifies_until($visit) === null);
+et_reset(array('busy' => array(999999), 'header_shift' => array(999999 => 100)));
+$visit = et_visit(et_fetch());
+ok('a proof block dated after the tip: not certified', NMMPRO_Payment::page_certifies_until($visit) === null);
+et_reset(array('busy' => array(999995), 'busy_anywhere' => true));
+$visit = et_visit(et_fetch());
+ok('  control: the same node with its proof log inside the window certifies', NMMPRO_Payment::page_certifies_until($visit) === et_horizon());
+
+et_reset(array('busy' => array(999999), 'fail_proof' => true));
 $r = et_fetch();
 $visit = et_visit($r);
 ok('the proof query itself fails: matched, not certified', $r['result'] === 'success' && NMMPRO_Payment::page_certifies_until($visit) === null && NMMPRO_Payment::page_possibly_truncated('USDTPOL', $visit, $LOOKBACK, time()) === true);
@@ -377,7 +431,7 @@ echo "--- 4. all or nothing ---\n";
 // 3h + 30 min margin at 2 s/block is ~7,560 blocks: several chunks on Base's 2,000-block node.
 et_reset(array('contract' => ET_BASE, 'logs' => array(et_log(999990)), 'fail_chunk' => array($baseA => 1, $baseB => 0)));
 $r = et_fetch('USDCBAS');
-ok('a chunk fails on every node: the fetch is an error', $r['result'] === 'error' && count(et_calls('eth_getLogs', $baseA)) === 2);
+ok('a chunk fails on every node: the fetch is an error', $r['result'] === 'error' && count(et_addr_logs($baseA)) === 2);
 ok('  although the newest chunk held a payment (no partial success)', NMMPRO_Blockchain::take_raw_page_meta() === null);
 
 et_reset(array('contract' => ET_BASE, 'logs' => array(et_log(999990)), 'fail_chunk' => array($baseA => 1)));
@@ -388,12 +442,12 @@ et_reset(array('logs' => array(et_log(999990)), 'fail_method' => array($polygonN
 ok('headers unreadable: an error', et_fetch()['result'] === 'error');
 
 et_reset(array('logs' => array(et_log(999990)), 'fail_header' => 999990));
-ok('the header of a transfer\'s block unreadable, after usable logs: an error', et_fetch()['result'] === 'error' && count(et_calls('eth_getLogs')) >= 1);
+ok('the header of a transfer\'s block unreadable, after usable logs: an error', et_fetch()['result'] === 'error' && count(et_addr_logs()) >= 1);
 
 // --- 5. proven coverage ------------------------------------------------------------------
 echo "--- 5. proven coverage ---\n";
 $cutoff = function () use ($LOOKBACK) { return $GLOBALS['et']['now'] - $LOOKBACK - NMMPRO_Evm_Transfers::MARGIN_SEC; };
-$firstFrom = function () { $c = et_calls('eth_getLogs'); return hexdec(substr($c[0]['params'][0]['fromBlock'], 2)); };
+$firstFrom = function () { $c = et_addr_logs(); return hexdec(substr($c[0]['params'][0]['fromBlock'], 2)); };
 
 et_reset();
 et_fetch();
@@ -408,7 +462,7 @@ ok('  and the range overshoots the lookback only slightly', $GLOBALS['et']['now'
 
 et_reset(array('block_sec' => 0, 'logs' => array(et_log(999990))));
 $r = et_fetch();
-ok('lookback cannot be proven: an error, not a short answer', $r['result'] === 'error' && count(et_calls('eth_getLogs')) === 0);
+ok('lookback cannot be proven: an error, not a short answer', $r['result'] === 'error' && count(et_addr_logs()) === 0);
 
 et_reset(array('block_sec' => 0.01, 'logs' => array(et_log(999990))));
 ok('lookback needs more requests than the budget: an error', et_fetch()['result'] === 'error');
@@ -429,6 +483,15 @@ ok('a node whose tip is older than the limit is refused', $r['result'] === 'erro
 et_reset(array('tip_age' => NMMPRO_Evm_Transfers::MAX_TIP_AGE_SEC - 30, 'logs' => array(et_log(999990))));
 ok('  control: a tip just inside the limit is accepted', et_fetch()['result'] === 'success');
 ok('  and the limit is a few minutes, not a quarter of an hour', NMMPRO_Evm_Transfers::MAX_TIP_AGE_SEC <= 300);
+et_reset(array('tip_age' => -NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC - 30, 'busy' => array(999999), 'logs' => array(et_log(999990))));
+$r = et_fetch();
+ok('a tip dated further ahead of this server\'s clock than allowed is refused', $r['result'] === 'error' && count(et_addr_logs()) === 0);
+et_reset(array('tip_age' => -NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC + 10, 'busy' => array(999999), 'logs' => array(et_log(999990))));
+$r = et_fetch();
+$until = NMMPRO_Payment::page_certifies_until(array('transactions' => array(), 'page' => NMMPRO_Blockchain::take_raw_page_meta()));
+ok('  control: a tip just inside the allowance is accepted', $r['result'] === 'success');
+ok('  and its horizon stays a full margin behind this server\'s clock', is_int($until) && $until <= $GLOBALS['et']['now'] - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC, 'until=' . var_export($until, true));
+ok('  the allowance is about a minute', NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC > 0 && NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC <= 120);
 
 // --- 7. one chain -------------------------------------------------------------------------
 echo "--- 7. one chain ---\n";
@@ -459,6 +522,14 @@ et_reset(array('logs' => array(et_log(999990)), 'reorg_tip' => true));
 ok('the tip replaced while the range was read: an error', et_fetch()['result'] === 'error');
 et_reset(array('logs' => array(et_log(999990))));
 ok('  control: an unchanged tip and matching hashes succeed', et_fetch()['result'] === 'success');
+// Another branch and back: the tip is the same at both ends, but the block a
+// transfer came from is no longer the one served at that height.
+et_reset(array('logs' => array(et_log(999000)), 'busy' => array(999999), 'replaced' => 999000));
+$r = et_fetch();
+ok('a transfer\'s block replaced although the tip is unchanged: an error', $r['result'] === 'error' && et_headers_of(999000) === 2 && et_headers_of(1000000) >= 2);
+ok('  so nothing from it is reported', NMMPRO_Blockchain::take_raw_page_meta() === null);
+et_reset(array('logs' => array(et_log(999000)), 'busy' => array(999999)));
+ok('  control: the same block read twice unchanged succeeds', et_fetch()['result'] === 'success' && et_headers_of(999000) === 2);
 
 // --- 8. strict parsing --------------------------------------------------------------------
 echo "--- 8. strict parsing ---\n";
@@ -527,7 +598,13 @@ for ($i = 0; $i < 150; $i++) { $burst[] = et_log(999990 - intdiv($i, 50), '0f424
 et_reset(array('logs' => $burst));
 $r = et_fetch();
 $meta = NMMPRO_Blockchain::take_raw_page_meta();
-ok('150 transfers in three blocks: the newest 100 are returned', $r['result'] === 'success' && count($r['transactions']) === 100);
+ok('150 transfers in three blocks: an error, never the newest 100 alone', $r['result'] === 'error' && $meta === null);
+$burst = array();
+for ($i = 0; $i < NMMPRO_Evm_Transfers::MAX_ROWS; $i++) { $burst[] = et_log(999990 - intdiv($i, 50), '0f4240', $i); }
+et_reset(array('logs' => $burst));
+$r = et_fetch();
+$meta = NMMPRO_Blockchain::take_raw_page_meta();
+ok('  control: exactly MAX_ROWS transfers are all returned', $r['result'] === 'success' && count($r['transactions']) === NMMPRO_Evm_Transfers::MAX_ROWS);
 ok('  reported as a full page, which does not certify', is_array($meta) && $meta[0] === NMMPRO_Evm_Transfers::MAX_ROWS && NMMPRO_Blockchain::adapter_page_cap('USDTPOL') === NMMPRO_Evm_Transfers::MAX_ROWS
 	&& NMMPRO_Payment::page_possibly_truncated('USDTPOL', array('transactions' => $r['transactions'], 'page' => $meta), $LOOKBACK, time()) === true);
 

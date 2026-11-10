@@ -651,17 +651,20 @@ class NMMPRO_Payment {
 		// an exclusion, it must be durable before the cursor passes the
 		// address, or the wrap would stamp the sweep's start for an address
 		// that was only seen up to an earlier time.
+		// A builder that is not a list, or a coin whose stored value is not a
+		// timestamp, is left exactly as found: the wrap reads either as
+		// "unknown" and stamps nothing for it, which a merge must not undo.
 		if ($certify && $persisted && !empty($horizonByCrypto)) {
 			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
-			if (!is_array($horizons)) {
-				$horizons = array();
-			}
-			foreach ($horizonByCrypto as $horizonCryptoId => $until) {
-				if (!isset($horizons[$horizonCryptoId]) || $until < (int) $horizons[$horizonCryptoId]) {
-					$horizons[$horizonCryptoId] = $until;
+			if (is_array($horizons)) {
+				foreach ($horizonByCrypto as $horizonCryptoId => $until) {
+					if (!isset($horizons[$horizonCryptoId])
+						|| (is_int($horizons[$horizonCryptoId]) && $until < $horizons[$horizonCryptoId])) {
+						$horizons[$horizonCryptoId] = $until;
+					}
 				}
+				$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $horizons);
 			}
-			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $horizons);
 		}
 
 		if ($certify && $persisted && !empty($coinDirty)) {
@@ -755,17 +758,40 @@ class NMMPRO_Payment {
 			// A value that is not a timestamp cannot be trusted to bound
 			// anything, so its coin is not stamped at all this time.
 			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
+			$unknownHorizon = array();
 			if (!is_array($horizons)) {
 				$horizons = array();
 				foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $unknownCryptoId) {
-					$excludedCryptos[$unknownCryptoId] = true;
+					$unknownHorizon[$unknownCryptoId] = true;
 				}
 			}
 			foreach ($horizons as $horizonCryptoId => $until) {
 				if (!is_int($until)) {
-					$excludedCryptos[$horizonCryptoId] = true;
+					$unknownHorizon[$horizonCryptoId] = true;
 				}
 			}
+			foreach (array_keys($unknownHorizon) as $unknownCryptoId) {
+				$excludedCryptos[$unknownCryptoId] = true;
+			}
+
+			// The exclusions are about to be dropped for addresses this sweep
+			// verified, but a node answer verified its address only up to its
+			// horizon, which may be EARLIER than the coin's current stamp. So
+			// the current stamp comes down to the horizon first (and goes for a
+			// coin whose horizon is unknown): if any later write fails, what
+			// remains is a stamp no later than what was verified. Lowering a
+			// stamp only ever delays an expiry.
+			$coveredNow = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
+			$lowered = is_array($coveredNow) ? $coveredNow : array();
+			foreach ($lowered as $coveredCryptoId => $coveredAt) {
+				if (isset($unknownHorizon[$coveredCryptoId])) {
+					unset($lowered[$coveredCryptoId]);
+				}
+				elseif (isset($horizons[$coveredCryptoId]) && (int) $coveredAt > $horizons[$coveredCryptoId]) {
+					$lowered[$coveredCryptoId] = $horizons[$coveredCryptoId];
+				}
+			}
+			$lowerFirst = is_array($coveredNow) && $lowered !== $coveredNow;
 
 			// The sweep now starting counts this tick's head rows as visited
 			// (see sweep_start below), so it inherits their horizons. All of
@@ -776,10 +802,12 @@ class NMMPRO_Payment {
 			// Coverage is the one write that authorises cancelling somebody's
 			// order, so it goes LAST, after everything it depends on is durable.
 			// Each step is fenced in its own statement; stopping after any of
-			// them leaves the previous stamp, which the exclusions written so
-			// far still make safe - every address they dropped was verified
-			// cleanly during this sweep, after that stamp.
-			$published = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete', $promoted)
+			// them leaves the previous stamp, lowered above to every horizon
+			// this sweep relied on, which the exclusions written so far still
+			// make safe - every address they dropped was verified cleanly
+			// during this sweep, up to that lowered stamp.
+			$published = (!$lowerFirst || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_covered_at', $lowered))
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete', $promoted)
 				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', array())
 				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $nextHorizons)
 				// The next sweep begins with the head rows this tick just fetched.

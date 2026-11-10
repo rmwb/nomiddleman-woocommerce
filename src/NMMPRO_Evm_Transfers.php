@@ -20,19 +20,24 @@ if ( ! defined( 'ABSPATH' ) ) {
  *  - Proven coverage. The starting block's own timestamp must be at or before
  *    the start of the lookback; assumed block times only size the first guess.
  *  - A live tip. A node whose newest block is more than a few minutes old is
- *    lagging, and is refused.
+ *    lagging, and one whose newest block is dated more than a minute ahead
+ *    of this server's clock is refused too.
  *  - One chain. Blocks are requested by number, so every block a transfer is
  *    taken from is checked by hash: its header must carry the block hash the
- *    log names, and the tip read at the start must still be the block at that
- *    height at the end. A reorganisation replaces a suffix of the chain, so
- *    an unchanged tip means no block in the range was replaced while it was
- *    read.
+ *    log names, the tip read at the start must still be the block at that
+ *    height at the end, and each of those blocks is read again after that
+ *    and must not have changed. An unchanged tip alone rules out an ordinary
+ *    reorganisation; the second read also rules out a node that switched to
+ *    another branch and back while it was read.
+ *  - Complete or nothing. More transfers than MAX_ROWS in the lookback fail
+ *    the fetch; the oldest are never silently dropped.
  *  - Strict parsing. Only the token contract's own logs, the standard
  *    three-topic Transfer layout with a 32-byte value, addressed to the
  *    queried address, inside the block range asked. A log flagged 'removed'
  *    (reorged out) is ignored. Transaction hashes must be lower-case hex, the
- *    form Blockscout serves, because the consumed-transaction ledger compares
- *    them exactly; nothing is re-cased.
+ *    form Blockscout serves; the consumed-transaction ledger also treats
+ *    0x-prefixed 32-byte hashes case-insensitively (NMMPRO_Consumed_Repo), so
+ *    a hash recorded in another case is still recognised.
  *  - Times from headers. A transfer's time is its verified block header's,
  *    never the log's own blockTimestamp (Arbitrum's public node sends 0x0
  *    there, and any node could send a plausible wrong value), and it must lie
@@ -40,8 +45,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * An answer from here always lets payments be matched. It certifies the
  * address as covered for expiry only up to a HORIZON, never up to this
- * server's clock: the tip's own time minus HORIZON_MARGIN_SEC, and only when
- * the same node has also shown that its logs are indexed that far (see
+ * server's clock: the tip's own time minus MAX_TIP_AHEAD_SEC and
+ * HORIZON_MARGIN_SEC, and only when the same node has shown, BEFORE the
+ * address is read, that its logs are indexed that far (see
  * indexed_horizon()). The horizon travels with the page report
  * (NMMPRO_Blockchain::note_raw_page()), and the sweep never stamps the coin
  * as covered later than the earliest horizon it relied on, so a node that
@@ -61,16 +67,17 @@ class NMMPRO_Evm_Transfers {
 	// keccak256("Transfer(address,address,uint256)")
 	const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
-	// Rows returned at most - the same page size the explorer adapters use
-	// (NMMPRO_Blockchain::adapter_page_cap()). More incoming transfers than
-	// this inside the lookback are reported as a full page, which the
-	// matcher's truncation check treats as "possibly more below".
+	// Rows one answer may hold - the same page size the explorer adapters use
+	// (NMMPRO_Blockchain::adapter_page_cap()). An answer is complete or it
+	// is an error: more incoming transfers than this inside the lookback
+	// fail the fetch rather than drop the oldest of them.
 	const MAX_ROWS = 100;
 
 	// JSON-RPC calls one fetch may make against one node: the tip, its
-	// header (read again at the end), up to COVERAGE_TRIES start headers, the
-	// log chunks, and one header per block that holds a kept transfer.
-	const MAX_REQUESTS = 40;
+	// header (read again at the end), up to two index-proof queries and a
+	// header, up to COVERAGE_TRIES start headers, the log chunks, and two
+	// reads of the header of each block that holds a transfer.
+	const MAX_REQUESTS = 50;
 
 	// Read this much further back than asked, so clock differences between
 	// this server and the chain cannot leave a gap at the old end.
@@ -78,6 +85,11 @@ class NMMPRO_Evm_Transfers {
 
 	// A tip older than this means the node is not following the chain.
 	const MAX_TIP_AGE_SEC = 300;
+
+	// How far a tip's own time may run ahead of this server's clock. A tip
+	// further ahead is refused; up to this much is subtracted from the
+	// horizon, so a chain clock that runs ahead cannot stretch it.
+	const MAX_TIP_AHEAD_SEC = 60;
 
 	// Wall-clock time one fetch from one node may take, on top of the call
 	// budget: a slow node must not hold a cron pass for minutes.
@@ -215,6 +227,16 @@ class NMMPRO_Evm_Transfers {
 		if ($tipTime < $now - self::MAX_TIP_AGE_SEC) {
 			return self::error('node is behind the chain (tip is ' . ($now - $tipTime) . 's old)');
 		}
+		if ($tipTime > $now + self::MAX_TIP_AHEAD_SEC) {
+			return self::error('the tip is ' . ($tipTime - $now) . 's ahead of this server\'s clock');
+		}
+
+		// ---- the node's log index reaches the horizon ----
+		// Proven BEFORE the address is read: an index that catches up while
+		// the address's ranges are read must not certify what it served
+		// while it was behind.
+		$headers = array();
+		$horizon = self::indexed_horizon($url, $chainId, $contract, $tip, $tipTime, $headers, $budget);
 
 		// ---- a starting block whose own time reaches the lookback ----
 		// The first guess comes from the chain's usual block time. If that
@@ -285,10 +307,11 @@ class NMMPRO_Evm_Transfers {
 			}
 			return $a['index'] === $b['index'] ? 0 : ($a['index'] < $b['index'] ? 1 : -1);
 		});
-		$logs = array_slice($logs, 0, self::MAX_ROWS);
+		if (count($logs) > self::MAX_ROWS) {
+			return self::error(count($logs) . ' transfers in the lookback, more than one answer may hold');
+		}
 
-		// ---- each kept transfer's block, verified by hash ----
-		$headers = array();
+		// ---- each transfer's block, verified by hash ----
 		$transactions = array();
 		$oldest = null;
 
@@ -299,13 +322,14 @@ class NMMPRO_Evm_Transfers {
 				if ($header === null) {
 					return self::error('no header for block ' . $block);
 				}
-				// A block inside [from, tip] cannot be older than the start
-				// block or newer than the tip; one that is means the node's
-				// answers do not describe one chain.
-				if ($header['time'] < $fromTime || $header['time'] > $tipTime) {
-					return self::error('block ' . $block . ' has a time outside the range read');
-				}
 				$headers[$block] = $header;
+			}
+			// A block inside [from, tip] cannot be older than the start block
+			// or newer than the tip; one that is means the node's answers do
+			// not describe one chain. Checked for every row, including a
+			// header the index proof already read.
+			if ($headers[$block]['time'] < $fromTime || $headers[$block]['time'] > $tipTime) {
+				return self::error('block ' . $block . ' has a time outside the range read');
 			}
 
 			if ($row['block_hash'] !== $headers[$block]['hash']) {
@@ -322,9 +346,6 @@ class NMMPRO_Evm_Transfers {
 			$transactions[] = new NMMPRO_Transaction($row['value'], $tip - $block, $time, $row['hash']);
 		}
 
-		// ---- the node's log index reaches the horizon ----
-		$horizon = self::indexed_horizon($url, $chainId, $contract, $tip, $tipTime, $headers, $budget);
-
 		// ---- the tip is still the tip: nothing in the range was replaced ----
 		$tipAgain = self::block_header($url, $tip, $budget);
 		if ($tipAgain === null) {
@@ -332,6 +353,26 @@ class NMMPRO_Evm_Transfers {
 		}
 		if ($tipAgain['hash'] !== $tipHeader['hash']) {
 			return self::error('the chain changed while it was read');
+		}
+
+		// ---- every credited block is still on that chain ----
+		// The same tip at both ends does not rule out a node that switched
+		// to another branch and back in between; a transfer read from that
+		// branch names a block the node no longer serves at that height.
+		$rechecked = array();
+		foreach ($logs as $row) {
+			$block = $row['block'];
+			if (isset($rechecked[$block])) {
+				continue;
+			}
+			$again = self::block_header($url, $block, $budget);
+			if ($again === null) {
+				return self::error('no header for block ' . $block . ' at the end');
+			}
+			if ($again['hash'] !== $headers[$block]['hash']) {
+				return self::error('block ' . $block . ' was replaced while it was read');
+			}
+			$rechecked[$block] = true;
 		}
 
 		// Expiry may rely on this answer only up to the horizon, and only
@@ -445,7 +486,9 @@ class NMMPRO_Evm_Transfers {
 	 */
 	private static function indexed_horizon($url, $chainId, $contract, $tip, $tipTime, &$headers, &$budget) {
 		$perBlock = isset(self::$blockSeconds[$chainId]) ? self::$blockSeconds[$chainId] : 12;
-		$horizon = $tipTime - self::HORIZON_MARGIN_SEC;
+		// The tip's time may run up to MAX_TIP_AHEAD_SEC ahead of this
+		// server's clock, which is the clock expiry uses.
+		$horizon = $tipTime - self::MAX_TIP_AHEAD_SEC - self::HORIZON_MARGIN_SEC;
 
 		foreach (self::INDEX_PROOF_SEC as $seconds) {
 			$from = max(0, $tip - (int) ceil($seconds / $perBlock));

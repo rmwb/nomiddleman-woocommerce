@@ -6,8 +6,21 @@ class NMMPRO_Consumed_Repo {
     const TABLE = 'nmmpro_consumed_transactions';
     private static $ready = array();
     public static function table() { global $wpdb; return $wpdb->prefix . self::TABLE; }
+    // Marks that identities recorded before EVM hashes were case-folded have
+    // been given their folded twin (see init()).
+    const CASE_MIGRATION = 'nmmpro_consumed_hash_case_v1';
+    /**
+     * An EVM transaction hash (0x and 64 hex digits) is the same transaction
+     * in any letter case, and the two EVM sources (Blockscout, a JSON-RPC
+     * node) need not serve it in the same case, so it is folded to lower
+     * case. Every other coin's hash is used exactly as served.
+     */
+    private static function canonical($hash) {
+        $hash = (string) $hash;
+        return preg_match('/^0x[0-9a-fA-F]{64}$/', $hash) ? strtolower($hash) : $hash;
+    }
     private static function identity($coin, $address, $hash) {
-        return hash('sha256', json_encode(array((string) $coin, (string) $address, (string) $hash)));
+        return hash('sha256', json_encode(array((string) $coin, (string) $address, self::canonical($hash))));
     }
     public static function init() {
         global $wpdb;
@@ -25,6 +38,7 @@ class NMMPRO_Consumed_Repo {
         ) ENGINE=InnoDB " . $wpdb->get_charset_collate();
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- DDL uses only wpdb's table prefix, this class's fixed table suffix and get_charset_collate(); no request data or arbitrary identifier enters it.
         if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to create consumed history'); }
+        self::fold_recorded_case($table);
         self::$ready[$table] = true;
     }
     /**
@@ -52,6 +66,33 @@ class NMMPRO_Consumed_Repo {
         }
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is prepared immediately above; the table is only wpdb's prefix plus this class's fixed suffix.
         if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to record consumed transaction'); }
+    }
+    /**
+     * Identities recorded before EVM hashes were folded were taken from the
+     * hash exactly as served, so one recorded in upper or mixed case would no
+     * longer be found. Each such row gets its folded twin, once, before this
+     * request reads or claims anything; the original row stays. Re-running
+     * after an interruption only repeats idempotent upserts.
+     */
+    private static function fold_recorded_case($table) {
+        global $wpdb;
+        if (self::import_done(self::CASE_MIGRATION)) { return; }
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- the table is wpdb's prefix plus this class's fixed suffix; the statement has no other input.
+        $rows = $wpdb->get_results("SELECT transaction_hash,address,coin,order_id,created_at FROM `$table`
+            WHERE transaction_hash LIKE '0x%' AND CHAR_LENGTH(transaction_hash) = 66
+            AND CAST(transaction_hash AS BINARY) <> CAST(LOWER(transaction_hash) AS BINARY)", ARRAY_A);
+        if ($wpdb->last_error !== '' || !is_array($rows)) { throw new RuntimeException('Unable to read consumed history'); }
+        foreach ($rows as $row) {
+            if (self::canonical($row['transaction_hash']) === $row['transaction_hash']) { continue; }
+            $sql = $wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at)
+                VALUES (%s,%s,%s,%s,%d,%d) ON DUPLICATE KEY UPDATE identity=VALUES(identity)",
+                self::identity($row['coin'], $row['address'], $row['transaction_hash']), self::canonical($row['transaction_hash']),
+                $row['address'], $row['coin'], $row['order_id'], $row['created_at']);
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is prepared immediately above; the table is only wpdb's prefix plus this class's fixed suffix.
+            if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to fold consumed history'); }
+        }
+        NMMPRO_Compat::update_option(self::CASE_MIGRATION, '1', true);
+        if (!self::import_done(self::CASE_MIGRATION)) { throw new RuntimeException('Unable to finish consumed history folding'); }
     }
     /** @phpstan-impure */
     private static function import_done($marker) { return get_option($marker) === '1'; }
@@ -296,6 +337,7 @@ class NMMPRO_Consumed_Repo {
         global $wpdb;
         $table = self::table(); unset(self::$ready[$table]);
         $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like('nmmpro_history_import_') . '%'));
+        delete_option(self::CASE_MIGRATION);
         return $wpdb->query("DROP TABLE IF EXISTS `$table`") !== false;
     }
 }

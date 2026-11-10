@@ -825,14 +825,16 @@ delete_option('nmmpro_autopay_scan_incomplete_next');
 
 // --- ERC-20 node answers stamp coverage only up to their horizon -----------
 // When Blockscout cannot answer, a public node's answer verifies the address
-// only up to the node's horizon (its tip time minus HORIZON_MARGIN_SEC), and
+// only up to the node's horizon (its tip time minus MAX_TIP_AHEAD_SEC and
+// HORIZON_MARGIN_SEC), and
 // only when the node shows its log index reaches that far. The coin's
 // coverage stamp must never be later than the earliest horizon the sweep
 // relied on - including one from an earlier tick of a multi-tick sweep - so
 // expiry can never act on time the node had not shown.
 $GLOBALS['ev_mode'] = 'node'; // 'node': proves its index; 'noproof': no Transfer near the tip; 'blockscout': Blockscout answers
 $GLOBALS['ev_tip_time'] = time() - 3;
-$evHorizon = $GLOBALS['ev_tip_time'] - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC;
+$evMargin = NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC + NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC;
+$evHorizon = $GLOBALS['ev_tip_time'] - $evMargin;
 $evMock = function ($pre, $args, $url) {
 	$host = (string) wp_parse_url($url, PHP_URL_HOST);
 	$reply = function ($body, $code = 200) {
@@ -911,7 +913,7 @@ add_filter('nmmpro_autopay_scan_budget', function () { return 1; });
 $evReset(array($evA, $evB));
 $GLOBALS['ev_mode'] = 'node';
 $GLOBALS['ev_tip_time'] = time() - 200; // a node a little behind
-$evEarly = $GLOBALS['ev_tip_time'] - NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC;
+$evEarly = $GLOBALS['ev_tip_time'] - $evMargin;
 as_tick(3 * 3600); // a, by the lagging node
 sok('multi-tick: the horizon is kept for the sweep',      ($h = get_option('nmmpro_autopay_scan_horizon_next', array())) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evEarly && $evCov() === null);
 $GLOBALS['ev_tip_time'] = time() - 3;
@@ -931,14 +933,45 @@ $h = get_option('nmmpro_autopay_scan_horizon_next', array());
 sok('a wrap by the node: the next sweep inherits its horizon', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evHorizon, 'next=' . wp_json_encode($h));
 sok('  and the completed sweep is stamped at the horizon',     $evCov() === $evHorizon, 'cov=' . var_export($evCov(), true));
 
-// An unreadable builder bounds nothing: the coin is not stamped.
+// An unreadable builder bounds nothing: a later node visit must not
+// overwrite it, and at the wrap the coin loses its stamp (no expiry) rather
+// than keep one the sweep cannot vouch for.
+$evReset(array($evA, $evB));
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => '99999999999'), false);
+$GLOBALS['ev_mode'] = 'node';
+as_tick(3 * 3600); // a, by the node: not a wrap
+$h = get_option('nmmpro_autopay_scan_horizon_next', null);
+sok('a stored horizon that is not a timestamp is not replaced by a node\'s', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === '99999999999', 'next=' . wp_json_encode($h));
+$evReset(array($evA, $evB));
+update_option('nmmpro_autopay_scan_horizon_next', 'garbage', false);
+as_tick(3 * 3600);
+sok('  nor a builder that is not a list',                  get_option('nmmpro_autopay_scan_horizon_next', null) === 'garbage');
+
 $evReset(array($evA));
 update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => 1000), false);
 update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => 'soon'), false);
 remove_all_filters('nmmpro_autopay_scan_budget');
 $GLOBALS['ev_mode'] = 'blockscout';
 as_tick(3 * 3600);
-sok('a horizon that is not a timestamp: the stamp is kept', $evCov() === 1000, 'cov=' . var_export($evCov(), true));
+sok('a horizon that is not a timestamp: the coin is left unstamped', $evCov() === null, 'cov=' . var_export($evCov(), true));
+
+// The wrap drops an address's exclusion before it writes the new stamp. If a
+// write in between fails, the old stamp stays - so it must already have come
+// down to the node's horizon, which here is EARLIER than the old stamp.
+$evReset(array($evA));
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 240;
+$evLate = $GLOBALS['ev_tip_time'] - $evMargin;
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => time() - 180), false);
+update_option('nmmpro_autopay_scan_incomplete', array('USDTPOL|' . $evA => true), false);
+update_option('nmmpro_autopay_scan_sweep_start', 12345, false);
+$evBlock = function ($new, $old) { return $old; }; // the sweep_start write fails
+add_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $evBlock, 10, 2);
+as_tick(3 * 3600);
+remove_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $evBlock, 10);
+sok('a wrap that fails after dropping the exclusion',       !as_excluded('USDTPOL|' . $evA) && (int) get_option('nmmpro_autopay_scan_sweep_start') === 12345);
+sok('  leaves the stamp lowered to the node\'s horizon',     $evCov() !== null && $evCov() <= $evLate, 'cov=' . var_export($evCov(), true) . ' want<=' . $evLate);
+$GLOBALS['ev_tip_time'] = time() - 3;
 
 remove_filter('pre_http_request', $evMock, 10);
 $evReset(array());
