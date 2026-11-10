@@ -104,9 +104,14 @@ Base stablecoins) are read from the first source that answers:
 2. a **public JSON-RPC node**, read log by log.
 
 The node is used only when Blockscout fails. A node's answer lets payments be
-matched, but never counts as checking the address for expiry: orders on that
-address are not cancelled until Blockscout answers again. When both fail,
-nothing is matched or expired on that address in that pass, as before.
+matched. For expiry it counts only up to ten minutes before the node's newest
+block, and only when the node also shows that its record of token transfers
+is current (the token's own transfers near that block). So an order whose
+address was last checked through a node is cancelled up to about ten minutes
+later than it would be through Blockscout, never earlier. When the node cannot
+show that, the address is not counted as checked until a later pass can. When
+both sources fail, nothing is matched or expired on that address in that pass,
+as before.
 
 Every one of these requests passes through `nmmpro_api_url`, so you can point
 any of them at your own instance. A JSON-RPC replacement must be a node of the

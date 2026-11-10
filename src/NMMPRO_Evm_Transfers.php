@@ -38,13 +38,23 @@ if ( ! defined( 'ABSPATH' ) ) {
  *    there, and any node could send a plausible wrong value), and it must lie
  *    between the starting block's and the tip's.
  *
- * An answer from here lets payments be matched, but never certifies an
- * address as covered for expiry: the page is reported through
- * NMMPRO_Blockchain::note_raw_page() as not certifiable, so
- * NMMPRO_Payment::page_possibly_truncated() keeps the address out of the
- * coverage stamp. A node may lag or hold back a block without that being
- * detectable here; that can delay a payment, and expiry waits for
- * Blockscout - late, never wrong.
+ * An answer from here always lets payments be matched. It certifies the
+ * address as covered for expiry only up to a HORIZON, never up to this
+ * server's clock: the tip's own time minus HORIZON_MARGIN_SEC, and only when
+ * the same node has also shown that its logs are indexed that far (see
+ * indexed_horizon()). The horizon travels with the page report
+ * (NMMPRO_Blockchain::note_raw_page()), and the sweep never stamps the coin
+ * as covered later than the earliest horizon it relied on, so a node that
+ * lags only delays expiry. Without that proof the page is reported as not
+ * certifiable, and NMMPRO_Payment::page_possibly_truncated() keeps the
+ * address out of the coverage stamp until a later visit can certify it.
+ *
+ * What this cannot rule out: a node operator answering every request
+ * coherently but falsely, or a load balancer whose backends disagree so
+ * that the address's log ranges come from a backend whose log index is more
+ * than HORIZON_MARGIN_SEC behind while the headers and the index check come
+ * from current ones. Blockscout carries the same kind of trust in its own
+ * indexer, without a horizon.
  */
 class NMMPRO_Evm_Transfers {
 
@@ -77,6 +87,18 @@ class NMMPRO_Evm_Transfers {
 	// lookback before the fetch gives up.
 	const COVERAGE_TRIES = 4;
 
+	// How far behind the tip's own time an answer certifies the address for
+	// expiry. A node whose log index trails its headers by less than this
+	// cannot make expiry miss a transfer; trailing by more is what
+	// indexed_horizon() looks for.
+	const HORIZON_MARGIN_SEC = 600;
+
+	// The windows, ending at the tip, in which the token's own Transfer logs
+	// (to anyone) must show up to prove the node's log index is current. The
+	// short one holds a few dozen logs for a busy stablecoin; the long one is
+	// tried only when it is empty, for quieter tokens.
+	const INDEX_PROOF_SEC = array(6, 60);
+
 	// Seconds per block, used ONLY to size the first guess at the starting
 	// block. The guess is then checked against that block's real timestamp.
 	private static $blockSeconds = array(
@@ -108,8 +130,10 @@ class NMMPRO_Evm_Transfers {
 			42161 => array(
 				array('https://arb1.arbitrum.io/rpc', 50000),
 			),
+			// mainnet.base.org was dropped in November 2026: it answers
+			// eth_getLogs only with "request limit reached" (429), even for
+			// a single spaced request.
 			8453 => array(
-				array('https://mainnet.base.org', 2000),
 				array('https://base-rpc.publicnode.com', 5000),
 			),
 		);
@@ -298,6 +322,9 @@ class NMMPRO_Evm_Transfers {
 			$transactions[] = new NMMPRO_Transaction($row['value'], $tip - $block, $time, $row['hash']);
 		}
 
+		// ---- the node's log index reaches the horizon ----
+		$horizon = self::indexed_horizon($url, $chainId, $contract, $tip, $tipTime, $headers, $budget);
+
 		// ---- the tip is still the tip: nothing in the range was replaced ----
 		$tipAgain = self::block_header($url, $tip, $budget);
 		if ($tipAgain === null) {
@@ -307,9 +334,10 @@ class NMMPRO_Evm_Transfers {
 			return self::error('the chain changed while it was read');
 		}
 
-		// Reported as NOT certifiable: matching may use this answer, expiry
-		// must not (see the class comment).
-		NMMPRO_Blockchain::note_raw_page(count($logs), $oldest, false);
+		// Expiry may rely on this answer only up to the horizon, and only
+		// when the node proved its log index reaches it (false otherwise; see
+		// the class comment).
+		NMMPRO_Blockchain::note_raw_page(count($logs), $oldest, $horizon === null ? false : $horizon);
 
 		return array(
 			'result'       => 'success',
@@ -400,6 +428,82 @@ class NMMPRO_Evm_Transfers {
 		}
 
 		return $answer['value'];
+	}
+
+	/**
+	 * The time up to which this fetch may certify the address for expiry,
+	 * or null when it may not.
+	 *
+	 * The address's own log query cannot show that the node's log index is
+	 * current: "no transfers" looks the same as "not indexed yet". The token's
+	 * Transfer logs to ANYONE can. A busy token has some in the last few
+	 * blocks, so the newest of them, checked by hash against its header,
+	 * shows the index reaches that block - near the tip, well past the
+	 * horizon. No such log (a quiet token, a lagging index, an exhausted
+	 * budget) withholds certification only; the transfers already read are
+	 * still returned for matching.
+	 */
+	private static function indexed_horizon($url, $chainId, $contract, $tip, $tipTime, &$headers, &$budget) {
+		$perBlock = isset(self::$blockSeconds[$chainId]) ? self::$blockSeconds[$chainId] : 12;
+		$horizon = $tipTime - self::HORIZON_MARGIN_SEC;
+
+		foreach (self::INDEX_PROOF_SEC as $seconds) {
+			$from = max(0, $tip - (int) ceil($seconds / $perBlock));
+
+			$logs = self::call($url, 'eth_getLogs', array(array(
+				'address'   => $contract,
+				'fromBlock' => self::to_hex($from),
+				'toBlock'   => self::to_hex($tip),
+				'topics'    => array(self::TRANSFER_TOPIC),
+			)), $budget, 'list');
+			if (!is_array($logs)) {
+				return null;
+			}
+
+			// The newest well-formed Transfer of this contract in the window.
+			// Anything else is skipped: only a log that passes the header
+			// check below proves anything.
+			$newest = null;
+			$newestHash = '';
+			foreach ($logs as $log) {
+				if (!is_array($log) || !empty($log['removed'])
+					|| !isset($log['address'], $log['topics'], $log['blockNumber'], $log['blockHash'])
+					|| !is_string($log['address']) || strtolower($log['address']) !== $contract
+					|| !is_array($log['topics']) || !isset($log['topics'][0]) || !is_string($log['topics'][0])
+					|| strtolower($log['topics'][0]) !== self::TRANSFER_TOPIC
+					|| !self::is_quantity($log['blockNumber'])
+					|| !is_string($log['blockHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['blockHash'])) {
+					continue;
+				}
+				$block = self::to_int($log['blockNumber']);
+				if ($block >= $from && $block <= $tip && ($newest === null || $block > $newest)) {
+					$newest = $block;
+					$newestHash = strtolower($log['blockHash']);
+				}
+			}
+			if ($newest === null) {
+				continue;
+			}
+
+			if (!isset($headers[$newest])) {
+				$header = self::block_header($url, $newest, $budget);
+				if ($header === null) {
+					return null;
+				}
+				$headers[$newest] = $header;
+			}
+
+			// The log must belong to the block the header describes, and that
+			// block must lie between the horizon and the tip.
+			if ($headers[$newest]['hash'] !== $newestHash
+				|| $headers[$newest]['time'] < $horizon || $headers[$newest]['time'] > $tipTime) {
+				return null;
+			}
+
+			return $horizon;
+		}
+
+		return null;
 	}
 
 	private static function error($message) {

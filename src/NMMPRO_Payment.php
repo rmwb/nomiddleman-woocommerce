@@ -495,6 +495,7 @@ class NMMPRO_Payment {
 		$newFailed = array();
 		$coinDirty = array();       // whole-coin exclusions (unverifiable ticker)
 		$incompleteKeys = array();  // per-ADDRESS exclusions ("crypto|address")
+		$horizonByCrypto = array(); // per-coin cap on the coverage stamp (see page_certifies_until)
 
 		foreach ($toProcess as $record) {
 			$cryptoId = $record['cryptocurrency'];
@@ -566,6 +567,16 @@ class NMMPRO_Payment {
 					// auto-cancel.
 					$incompleteKeys[self::scan_key($record)] = true;
 				}
+				else {
+					// A source that sees the chain only up to some time (the
+					// ERC-20 JSON-RPC fallback) verified this address up to
+					// that time, not up to now: the coin's stamp for this
+					// sweep must not be later than it.
+					$until = self::page_certifies_until($fetched);
+					if ($until !== null && (!isset($horizonByCrypto[$cryptoId]) || $until < $horizonByCrypto[$cryptoId])) {
+						$horizonByCrypto[$cryptoId] = $until;
+					}
+				}
 			}
 		}
 
@@ -633,6 +644,24 @@ class NMMPRO_Payment {
 				$builder[$incompleteKey] = true;
 			}
 			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', $builder);
+		}
+
+		// The same for the per-coin horizons: the earliest time up to which
+		// any address of the coin was verified in the sweep in progress. Like
+		// an exclusion, it must be durable before the cursor passes the
+		// address, or the wrap would stamp the sweep's start for an address
+		// that was only seen up to an earlier time.
+		if ($certify && $persisted && !empty($horizonByCrypto)) {
+			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
+			if (!is_array($horizons)) {
+				$horizons = array();
+			}
+			foreach ($horizonByCrypto as $horizonCryptoId => $until) {
+				if (!isset($horizons[$horizonCryptoId]) || $until < (int) $horizons[$horizonCryptoId]) {
+					$horizons[$horizonCryptoId] = $until;
+				}
+			}
+			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $horizons);
 		}
 
 		if ($certify && $persisted && !empty($coinDirty)) {
@@ -722,6 +751,28 @@ class NMMPRO_Payment {
 				$promoted[$failedKey] = true;
 			}
 
+			// The completed sweep's horizons, read before the builder resets.
+			// A value that is not a timestamp cannot be trusted to bound
+			// anything, so its coin is not stamped at all this time.
+			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
+			if (!is_array($horizons)) {
+				$horizons = array();
+				foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $unknownCryptoId) {
+					$excludedCryptos[$unknownCryptoId] = true;
+				}
+			}
+			foreach ($horizons as $horizonCryptoId => $until) {
+				if (!is_int($until)) {
+					$excludedCryptos[$horizonCryptoId] = true;
+				}
+			}
+
+			// The sweep now starting counts this tick's head rows as visited
+			// (see sweep_start below), so it inherits their horizons. All of
+			// this tick's horizons are carried: a few too many only make its
+			// stamp earlier.
+			$nextHorizons = $wrapped ? $horizonByCrypto : array();
+
 			// Coverage is the one write that authorises cancelling somebody's
 			// order, so it goes LAST, after everything it depends on is durable.
 			// Each step is fenced in its own statement; stopping after any of
@@ -730,6 +781,7 @@ class NMMPRO_Payment {
 			// cleanly during this sweep, after that stamp.
 			$published = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete', $promoted)
 				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', array())
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $nextHorizons)
 				// The next sweep begins with the head rows this tick just fetched.
 				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_sweep_start', $now)
 				&& (empty($excludedCryptos) || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', array()));
@@ -741,7 +793,7 @@ class NMMPRO_Payment {
 				}
 				foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
 					if (!isset($excludedCryptos[$sweptCryptoId])) {
-						$coveredMap[$sweptCryptoId] = $stampAt;
+						$coveredMap[$sweptCryptoId] = isset($horizons[$sweptCryptoId]) ? min($stampAt, $horizons[$sweptCryptoId]) : $stampAt;
 					}
 				}
 				NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_covered_at', $coveredMap);
@@ -993,9 +1045,11 @@ class NMMPRO_Payment {
 	 * instrumenting an adapter strictly tightens the check.
 	 *
 	 * A source that reported its page as not certifiable (the ERC-20 JSON-RPC
-	 * fallback, whose node may lag or hold back blocks undetectably) is
-	 * treated as possibly truncated whatever its size: its payments are
-	 * matched, but the address is not certified until an explorer answers.
+	 * fallback, when its node could not show that its log index is current)
+	 * is treated as possibly truncated whatever its size: its payments are
+	 * matched, but the address is not certified on this visit. One that
+	 * certifies only up to a time is judged like any other page here; the
+	 * sweep caps the coin's stamp at that time (page_certifies_until()).
 	 */
 	public static function page_possibly_truncated($cryptoId, $fetchResult, $transactionLifetime, $now) {
 		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
@@ -1039,6 +1093,22 @@ class NMMPRO_Payment {
 		// sitting exactly on the cutoff proves nothing about eligible
 		// same-second history below the page.
 		return ($oldest === null) || ((int) $oldest >= ($now - (int) $transactionLifetime));
+	}
+
+	/**
+	 * The time up to which one address visit verified the chain, when the
+	 * source said so (the ERC-20 JSON-RPC fallback reports its node's
+	 * horizon through NMMPRO_Blockchain::note_raw_page()); null for a source
+	 * that answers as of now. Whether the visit certifies at all is
+	 * page_possibly_truncated()'s question.
+	 */
+	public static function page_certifies_until($fetchResult) {
+		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
+		if (is_array($pageMeta) && array_key_exists(2, $pageMeta) && is_int($pageMeta[2])) {
+			return $pageMeta[2];
+		}
+
+		return null;
 	}
 
 	/**

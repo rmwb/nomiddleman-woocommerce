@@ -2779,16 +2779,19 @@ class NMMPRO_Blockchain {
 	// immediately after each fetch, so a value can never leak from one
 	// address's fetch to another's.
 	//
-	// A source whose answer may be used for matching but must never certify
-	// coverage for expiry (the JSON-RPC fallback, NMMPRO_Evm_Transfers)
-	// passes $certifies = false; the metadata then carries a third element,
-	// false, which NMMPRO_Payment::page_possibly_truncated() honours.
+	// A source whose answer may be used for matching but certifies coverage
+	// for expiry only up to a point in time, or not at all (the JSON-RPC
+	// fallback, NMMPRO_Evm_Transfers), passes that time (a Unix timestamp)
+	// or false as $certifiesUntil. The metadata then carries it as a third
+	// element: false makes NMMPRO_Payment::page_possibly_truncated() treat
+	// the page as possibly incomplete, and a time caps the coin's coverage
+	// stamp in the sweep (NMMPRO_Payment::page_certifies_until()).
 	private static $lastRawPage = null;
 
-	public static function note_raw_page($count, $oldestTs, $certifies = true) {
+	public static function note_raw_page($count, $oldestTs, $certifiesUntil = true) {
 		self::$lastRawPage = array((int) $count, ($oldestTs === null) ? null : (int) $oldestTs);
-		if (!$certifies) {
-			self::$lastRawPage[] = false;
+		if ($certifiesUntil !== true) {
+			self::$lastRawPage[] = is_int($certifiesUntil) ? $certifiesUntil : false;
 		}
 	}
 

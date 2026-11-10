@@ -179,17 +179,28 @@ function harvest_erc20_recipient($host, $contract) {
 $multinet = array(
 	'DAI'     => array('eth.blockscout.com', '0x6B175474E89094C44Da98b954EedeAC495271d0F'),
 	'PYUSD'   => array('eth.blockscout.com', '0x6c3ea9036406852006290770BEdFcAbA0e23A0e8'),
-	'USDTPOL' => array('polygon.blockscout.com', '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'),
-	'USDCBAS' => array('base.blockscout.com', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
-	'USDTARB' => array('arbitrum.blockscout.com', '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'),
 );
 foreach ($multinet as $mnId => $mnInfo) {
 	if (!$run($mnId)) continue;
-	sleep(5); // polygon especially is burst-sensitive
+	sleep(5);
 	$mnAddr = harvest_erc20_recipient($mnInfo[0], $mnInfo[1]);
 	if ($mnAddr === '') { printf("%-22s %-5s %s\n", $mnId, 'FAIL', 'no recipient harvested'); $failures[] = $mnId; continue; }
 	sleep(5);
 	check($mnId . ' ' . $mnInfo[0], NMMPRO_Blockchain::get_erc20_address_transactions($mnId, $mnAddr));
+}
+
+// The Polygon, Arbitrum and Base Blockscout instances have answered API calls
+// with a Cloudflare challenge (403) since October 2026, so no recipient can be
+// harvested there. Instead the real entry point must answer, from whichever
+// source can, for a quiet address - the shape of a shop's payment address.
+// (A busy recipient would exceed the node source's request budget; the
+// FALLBACK section below checks the nodes against real transfers.)
+foreach (array('USDTPOL', 'USDCBAS', 'USDTARB') as $mnId) {
+	if (!$run($mnId)) continue;
+	sleep(5);
+	$result = NMMPRO_Blockchain::get_erc20_address_transactions($mnId, '0x000000000000000000000000000000000000dEaD', 3 * 3600);
+	NMMPRO_Blockchain::take_raw_page_meta();
+	check($mnId . ' ' . (isset($result['source']) ? $result['source'] : 'blockscout'), $result, false);
 }
 
 // --- ERC-20 fallback sources (issue #17) ---
