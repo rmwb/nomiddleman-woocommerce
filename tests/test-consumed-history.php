@@ -75,5 +75,22 @@ try {
 }
 $check('  and then reads the marker as set', get_option($importMarker) === '1');
 
+// A legacy mixed-case row whose folded identity already exists, owned by a
+// different order: the fold keeps the existing owner and the transaction
+// stays consumed.
+$conflict = '0x' . str_repeat('Fe', 32);
+$conflictLower = strtolower($conflict);
+$wpdb->query($wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at) VALUES (%s,%s,'0xconflict','USDCBAS',4242,1)", hash('sha256', json_encode(array('USDCBAS', '0xconflict', $conflict))), $conflict));
+$wpdb->query($wpdb->prepare("INSERT INTO `$table` (identity,transaction_hash,address,coin,order_id,created_at) VALUES (%s,%s,'0xconflict','USDCBAS',5151,2)", hash('sha256', json_encode(array('USDCBAS', '0xconflict', $conflictLower))), $conflictLower));
+delete_option(NMMPRO_Consumed_Repo::CASE_MIGRATION);
+$ready->setValue(null, array());
+$check('a fold that collides with an existing row keeps that row\'s owner', NMMPRO_Consumed_Repo::owners('USDCBAS', '0xconflict', array($conflictLower, $conflict)) === array($conflictLower => 5151, $conflict => 5151));
+
+// Only an exact 0x + 64-hex hash is folded: one with a trailing newline is
+// another string, matched exactly.
+$newline = '0x' . str_repeat('Ab', 32) . "\n";
+NMMPRO_Consumed_Repo::add('USDTPOL', '0xnewline', $newline);
+$check('a hash with a trailing newline is not folded', NMMPRO_Consumed_Repo::contains('USDTPOL', '0xnewline', $newline) && !NMMPRO_Consumed_Repo::contains('USDTPOL', '0xnewline', strtolower($newline)));
+
 echo $ok ? "CONSUMED-HISTORY CHECKS PASSED\n" : "CONSUMED-HISTORY CHECKS FAILED\n";
 exit($ok ? 0 : 1);

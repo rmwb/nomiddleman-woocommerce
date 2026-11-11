@@ -934,12 +934,15 @@ $evMock = function ($pre, $args, $url) {
 	$reply = function ($body, $code = 200) {
 		return array('response' => array('code' => $code), 'body' => is_string($body) ? $body : wp_json_encode($body), 'headers' => array(), 'cookies' => array());
 	};
-	if ($host === 'polygon.blockscout.com') {
+	if ($host === 'polygon.blockscout.com' || $host === 'base.blockscout.com') {
 		return $GLOBALS['ev_mode'] === 'blockscout' ? $reply(array('status' => '0', 'message' => 'No transactions found', 'result' => array())) : $reply('challenge', 403);
 	}
-	if ($host !== 'polygon-bor-rpc.publicnode.com') {
+	if ($host !== 'polygon-bor-rpc.publicnode.com' && $host !== 'base-rpc.publicnode.com') {
 		return $pre;
 	}
+	// Base's node can run at its own tip time (ev_tip_time_base), so two coins
+	// in one sweep can carry different horizons.
+	$tipTime = ($host === 'base-rpc.publicnode.com' && isset($GLOBALS['ev_tip_time_base'])) ? $GLOBALS['ev_tip_time_base'] : $GLOBALS['ev_tip_time'];
 	$req = json_decode($args['body'], true);
 	$tip = 50000000;
 	$rpc = function ($result) use ($reply) { return $reply(array('jsonrpc' => '2.0', 'id' => 1, 'result' => $result)); };
@@ -949,7 +952,7 @@ $evMock = function ($pre, $args, $url) {
 	}
 	if ($req['method'] === 'eth_getBlockByNumber') {
 		$n = hexdec(substr($req['params'][0], 2));
-		return $rpc(array('number' => '0x' . dechex($n), 'hash' => $hash($n), 'timestamp' => '0x' . dechex($GLOBALS['ev_tip_time'] - ($tip - $n) * 2)));
+		return $rpc(array('number' => '0x' . dechex($n), 'hash' => $hash($n), 'timestamp' => '0x' . dechex($tipTime - ($tip - $n) * 2)));
 	}
 	if ($req['method'] === 'eth_getLogs') {
 		$filter = $req['params'][0];
@@ -1108,6 +1111,52 @@ as_tick(3 * 3600);
 remove_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $evBlock, 10);
 sok('a wrap that fails after dropping the exclusion',       !as_excluded('USDTPOL|' . $evA) && (int) get_option('nmmpro_autopay_scan_sweep_start') === 12345);
 sok('  leaves the stamp lowered to the node\'s horizon',     $evCov() !== null && $evCov() <= $evLate, 'cov=' . var_export($evCov(), true) . ' want<=' . $evLate);
+$GLOBALS['ev_tip_time'] = time() - 3;
+
+// Two coins in one sweep: each is stamped at its OWN horizon, and a coin
+// whose horizon is unknown loses only its own stamp.
+$evCovOf = function ($coin) {
+	$m = get_option('nmmpro_autopay_scan_covered_at', array());
+	return (is_array($m) && isset($m[$coin])) ? (int) $m[$coin] : null;
+};
+$evTwoCoins = function () use ($evReset, $evA, $evB, $wpdb, $pt) {
+	$evReset(array($evA));
+	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDCBAS','unpaid',%d,%d,'1.00000000',0)", $evB, time() - 2 * HOUR_IN_SECONDS, 790098));
+};
+$evTwoCoins();
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 300;    // Polygon's node is behind
+$GLOBALS['ev_tip_time_base'] = time() - 3; // Base's is current
+$evPolyH = $GLOBALS['ev_tip_time'] - $evMargin;
+$evBaseH = $GLOBALS['ev_tip_time_base'] - $evMargin;
+as_tick(3 * 3600); // both addresses by their nodes: the whole backlog
+sok('two coins: each is stamped at its own horizon', $evCovOf('USDTPOL') === $evPolyH && $evCovOf('USDCBAS') === $evBaseH, 'pol=' . var_export($evCovOf('USDTPOL'), true) . ' want ' . $evPolyH . ', base=' . var_export($evCovOf('USDCBAS'), true) . ' want ' . $evBaseH);
+$evTwoCoins();
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => 1000, 'USDCBAS' => 1000), false);
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => null), false);
+as_tick(3 * 3600);
+sok('  an unknown horizon unstamps only its own coin', $evCovOf('USDTPOL') === null && $evCovOf('USDCBAS') === $evBaseH, 'pol=' . var_export($evCovOf('USDTPOL'), true) . ' base=' . var_export($evCovOf('USDCBAS'), true));
+unset($GLOBALS['ev_tip_time_base']);
+$GLOBALS['ev_tip_time'] = time() - 3;
+
+// Whichever write of the wrap's chain fails, an address whose exclusion is
+// dropped is never left with a stamp later than the node's horizon, and the
+// next tick completes the wrap.
+foreach (array('covered_at', 'incomplete', 'incomplete_next', 'horizon_next', 'sweep_start') as $evFailing) {
+	$evReset(array($evA));
+	$GLOBALS['ev_mode'] = 'node';
+	$GLOBALS['ev_tip_time'] = time() - 240;
+	$evLate = $GLOBALS['ev_tip_time'] - $evMargin;
+	update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => time() - 180), false);
+	update_option('nmmpro_autopay_scan_incomplete', array('USDTPOL|' . $evA => true), false);
+	update_option('nmmpro_autopay_scan_sweep_start', 12345, false);
+	add_filter('pre_update_option_nmmpro_autopay_scan_' . $evFailing, $evBlock, 10, 2);
+	as_tick(3 * 3600);
+	remove_filter('pre_update_option_nmmpro_autopay_scan_' . $evFailing, $evBlock, 10);
+	sok('the ' . $evFailing . ' write fails: excluded or stamped no later than the horizon', as_excluded('USDTPOL|' . $evA) || ($evCov() !== null && $evCov() <= $evLate), 'excl=' . var_export(as_excluded('USDTPOL|' . $evA), true) . ' cov=' . var_export($evCov(), true) . ' want<=' . $evLate);
+	as_tick(3 * 3600);
+	sok('  and the next tick completes the wrap', !as_excluded('USDTPOL|' . $evA) && $evCov() !== null && $evCov() <= $evLate, 'excl=' . var_export(as_excluded('USDTPOL|' . $evA), true) . ' cov=' . var_export($evCov(), true));
+}
 $GLOBALS['ev_tip_time'] = time() - 3;
 
 remove_filter('pre_http_request', $evMock, 10);

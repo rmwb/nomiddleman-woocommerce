@@ -571,6 +571,12 @@ ok('a value with a trailing newline: the fetch fails', et_fetch()['result'] === 
 // header's, which a validated header hash never carries a newline to match.
 et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('blockHash' => et_block_hash(999990) . "\n")))));
 ok('a block hash with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
+// Quantities go through hexdec(), which skips the newline, so only the
+// pattern stands between such a block number and a credited transfer.
+et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('blockNumber' => '0x' . dechex(999990) . "\n")))));
+ok('a block number with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
+et_reset();
+ok('an address with a trailing newline is refused before any request', NMMPRO_Evm_Transfers::fetch(137, ET_POL, ET_ADDR . "\n", $LOOKBACK)['result'] === 'error' && count($GLOBALS['et']['calls']) === 0);
 
 // --- 9. times from verified headers -----------------------------------------------------------
 echo "--- 9. times from headers ---\n";
