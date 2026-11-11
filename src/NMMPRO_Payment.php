@@ -795,11 +795,13 @@ class NMMPRO_Payment {
 			}
 			$lowerFirst = is_array($coveredNow) && $lowered !== $coveredNow;
 
-			// The sweep now starting counts this tick's head rows as visited
-			// (see sweep_start below), so it inherits their horizons. All of
-			// this tick's horizons are carried: a few too many only make its
-			// stamp earlier.
-			$nextHorizons = $wrapped ? $horizonByCrypto : array();
+			// The sweep now starting counts this tick's rows as visited (see
+			// sweep_start below): the head rows of a wrapping page, or the
+			// whole page of a tick that covered the backlog without wrapping
+			// (whose cursor now sits at the end, so the next tick may wrap
+			// on head rows alone). Either way it inherits this tick's
+			// horizons; a few too many only make its stamp earlier.
+			$nextHorizons = $horizonByCrypto;
 
 			// Coverage is the one write that authorises cancelling somebody's
 			// order, so it goes LAST, after everything it depends on is durable.

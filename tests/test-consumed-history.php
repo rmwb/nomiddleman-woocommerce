@@ -41,5 +41,22 @@ $rowsBefore = (int) $wpdb->get_var("SELECT COUNT(*) FROM `$table`");
 NMMPRO_Consumed_Repo::contains('USDCBAS', '0xlegacy', $legacy);
 $check('  running it again adds nothing', (int) $wpdb->get_var("SELECT COUNT(*) FROM `$table`") === $rowsBefore);
 
+// A request that loses the race to set the folding marker: its options cache
+// still says "absent" while another request has stored it. Its work is done
+// (the folding is idempotent), so it must carry on, not throw.
+delete_option(NMMPRO_Consumed_Repo::CASE_MIGRATION);
+$ready->setValue(null, array());
+get_option(NMMPRO_Consumed_Repo::CASE_MIGRATION); // caches "absent" in this request
+// Stored exactly as the winner's update_option() stores it, so this request's
+// own write changes no row (as in a real race) and refreshes no cache.
+$winnerAutoload = function_exists('wp_autoload_values_to_autoload') ? 'on' : 'yes';
+$wpdb->query($wpdb->prepare("INSERT INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, '1', %s)", NMMPRO_Consumed_Repo::CASE_MIGRATION, $winnerAutoload));
+try {
+    $found = NMMPRO_Consumed_Repo::contains('USDCBAS', '0xlegacy', strtolower($legacy));
+    $check('a request that lost the race to set the folding marker carries on', $found === true);
+} catch (Throwable $e) {
+    $check('a request that lost the race to set the folding marker carries on (' . $e->getMessage() . ')', false);
+}
+
 echo $ok ? "CONSUMED-HISTORY CHECKS PASSED\n" : "CONSUMED-HISTORY CHECKS FAILED\n";
 exit($ok ? 0 : 1);

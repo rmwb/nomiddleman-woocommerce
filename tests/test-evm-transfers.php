@@ -464,7 +464,8 @@ et_reset(array('block_sec' => 0, 'logs' => array(et_log(999990))));
 $r = et_fetch();
 ok('lookback cannot be proven: an error, not a short answer', $r['result'] === 'error' && count(et_addr_logs()) === 0);
 
-et_reset(array('block_sec' => 0.01, 'logs' => array(et_log(999990))));
+// 3.5 h at 0.002 s a block on a 10,000-block node is over 600 chunks.
+et_reset(array('tip' => 50000000, 'block_sec' => 0.002, 'logs' => array(et_log(49999990))));
 ok('lookback needs more requests than the budget: an error', et_fetch()['result'] === 'error');
 
 et_reset(array('tip' => 3000, 'logs' => array(et_log(10))));
@@ -558,6 +559,13 @@ $r = et_fetch();
 ok('a log flagged removed (reorged out) is ignored, the rest kept', $r['result'] === 'success' && count($r['transactions']) === 1 && et_t($r, 0)->get_time_stamp() === et_block_time(999980));
 ok('a malformed address is refused before any request', NMMPRO_Evm_Transfers::fetch(137, ET_POL, 'not-an-address', $LOOKBACK)['result'] === 'error');
 
+// "$" alone also matches before a trailing newline; a hash carrying one would
+// be a second spelling of the same transaction in the ledger.
+et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('transactionHash' => et_hash(999990000) . "\n")))));
+ok('a transaction hash with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
+et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('blockHash' => et_block_hash(999990) . "\n")))));
+ok('a block hash with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
+
 // --- 9. times from verified headers -----------------------------------------------------------
 echo "--- 9. times from headers ---\n";
 et_reset(array('logs' => array(et_log(999990)), 'log_time' => 'zero'));
@@ -610,13 +618,26 @@ ok('  reported as a full page, which does not certify', is_array($meta) && $meta
 
 // --- 12. bounded work ------------------------------------------------------------------------------
 echo "--- 12. bounded work ---\n";
+$polygonCalls = function () use ($polygonNode) { $n = 0; foreach ($GLOBALS['et']['calls'] as $c) { if ($c['host'] === $polygonNode) { $n++; } } return $n; };
+// The row cap, not the call budget, limits a busy address: MAX_ROWS
+// transfers, each in its own block (two header reads apiece), still fit.
 $spread = array();
-for ($i = 0; $i < 60; $i++) { $spread[] = et_log(999990 - $i * 3); }
-et_reset(array('logs' => $spread));
+for ($i = 0; $i < NMMPRO_Evm_Transfers::MAX_ROWS; $i++) { $spread[] = et_log(999990 - $i * 3); }
+et_reset(array('logs' => $spread, 'busy' => array(999999)));
 $r = et_fetch();
-$rpcCalls = 0; foreach ($GLOBALS['et']['calls'] as $c) { if ($c['host'] === $polygonNode) { $rpcCalls++; } }
-ok('more headers needed than the budget allows: an error', $r['result'] === 'error');
-ok('  and the node was asked no more than the budget', $rpcCalls <= NMMPRO_Evm_Transfers::MAX_REQUESTS, 'calls=' . $rpcCalls);
+ok('MAX_ROWS transfers in as many blocks: all returned within the budget', $r['result'] === 'success' && count($r['transactions']) === NMMPRO_Evm_Transfers::MAX_ROWS, 'calls=' . $polygonCalls());
+// A lookback of days on a small-span node fits too: five days on Base.
+et_reset(array('contract' => ET_BASE, 'logs' => array(et_log(999990)), 'busy' => array(999999)));
+$GLOBALS['et_filters']['nmmpro_evm_rpc_nodes_saved'] = $GLOBALS['et_filters']['nmmpro_evm_rpc_nodes'];
+unset($GLOBALS['et_filters']['nmmpro_evm_rpc_nodes']);
+$r = et_fetch('USDCBAS', 5 * 86400);
+$GLOBALS['et_filters']['nmmpro_evm_rpc_nodes'] = $GLOBALS['et_filters']['nmmpro_evm_rpc_nodes_saved'];
+ok('a five-day lookback on Base\'s own node fits within the budget', $r['result'] === 'success' && count($r['transactions']) === 1);
+// Exhausting the budget is an error, and stops at the budget.
+et_reset(array('tip' => 50000000, 'block_sec' => 0.002, 'logs' => array(et_log(49999990))));
+$r = et_fetch();
+ok('a fetch that runs out of calls is an error', $r['result'] === 'error');
+ok('  and the node was asked no more than the budget', $polygonCalls() <= NMMPRO_Evm_Transfers::MAX_REQUESTS, 'calls=' . $polygonCalls());
 ok('a fetch from one node has a wall-clock limit of a minute or less', NMMPRO_Evm_Transfers::MAX_FETCH_SEC > 0 && NMMPRO_Evm_Transfers::MAX_FETCH_SEC <= 60);
 
 // --- 13. the Blockscout parser ------------------------------------------------------------------------

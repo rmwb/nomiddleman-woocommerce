@@ -17,7 +17,7 @@ class NMMPRO_Consumed_Repo {
      */
     private static function canonical($hash) {
         $hash = (string) $hash;
-        return preg_match('/^0x[0-9a-fA-F]{64}$/', $hash) ? strtolower($hash) : $hash;
+        return preg_match('/^0x[0-9a-fA-F]{64}$/D', $hash) ? strtolower($hash) : $hash;
     }
     private static function identity($coin, $address, $hash) {
         return hash('sha256', json_encode(array((string) $coin, (string) $address, self::canonical($hash))));
@@ -92,10 +92,29 @@ class NMMPRO_Consumed_Repo {
             if ($wpdb->query($sql) === false) { throw new RuntimeException('Unable to fold consumed history'); }
         }
         NMMPRO_Compat::update_option(self::CASE_MIGRATION, '1', true);
-        if (!self::import_done(self::CASE_MIGRATION)) { throw new RuntimeException('Unable to finish consumed history folding'); }
+        if (!self::marker_stored(self::CASE_MIGRATION)) { throw new RuntimeException('Unable to finish consumed history folding'); }
     }
     /** @phpstan-impure */
     private static function import_done($marker) { return get_option($marker) === '1'; }
+    /**
+     * Whether a marker is set, read from the options table itself. After a
+     * request that raced another to set it, the options cache can still say
+     * "absent" (update_option() falls through to add_option(), which finds
+     * the row already there and refreshes nothing), so a cached read would
+     * fail a request whose work is in fact done.
+     */
+    private static function marker_stored($marker) {
+        global $wpdb;
+        $stored = $wpdb->get_var($wpdb->prepare("SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s", $marker));
+        if ($stored !== '1') { return false; }
+        wp_cache_delete($marker, 'options');
+        $notoptions = wp_cache_get('notoptions', 'options');
+        if (is_array($notoptions) && isset($notoptions[$marker])) {
+            unset($notoptions[$marker]);
+            wp_cache_set('notoptions', $notoptions, 'options');
+        }
+        return true;
+    }
     public static function prepare($coin, $address) {
         self::init();
         global $wpdb;
@@ -118,7 +137,7 @@ class NMMPRO_Consumed_Repo {
             foreach ($hashes as $hash) { if ($hash !== '') { self::write($coin, $address, $hash, $row['order_id']); } }
         }
         NMMPRO_Compat::update_option($marker, '1', false);
-        if (!self::import_done($marker)) { throw new RuntimeException('Unable to finish history import'); }
+        if (!self::marker_stored($marker)) { throw new RuntimeException('Unable to finish history import'); }
     }
     public static function contains($coin, $address, $hash) {
         self::prepare($coin, $address);

@@ -933,6 +933,28 @@ $h = get_option('nmmpro_autopay_scan_horizon_next', array());
 sok('a wrap by the node: the next sweep inherits its horizon', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evHorizon, 'next=' . wp_json_encode($h));
 sok('  and the completed sweep is stamped at the horizon',     $evCov() === $evHorizon, 'cov=' . var_export($evCov(), true));
 
+// A tick that covers the whole backlog WITHOUT wrapping (here: an empty
+// cursor and exactly a budget's worth of addresses) also starts the next
+// sweep. If the backlog then grows past the budget, the next tick wraps on
+// head rows alone - so the horizons the full tick relied on must be handed
+// on, or an address only the node vouched for is stamped at the sweep start.
+add_filter('nmmpro_autopay_scan_budget', function () { return 2; });
+$evC = '0x' . str_repeat('c', 40);
+$evReset(array($evA, $evC));
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 250;
+$evLagging = $GLOBALS['ev_tip_time'] - $evMargin;
+as_tick(3 * 3600); // a and c by the node: the page holds the whole backlog, no wrap
+$h = get_option('nmmpro_autopay_scan_horizon_next', null);
+sok('a full tick that does not wrap hands its horizon to the next sweep', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evLagging, 'next=' . wp_json_encode($h));
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDTPOL','unpaid',%d,%d,'1.00000000',0)", $evB, time(), 790099));
+$GLOBALS['ev_mode'] = 'blockscout';
+$GLOBALS['ev_tip_time'] = time() - 3;
+as_tick(3 * 3600); // wraps on head rows a and b only; c was last seen through the node
+sok('  so the next wrap on head rows alone stamps no later than it', $evCov() !== null && $evCov() <= $evLagging, 'cov=' . var_export($evCov(), true) . ' want<=' . $evLagging);
+remove_all_filters('nmmpro_autopay_scan_budget');
+add_filter('nmmpro_autopay_scan_budget', function () { return 1; }); // as the checks below expect
+
 // An unreadable builder bounds nothing: a later node visit must not
 // overwrite it, and at the wrap the coin loses its stamp (no expiry) rather
 // than keep one the sweep cannot vouch for.

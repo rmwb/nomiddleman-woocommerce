@@ -76,8 +76,12 @@ class NMMPRO_Evm_Transfers {
 	// JSON-RPC calls one fetch may make against one node: the tip, its
 	// header (read again at the end), up to two index-proof queries and a
 	// header, up to COVERAGE_TRIES start headers, the log chunks, and two
-	// reads of the header of each block that holds a transfer.
-	const MAX_REQUESTS = 50;
+	// reads of the header of each block that holds a transfer. Sized so the
+	// row cap, not the call count, is what limits a busy address (MAX_ROWS
+	// transfers each in its own block over a few hours is about 215 calls),
+	// and so a lookback of several days fits on a small-span node (five
+	// days on Base is about 55). MAX_FETCH_SEC bounds the time either way.
+	const MAX_REQUESTS = 250;
 
 	// Read this much further back than asked, so clock differences between
 	// this server and the chain cannot leave a gap at the old end.
@@ -409,9 +413,9 @@ class NMMPRO_Evm_Transfers {
 			|| !is_array($topics) || count($topics) !== 3
 			|| !is_string($topics[0]) || strtolower($topics[0]) !== self::TRANSFER_TOPIC
 			|| !is_string($topics[2]) || strtolower($topics[2]) !== $paddedTo
-			|| !is_string($log['data']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['data'])
+			|| !is_string($log['data']) || !preg_match('/^0x[0-9a-fA-F]{64}$/D', $log['data'])
 			|| !self::is_hash($log['transactionHash'])
-			|| !is_string($log['blockHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['blockHash'])
+			|| !is_string($log['blockHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/D', $log['blockHash'])
 			|| !self::is_quantity($log['blockNumber']) || !self::is_quantity($log['logIndex'])) {
 			return false;
 		}
@@ -441,7 +445,7 @@ class NMMPRO_Evm_Transfers {
 
 		if (!is_array($header) || !isset($header['timestamp'], $header['number'], $header['hash'])
 			|| !self::is_quantity($header['timestamp']) || !self::is_quantity($header['number'])
-			|| !is_string($header['hash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $header['hash'])
+			|| !is_string($header['hash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/D', $header['hash'])
 			|| self::to_int($header['number']) !== (int) $block) {
 			return null;
 		}
@@ -515,7 +519,7 @@ class NMMPRO_Evm_Transfers {
 					|| !is_array($log['topics']) || !isset($log['topics'][0]) || !is_string($log['topics'][0])
 					|| strtolower($log['topics'][0]) !== self::TRANSFER_TOPIC
 					|| !self::is_quantity($log['blockNumber'])
-					|| !is_string($log['blockHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $log['blockHash'])) {
+					|| !is_string($log['blockHash']) || !preg_match('/^0x[0-9a-fA-F]{64}$/D', $log['blockHash'])) {
 					continue;
 				}
 				$block = self::to_int($log['blockNumber']);
@@ -556,17 +560,17 @@ class NMMPRO_Evm_Transfers {
 	// A transaction hash in the form Blockscout serves: 0x and 64 lower-case
 	// hex digits. The consumed-transaction ledger keys on the exact string.
 	private static function is_hash($value) {
-		return is_string($value) && preg_match('/^0x[0-9a-f]{64}$/', $value) === 1;
+		return is_string($value) && preg_match('/^0x[0-9a-f]{64}$/D', $value) === 1;
 	}
 
 	private static function is_address($value) {
-		return is_string($value) && preg_match('/^0x[0-9a-f]{40}$/', $value) === 1;
+		return is_string($value) && preg_match('/^0x[0-9a-f]{40}$/D', $value) === 1;
 	}
 
 	// A JSON-RPC quantity small enough to be a PHP integer (block numbers,
 	// timestamps, log indexes): 0x followed by 1-15 hex digits.
 	private static function is_quantity($value) {
-		return is_string($value) && preg_match('/^0x[0-9a-fA-F]{1,15}$/', $value) === 1;
+		return is_string($value) && preg_match('/^0x[0-9a-fA-F]{1,15}$/D', $value) === 1;
 	}
 
 	private static function to_int($quantity) {
