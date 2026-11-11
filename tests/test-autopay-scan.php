@@ -1027,8 +1027,10 @@ $GLOBALS['ev_mode'] = 'node';
 as_tick(3 * 3600); // b, by the node
 as_tick(3 * 3600); // wraps: a, by the node
 $h = get_option('nmmpro_autopay_scan_horizon_next', array());
-sok('a wrap by the node: the next sweep inherits its horizon', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evHorizon, 'next=' . wp_json_encode($h));
-sok('  and the completed sweep is stamped at the horizon',     $evCov() === $evHorizon, 'cov=' . var_export($evCov(), true));
+// The tip time was reset above, maybe in a later second than $evHorizon's.
+$evNow = $GLOBALS['ev_tip_time'] - $evMargin;
+sok('a wrap by the node: the next sweep inherits its horizon', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evNow, 'next=' . wp_json_encode($h) . ' want=' . $evNow);
+sok('  and the completed sweep is stamped at the horizon',     $evCov() === $evNow, 'cov=' . var_export($evCov(), true) . ' want=' . $evNow);
 
 // A tick that covers the whole backlog WITHOUT wrapping (here: an empty
 // cursor and exactly a budget's worth of addresses) also starts the next
