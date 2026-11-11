@@ -2,14 +2,14 @@
 # This file is distributed under the GNU General Public License v3.0.
 msgid ""
 msgstr ""
-"Project-Id-Version: Nomiddleman Bitcoin and Crypto Payments for WooCommerce 2.13.0\n"
+"Project-Id-Version: Nomiddleman Bitcoin and Crypto Payments for WooCommerce 2.14.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/nomiddleman-crypto-payments-for-woocommerce\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-30T12:11:08+00:00\n"
+"POT-Creation-Date: 2026-11-11T10:59:21+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: nomiddleman-crypto-payments-for-woocommerce\n"
@@ -39,54 +39,54 @@ msgstr ""
 msgid "https://github.com/rmwb/nomiddleman-woocommerce"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1067
+#: nomiddleman-crypto-woocommerce.php:1068
 msgid "Nomiddleman Privacy Mode math extension"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1071
+#: nomiddleman-crypto-woocommerce.php:1072
 msgid "Nomiddleman database tables"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1084
+#: nomiddleman-crypto-woocommerce.php:1085
 msgid "The Nomiddleman database tables are present"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1087
-#: nomiddleman-crypto-woocommerce.php:1129
+#: nomiddleman-crypto-woocommerce.php:1088
+#: nomiddleman-crypto-woocommerce.php:1130
 msgid "Nomiddleman Crypto"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1090
+#: nomiddleman-crypto-woocommerce.php:1091
 msgid "All database tables the plugin needs for this site exist, so address assignment and payment tracking can work."
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1114
+#: nomiddleman-crypto-woocommerce.php:1115
 msgid "Nomiddleman database tables are missing for this site"
 msgstr ""
 
 #. translators: %s: comma-separated list of missing database table names
-#: nomiddleman-crypto-woocommerce.php:1117
+#: nomiddleman-crypto-woocommerce.php:1118
 #, php-format
 msgid "The following plugin tables do not exist for this site: %s. Checkout with the crypto gateway will fail until they are created. This usually means the site was created after the plugin was network activated on an older plugin version. Deactivating and reactivating the plugin recreates them; the plugin also attempts an automatic repair on admin page loads."
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1126
+#: nomiddleman-crypto-woocommerce.php:1127
 msgid "The PHP extension for Privacy Mode is available"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1132
+#: nomiddleman-crypto-woocommerce.php:1133
 msgid "The gmp or bcmath PHP extension is enabled, so Privacy Mode (HD wallet) address generation will work."
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1153
+#: nomiddleman-crypto-woocommerce.php:1154
 msgid "Privacy Mode is enabled but its PHP extension is missing"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1154
+#: nomiddleman-crypto-woocommerce.php:1155
 msgid "Privacy Mode needs the gmp or bcmath PHP extension"
 msgstr ""
 
-#: nomiddleman-crypto-woocommerce.php:1155
+#: nomiddleman-crypto-woocommerce.php:1156
 msgid "Nomiddleman Privacy Mode generates a fresh HD wallet address for each order using elliptic-curve math that PHP cannot do on its own. Neither the gmp nor the bcmath PHP extension is enabled, so Privacy Mode address generation will fail with a misleading \"check your MPK\" error. Ask your host to enable the gmp extension (preferred) or bcmath, then retry. Coins set to Classic or Autopay Mode are unaffected."
 msgstr ""
 
@@ -428,35 +428,35 @@ msgstr ""
 msgid "Order Cancellation Timer (hr)"
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2133
+#: src/NMMPRO_Blockchain.php:2235
 msgid "Solana RPC URL is empty."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2144
+#: src/NMMPRO_Blockchain.php:2246
 msgid "Solana RPC URL must use http or https."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2148
+#: src/NMMPRO_Blockchain.php:2250
 msgid "Solana RPC URL is malformed."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2156
+#: src/NMMPRO_Blockchain.php:2258
 msgid "Solana RPC URL must not embed a username or password. Providers take the API key in the path or query string instead."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2162
+#: src/NMMPRO_Blockchain.php:2264
 msgid "Solana RPC URL could not be vetted (the shared SSRF guard is unavailable), so the request was refused."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2186
+#: src/NMMPRO_Blockchain.php:2288
 msgid "Solana RPC URL resolves to a private, loopback, link-local or unresolvable address, which is not permitted."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2199
+#: src/NMMPRO_Blockchain.php:2301
 msgid "Solana RPC URL points at a private, loopback or link-local address - or at a host that does not resolve - which is not permitted. Define NMMPRO_SOL_ALLOW_PRIVATE_RPC (or use the nmmpro_sol_allow_private_rpc filter) to allow a validator on this machine or LAN."
 msgstr ""
 
-#: src/NMMPRO_Blockchain.php:2314
+#: src/NMMPRO_Blockchain.php:2416
 msgid "Solana RPC endpoint cannot be safely reached on this host."
 msgstr ""
 
@@ -1151,7 +1151,7 @@ msgstr ""
 
 #. translators: 1: cryptocurrency ticker, 2: number of hours
 #: src/NMMPRO_Hd_Verifier.php:744
-#: src/NMMPRO_Payment.php:2020
+#: src/NMMPRO_Payment.php:2154
 #, php-format
 msgid "Your %1$s order was <strong>cancelled</strong> because you were unable to pay for %2$s hour(s). Please do not send any funds to the payment address."
 msgstr ""
@@ -1234,30 +1234,30 @@ msgid "Could not create a Monero payment address. Please try again or contact th
 msgstr ""
 
 #: src/NMMPRO_Payment.php:220
-#: src/NMMPRO_Payment.php:1248
-#: src/NMMPRO_Payment.php:1590
+#: src/NMMPRO_Payment.php:1382
+#: src/NMMPRO_Payment.php:1724
 msgid "A verified cryptocurrency payment requires manual reconciliation."
 msgstr ""
 
 #. translators: 1: cryptocurrency ticker, 2: transaction hash
-#: src/NMMPRO_Payment.php:1157
+#: src/NMMPRO_Payment.php:1291
 #, php-format
 msgid "This order has a matching %1$s transaction but we cannot verify it due to other orders with similar payment totals. Please reconcile manually. Transaction Hash: %2$s"
 msgstr ""
 
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: date/time, 4: transaction hash
-#: src/NMMPRO_Payment.php:1240
+#: src/NMMPRO_Payment.php:1374
 #, php-format
 msgid "Order payment of %1$s %2$s verified at %3$s. Transaction Hash: %4$s"
 msgstr ""
 
 #. translators: 1: amount, 2: cryptocurrency ticker, 3: number of transactions, 4: date/time, 5: transaction hashes
-#: src/NMMPRO_Payment.php:1581
+#: src/NMMPRO_Payment.php:1715
 #, php-format
 msgid "Order payment of %1$s %2$s verified across %3$d transactions at %4$s. Transaction Hashes: %5$s"
 msgstr ""
 
-#: src/NMMPRO_Payment.php:1724
+#: src/NMMPRO_Payment.php:1858
 msgid "Could not reach external service to do auto payment processing."
 msgstr ""
 
