@@ -5,7 +5,7 @@ Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
 License: GPL v3
-Stable Tag: 2.13.0
+Stable Tag: 2.14.0
 
 Absolutely the easiest setup in the industry. No registration. No API keys. No middleman. Accept bitcoin, ethereum, litecoin, and more.
 
