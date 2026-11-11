@@ -563,6 +563,12 @@ ok('a malformed address is refused before any request', NMMPRO_Evm_Transfers::fe
 // be a second spelling of the same transaction in the ledger.
 et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('transactionHash' => et_hash(999990000) . "\n")))));
 ok('a transaction hash with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
+// A value carrying one would be read by hex_to_decimal() as one more digit:
+// 1,000,000 credited as 16,000,000.
+et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('data' => '0x' . str_pad('0f4240', 64, '0', STR_PAD_LEFT) . "\n")))));
+ok('a value with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
+// Not a discriminating check: the log's block hash must also equal the
+// header's, which a validated header hash never carries a newline to match.
 et_reset(array('logs' => array(et_log(999990, '0f4240', 0, array('blockHash' => et_block_hash(999990) . "\n")))));
 ok('a block hash with a trailing newline: the fetch fails', et_fetch()['result'] === 'error');
 

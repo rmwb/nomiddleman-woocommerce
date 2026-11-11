@@ -57,6 +57,23 @@ try {
 } catch (Throwable $e) {
     $check('a request that lost the race to set the folding marker carries on (' . $e->getMessage() . ')', false);
 }
+$check('  and then reads the marker as set', get_option(NMMPRO_Consumed_Repo::CASE_MIGRATION) === '1');
+
+// The same race on an address's history-import marker.
+$raceAddress = 'consumed-history-race';
+$importMarker = 'nmmpro_history_import_' . hash('sha256', $coin . '|' . $raceAddress);
+NMMPRO_Consumed_Repo::add($coin, $raceAddress, 'race_tx' . str_repeat('r', 32));
+delete_option($importMarker);
+get_option($importMarker); // caches "absent" in this request
+// As stored by update_option($marker, '1', false), so this request's write changes no row.
+$wpdb->query($wpdb->prepare("INSERT INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, '1', %s)", $importMarker, function_exists('wp_autoload_values_to_autoload') ? 'off' : 'no'));
+try {
+    $found = NMMPRO_Consumed_Repo::contains($coin, $raceAddress, 'race_tx' . str_repeat('r', 32));
+    $check('a request that lost the race to set an import marker carries on', $found === true);
+} catch (Throwable $e) {
+    $check('a request that lost the race to set an import marker carries on (' . $e->getMessage() . ')', false);
+}
+$check('  and then reads the marker as set', get_option($importMarker) === '1');
 
 echo $ok ? "CONSUMED-HISTORY CHECKS PASSED\n" : "CONSUMED-HISTORY CHECKS FAILED\n";
 exit($ok ? 0 : 1);
