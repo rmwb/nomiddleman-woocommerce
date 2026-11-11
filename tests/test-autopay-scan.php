@@ -943,6 +943,15 @@ as_tick(3 * 3600); // a, by the node: not a wrap
 $h = get_option('nmmpro_autopay_scan_horizon_next', null);
 sok('a stored horizon that is not a timestamp is not replaced by a node\'s', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === '99999999999', 'next=' . wp_json_encode($h));
 $evReset(array($evA, $evB));
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => null), false);
+as_tick(3 * 3600); // a, by the node: not a wrap
+$h = get_option('nmmpro_autopay_scan_horizon_next', null);
+sok('  nor a stored null (unknown, not absent)',           is_array($h) && array_key_exists('USDTPOL', $h) && $h['USDTPOL'] === null, 'next=' . wp_json_encode($h));
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => 1000), false);
+as_tick(3 * 3600); // b, by the node
+as_tick(3 * 3600); // a again: the wrap
+sok('  and at the wrap that coin is left unstamped',       $evCov() === null, 'cov=' . var_export($evCov(), true));
+$evReset(array($evA, $evB));
 update_option('nmmpro_autopay_scan_horizon_next', 'garbage', false);
 as_tick(3 * 3600);
 sok('  nor a builder that is not a list',                  get_option('nmmpro_autopay_scan_horizon_next', null) === 'garbage');

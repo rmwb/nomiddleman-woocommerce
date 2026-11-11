@@ -658,7 +658,9 @@ class NMMPRO_Payment {
 			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
 			if (is_array($horizons)) {
 				foreach ($horizonByCrypto as $horizonCryptoId => $until) {
-					if (!isset($horizons[$horizonCryptoId])
+					// array_key_exists, not isset: a stored null is "unknown"
+					// too, and must not read as "nothing stored yet".
+					if (!array_key_exists($horizonCryptoId, $horizons)
 						|| (is_int($horizons[$horizonCryptoId]) && $until < $horizons[$horizonCryptoId])) {
 						$horizons[$horizonCryptoId] = $until;
 					}
