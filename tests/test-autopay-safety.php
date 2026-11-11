@@ -1311,10 +1311,26 @@ asok('  its lease is left for recovery', as_row($o52) === 'cancelling' && as_sto
 $recoverCancel();
 asok('  which settles it cancelled', as_row($o52) === 'cancelled', 'row=' . as_row($o52));
 
+// --- 36. a claim made before the case fold has run -------------------------------
+// The ledger holds a mixed-case identity from an earlier release, owned by
+// another order, and this request has not folded it yet. A claim of the same
+// transaction in lower case must still be refused: claiming folds first.
+list($o53, $a53) = $make('_fold_claim', 'on-hold', time());
+$foldHash = '0x' . str_repeat('Ef', 32);
+$ledger = NMMPRO_Consumed_Repo::table();
+$wpdb->query($wpdb->prepare("INSERT INTO `$ledger` (identity,transaction_hash,address,coin,order_id,created_at) VALUES (%s,%s,%s,'ETH',4242,1)", hash('sha256', json_encode(array('ETH', $a53, $foldHash))), $foldHash, $a53));
+delete_option(NMMPRO_Consumed_Repo::CASE_MIGRATION);
+$foldReady = new ReflectionProperty('NMMPRO_Consumed_Repo', 'ready');
+$foldReady->setAccessible(true);
+$foldReady->setValue(null, array());
+$claim53 = NMMPRO_Consumed_Repo::claim($repo, 'ETH', $a53, $o53, '1', array(strtolower($foldHash)));
+asok('a claim before the case fold has run is still refused', $claim53 === NMMPRO_Payment_Repo::CLAIM_DB_ERROR && as_row($o53) === 'unpaid', 'got ' . var_export($claim53, true) . ' row=' . as_row($o53));
+$wpdb->query($wpdb->prepare("DELETE FROM `$ledger` WHERE address=%s", $a53));
+
 // --- restore -------------------------------------------------------------------
 if ($savedCovered === null) { delete_option('nmmpro_autopay_scan_covered_at'); } else { update_option('nmmpro_autopay_scan_covered_at', $savedCovered, false); }
 if ($savedActive === null) { delete_option('nmmpro_autopay_scan_incomplete'); } else { update_option('nmmpro_autopay_scan_incomplete', $savedActive, false); }
-foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47, $o48, $o49, $o50, $o51, $o52) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
+foreach (array($o1, $o1ctl, $o2, $o3, $o3b, $o3c, $o3d, $o4, $o5, $o6, $o7, $o8, $o9a, $o9b, $o10, $o10ctl, $o11, $o12, $o13, $o14, $o15, $o16, $o17, $o18, $o19, $o19ctl, $o20, $o21, $o22, $o23, $o24, $o25, $o26, $o27, $o28, $o29, $o29c, $o30, $o31, $o32, $o33, $o36, $o37, $o38, $o39, $o40, $o41, $o42, $o43, $o44, $o45, $o46, $o47, $o48, $o49, $o50, $o51, $o52, $o53) as $id) { $wpdb->query($wpdb->prepare("DELETE FROM `$pt` WHERE order_id=%d", $id)); }
 delete_option('nmmpro_autopay_scan_cursor_unfenced');
 delete_option('nmmpro_autopay_scan_retry_unfenced');
 foreach (array('ETH|' . $a1, 'ETH|' . $a9a, 'ETH|' . $a9b, 'ETH|' . $a10, 'XMR|' . $a11) as $deferKey) { delete_option('nmmpro_defer_' . md5($deferKey)); }

@@ -142,7 +142,7 @@ Used to convert your store's prices into cryptocurrency. Only a coin ticker or a
 
 = Payment verification services =
 
-Contacted only in Autopay and Privacy Mode, and only for the coins you enable. Each request carries the order's public payment address, and for confirmation checks the public transaction identifiers seen at that address.
+Contacted only in Autopay and Privacy Mode, and only for the coins you enable. Each request carries the order's public payment address, and for confirmation checks the public transaction identifiers seen at that address. Requests to a JSON-RPC node (below) also carry the token's public contract address and block numbers.
 
 * mempool.space - Bitcoin (Autopay and Privacy Mode). Terms: https://mempool.space/terms-of-service - Privacy: https://mempool.space/privacy-policy
 * Blockstream (blockstream.info) - Bitcoin, as a fallback in Privacy Mode. Terms: https://blockstream.com/terms - Privacy: https://blockstream.com/privacy
@@ -150,6 +150,9 @@ Contacted only in Autopay and Privacy Mode, and only for the coins you enable. E
 * Litecoin Space (litecoinspace.org) - Litecoin. The Litecoin Foundation confirmed that it maintains the service, permits commercial use subject to avoiding abuse, and retains nginx logs for one week with no further logs/data retained. It supplied no numerical request limit. These statements were provided directly to the maintainer; public terms and privacy policy URLs are still being requested. A donation was suggested, not required.
 * BlockCypher (api.blockcypher.com) - Dogecoin and Dash in Privacy Mode, Dogecoin and Litecoin in Autopay, and Litecoin as a Privacy Mode fallback. If you configure a BlockCypher API token, it is sent with these requests. Without a token BlockCypher allows about 100 requests an hour; stores using Privacy Mode for Dogecoin or Dash should configure one. Terms: https://www.blockcypher.com/terms-of-service.html - Privacy: https://www.blockcypher.com/privacy-policy.html
 * Blockscout (eth.blockscout.com, polygon.blockscout.com, arbitrum.blockscout.com, base.blockscout.com, blockscout.com) - Ethereum, Ethereum Classic, ERC-20 tokens and the multi-network stablecoins. Terms: https://eaas.blockscout.com/terms-and-conditions - Privacy: https://eaas.blockscout.com/privacy-notice
+* Public JSON-RPC nodes - used only when Blockscout cannot answer, to read the ERC-20 token transfers (the ERC-20 tokens on Ethereum, and the Polygon, Arbitrum and Base stablecoins) sent to an order's payment address in Autopay. The terms and privacy pages below were checked in a browser on 1 October 2026.
+* PublicNode (ethereum-rpc.publicnode.com, polygon-bor-rpc.publicnode.com, base-rpc.publicnode.com), operated by Allnodes Inc. - Ethereum, Polygon and Base. Terms: https://www.publicnode.com/terms - Privacy: https://www.publicnode.com/privacy - the privacy policy states that when PublicNode is used as an RPC provider, IP addresses and other data are not stored for more than 24 hours.
+* Arbitrum public RPC (arb1.arbitrum.io), operated by Offchain Labs, Inc. - Arbitrum. Terms: https://arbitrum.io/tos - Privacy: https://arbitrum.io/privacy - these cover Offchain Labs' sites and services; neither names the public RPC endpoint specifically.
 * WhatsOnChain (api.whatsonchain.com) - Bitcoin SV. Terms: https://whatsonchain.com/terms - Privacy: https://whatsonchain.com/privacy
 * Dash Insight (insight.dash.org) - Dash in Autopay. Terms: https://www.dash.org/terms-of-use/ - Privacy: https://www.dash.org/privacy/
 * XRPSCAN (api.xrpscan.com) - XRP. Terms: https://xrpscan.com/tos - Privacy: https://xrpscan.com/privacy
@@ -184,7 +187,7 @@ This almost always means the server is missing the PHP math extension Privacy Mo
 
 = Can I run payment verification against my own node instead of a public explorer? =
 
-Yes. The `nmm_api_url` filter lets you redirect any verification request to your own self-hosted instance (for example your own mempool, Blockscout, or Insight server), as long as it runs the same software the plugin expects. See the developer hooks documentation for examples: https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
+Yes. The `nmm_api_url` filter lets you redirect any verification request to your own self-hosted instance (for example your own mempool, Blockscout, or Insight server), as long as it runs the same software the plugin expects. For ERC-20 tokens you can also choose the JSON-RPC nodes used when Blockscout cannot answer, with the `nmmpro_evm_rpc_nodes` filter. See the developer hooks documentation for examples: https://github.com/rmwb/nomiddleman-woocommerce/blob/master/docs/HOOKS.md
 
 Note that this filter currently covers blockchain verification requests only, not exchange-rate lookups.
 
@@ -205,6 +208,12 @@ Yes. Privacy Mode derives a fresh address for every order from your master publi
 Earlier versions judged a Privacy Mode payment by the total an address had ever received, so funds sent to an address before an order existed could mark the order paid. This version credits only transactions confirmed after the address was issued to that order. Orders that were awaiting payment when you updated have no such record, so they are held for you instead of being completed or cancelled automatically: check each address on a block explorer, confirm which transactions belong to the order, then complete or cancel it. Each order shows a Privacy Mode panel with its address and state. Addresses the plugin had prepared but not yet used are retired, and new ones are derived. Privacy Mode is no longer available for Qtum and Bitcore, whose only data sources report lifetime totals; Classic Mode still works for them.
 
 == Changelog ==
+
+= 2.14.0 =
+* Autopay: when Blockscout cannot answer, ERC-20 token payments (the tokens on Ethereum, and the Polygon, Arbitrum and Base stablecoins) are read from public JSON-RPC nodes instead, so they are still matched. The nodes are listed under External Services; the `nmmpro_evm_rpc_nodes` filter changes them
+* Autopay: an order last checked through a node is cancelled at most about eleven minutes later than through Blockscout, never earlier. A node that cannot show it is up to date never lets an order expire
+* Autopay: a transaction hash is recognised in upper or lower case, so a payment seen through both sources cannot be credited twice. Existing records are updated once on upgrade
+* Autopay: an address that could not be fully verified stays protected from expiry until a later check verifies it, including when new orders arrive between checks
 
 = 2.13.0 =
 * New read-only Status screen (Nomiddleman Crypto Payments > Status): each enabled coin's mode, configuration and verifiability; unpaid orders per coin, including coins you have switched off; background-job health; and recent warnings. It changes nothing and contacts no outside service
@@ -345,99 +354,4 @@ Upgrade notes: stricter address validation may reject a previously accepted addr
 * New coins: Tether on Ethereum (USDT), Tether on Tron (TRC-20 USDT, the most-used crypto payment rail), and Solana (SOL) - all with Autopay verification via keyless public APIs (Blockscout, Tronscan, Solana mainnet RPC). SOL checkout QR codes use the Solana Pay URI scheme
 * Fixed ERC-20 payment verification for busy addresses: token transfers are now fetched newest-first (previously oldest-first, which could miss recent payments entirely)
 
-= 2.6.0 =
-* QR codes are now rendered in memory: inline SVG on the thank-you page, and embedded directly inside emails as inline (CID) attachments. No QR file is ever written to disk, and the third-party qrserver.com fallback is gone
-* Fixes a privacy issue: previous versions wrote one world-readable QR image per order (payment address and amount, guessable filename) into the plugin folder and never deleted them; existing files are swept automatically on upgrade
-* Plain-text order emails now contain proper plain-text payment details instead of raw HTML
-* Settings page no longer offers Autopay/Privacy Mode for coins whose verification APIs no longer exist anywhere (LSK, XEM, ONION, XMY autopay; XMY privacy; BTX autopay), and warns loudly if a previously saved mode can no longer verify payments
-* Payment checks now run through Action Scheduler (bundled with WooCommerce) every 60 seconds instead of a 30-second WP-Cron loop, with automatic migration and WP-Cron fallback
-* Explorer API calls now use per-host exponential backoff when rate-limited or failing, and respect per-host request spacing (chainz)
-* New optional BlockCypher API token setting raises LTC/DOGE verification rate limits for busier stores
-* Security hardening: all plugin database queries now use $wpdb->prepare(); the MPK preview AJAX endpoint requires a nonce and admin capability; stored address buffers are unserialized with object instantiation disabled; customer-facing output (payment message, addresses, QR URLs) is escaped
-* EOS payment verification restored: dead EOSPark API (and its hardcoded key) replaced with the public Hyperion history API, with Greymass as fallback
-* Restored payment verification for 6 more coins whose explorers had shut down: ADA (Koios), BSV (WhatsOnChain), DGB (digiexplorer.info), XTZ (TzKT), ZEC (Blockchair), BLK (explorer.blackcoin.nl)
-* BTX Privacy Mode balance checks restored via chainz.cryptoid.info; BTX Autopay remains unavailable (no free transaction API)
-* LSK, XEM, ONION, and XMY verification remains unavailable: their chains or last public explorers no longer exist
-* Removed the bundled Redux Framework (outdated, known CVEs, PHP 8 first-load errors)
-* Settings page rebuilt with native WordPress admin UI at the same location; existing settings are preserved automatically (same option storage, no migration needed)
-* Privacy Mode sample address generation, wallet address validation, and all per-crypto options carried over
-* Import/export and reset buttons from the old Redux panel are no longer available
-
-= 2.5.0 =
-* PHP 8 compatibility (fixed fatal parse error on modern PHP)
-* Declared WooCommerce High-Performance Order Storage (HPOS) compatibility; order metadata now uses the WooCommerce CRUD API
-* Added WooCommerce Blocks (block-based) checkout support
-* Replaced dead exchange-rate services: CoinGecko replaces CryptoCompare, Frankfurter/open.er-api replace currconv and fixer.io (removed embedded API keys)
-* Updated Poloniex pricing to the current api.poloniex.com endpoint
-* Replaced defunct blockchain explorers for payment verification: mempool.space and blockstream.info (BTC), litecoinspace.org (LTC), BlockCypher (DOGE), Blockscout (ETH and ERC-20 tokens), XRPSCAN (XRP), blockchain.info haskoin store (BCH), insight.dash.org (DASH)
-
-= 2.4.8 =
-* Fixed settings bug
-
-= 2.4.4 =
-* Order status now correctly synced when updated manually
-* Updated Privacy Mode warning for address generation to be more detailed and visible
-
-= 2.4.3 =
-* Added fallback fiat conversion
-
-= 2.4.2 =
-* Added Groestlcoin (GRS)
-* Added local QR code, fall back to third party
-
-= 2.4.1 =
-* Autopay beta mode - please read details in plugin settings
-* Added Bitcore (BTX)
-* Updated DCR Service
-
-= 2.4.0 =
-* Can now customize text on customer payment page
-* Added MyriadCoin (XMY)
-* Added Yoroi ADA address validation
-
-= 2.3.7 =
-* Updated customer cancellation message to be in hours and added order cryptoId
-
-= 2.3.6 =
-* Removed settings from top admin bar
-
-= 2.3.5 =
-* Added markup/markdown settings for each crypto
-
-= 2.3.4 =
-* Gateway will always show up in WooCommerce settings even if no valid cryptos exists
-
-= 2.3.3 =
-* Added setting to change the Checkout Payment Gateway Label
-* Changed underpayment display in customer email
-
-= 2.3.2 =
-* Updated to Wordpress 5.2
-
-= 2.3.1 =
-* Fiat exchange rate upgrades
-
-= 2.3.0 =
-* Added first three generated HD Addresses to settings page via AJAX
-* MPK Validation is more strict
-
-= 2.2.1 =
-* Improved the way we handle enabling/disabling of WooCommerce gateway
-
-= 2.2.0 =
-* Added Privacy Mode support for DASH
-
-= 2.1.0 =
-* Added Privacy Mode support for DOGE
-
-= 2.0.3 =
-* Improved selection of address and crypto amount on customer thank-you page
-
-= 2.0.2 =
-* Update filepaths to canonical form
-
-= 2.0.1 =
-* Updated readme and removed banner
-
-= 2.0.0 =
-* Initial Plugin Upload
+Older entries (2.6.0 and earlier) are in changelog.txt in the plugin folder.

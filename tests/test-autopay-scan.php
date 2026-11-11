@@ -25,6 +25,7 @@ delete_option('nmmpro_autopay_scan_sweep_start');
 delete_option('nmmpro_autopay_scan_dirty');
 delete_option('nmmpro_autopay_scan_incomplete');
 delete_option('nmmpro_autopay_scan_incomplete_next');
+delete_option('nmmpro_autopay_scan_horizon_next');
 
 $GLOBALS['as_ok'] = true;
 function sok($label, $cond, $extra = '') { printf("%-56s %s%s\n", $label, $cond ? 'ok' : 'FAIL', $extra !== '' ? "  $extra" : ''); if (!$cond) { $GLOBALS['as_ok'] = false; } }
@@ -808,6 +809,100 @@ as_tick(3 * 3600); // wraps to xmrp_00,01,02
 sok('window 0 disables the lane',                count($GLOBALS['as_checked']) === 3 && !in_array('xmrp_09', $GLOBALS['as_checked'], true), 'checked=' . implode(',', $GLOBALS['as_checked']));
 remove_all_filters('nmmpro_autopay_priority_window');
 
+// --- wrap tick: its head rows belong to the NEXT sweep too ------------------
+// A wrap tick's page is the tail of the ending sweep plus head rows that open
+// the next one, and the next sweep's start is stamped at this tick - so the
+// next sweep counts those head rows as visited. Their incompleteness must be
+// carried into the next sweep's builder, not only the ending sweep's: the next
+// wrap's head page can be SHORTER (take minus a different tail count), and
+// then a head row whose only visit in that sweep was a truncated page would
+// lose its exclusion while its coin is stamped with that sweep's start.
+// Rows (budget 3): btcwrap_a0, btcwrap_a1, btcwrap_h, xmrwrap_0..2. The full
+// in-window BTC page is served for btcwrap_h only; the others get short pages.
+$GLOBALS['bwr_full'] = true;
+$btcMockWrap = function ($pre, $args, $url) use ($btrPage) {
+	if (strpos($url, 'mempool.space/api/blocks/tip/height') !== false) {
+		return array('response' => array('code' => 200), 'body' => '105', 'headers' => array(), 'cookies' => array());
+	}
+	if (strpos($url, 'mempool.space/api/address/') !== false) {
+		$txs = (strpos($url, 'btcwrap_h') !== false && $GLOBALS['bwr_full']) ? $btrPage(25, 1800) : $btrPage(3, 1800);
+		return array('response' => array('code' => 200), 'body' => json_encode($txs), 'headers' => array(), 'cookies' => array());
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $btcMockWrap, 10, 3);
+add_filter('nmmpro_autopay_priority_window', '__return_zero'); // the lane would revisit rows every tick
+add_filter('nmmpro_xmr_account_transactions', function () { return array('result' => 'success', 'by_address' => array()); });
+remove_all_filters('nmmpro_autopay_scan_budget');
+add_filter('nmmpro_autopay_scan_budget', function () { return 3; });
+
+$bwrReset = function () use ($wpdb, $pt) {
+	$wpdb->query("DELETE FROM `$pt`");
+	foreach (array('cursor', 'retry', 'covered_at', 'sweep_start', 'dirty', 'incomplete', 'incomplete_next') as $opt) {
+		delete_option('nmmpro_autopay_scan_' . $opt);
+	}
+	foreach (array('btcwrap_a0', 'btcwrap_a1', 'btcwrap_h') as $i => $addr) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'BTC','unpaid',%d,%d,'0.00100000',0)", $addr, time() - 2 * HOUR_IN_SECONDS, 790000 + $i));
+	}
+	for ($i = 0; $i < 3; $i++) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrwrap_%d', $i), time() - 2 * HOUR_IN_SECONDS, 790100 + $i));
+	}
+};
+$bwrGrow = function () use ($wpdb, $pt) { // backlog grows by two rows after the first wrap
+	for ($i = 3; $i < 5; $i++) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'XMR','unpaid',%d,%d,'0.00100000',0)", sprintf('xmrwrap_%d', $i), time() - 2 * HOUR_IN_SECONDS, 790100 + $i));
+	}
+};
+
+$bwrReset();
+$GLOBALS['as_checked'] = array();
+as_tick(3 * 3600); // a0,a1,h
+as_tick(3 * 3600); // xmrwrap_0..2 (page exactly full: no wrap)
+as_tick(3 * 3600); // empty tail -> head page of THREE: a0,a1,h  (wrap W1)
+sok('wrap head: W1 head page reached btcwrap_h',   $GLOBALS['as_checked'] === array('btcwrap_a0', 'btcwrap_a1', 'btcwrap_h', 'xmrwrap_0', 'xmrwrap_1', 'xmrwrap_2', 'btcwrap_a0', 'btcwrap_a1', 'btcwrap_h'), 'checked=' . implode(',', $GLOBALS['as_checked']));
+sok('wrap head: truncated h excluded after W1',    as_excluded('BTC|btcwrap_h'), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+$bwrGrow();
+$GLOBALS['as_checked'] = array();
+as_tick(3 * 3600); // xmrwrap_0..2
+as_tick(3 * 3600); // xmrwrap_3,4 + head page of ONE: a0  (wrap W2)
+$covMapW = get_option('nmmpro_autopay_scan_covered_at', array());
+sok('wrap head: W2 head page is shorter (no h)',   !in_array('btcwrap_h', $GLOBALS['as_checked'], true) && end($GLOBALS['as_checked']) === 'btcwrap_a0', 'checked=' . implode(',', $GLOBALS['as_checked']));
+sok('wrap head: W2 stamps BTC',                    is_array($covMapW) && isset($covMapW['BTC']), 'map=' . (is_array($covMapW) ? implode(',', array_keys($covMapW)) : '(scalar)'));
+sok('wrap head: h (truncated at W1) still excluded at W2', as_excluded('BTC|btcwrap_h'), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+
+// The carried exclusion is not sticky: once a sweep visits h with a complete
+// page, the following wrap drops it.
+$GLOBALS['bwr_full'] = false;
+as_tick(3 * 3600); // a1,h,xmrwrap_0
+as_tick(3 * 3600); // xmrwrap_1..3
+as_tick(3 * 3600); // xmrwrap_4 + head a0,a1  (wrap W3)
+sok('wrap head: clean revisit drops h at W3',      !as_excluded('BTC|btcwrap_h'), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+
+// Coin-level twin: once the address builder is full (500), a further
+// incomplete address falls back to its coin's dirty marker. A coin dirtied
+// at a wrap tick must also stay dirty for the next sweep, or W2 would stamp
+// BTC although btcwrap_h's only visit in that sweep (W1) was incomplete.
+$GLOBALS['bwr_full'] = true;
+$bwrReset();
+as_tick(3 * 3600); // a0,a1,h
+as_tick(3 * 3600); // xmrwrap_0..2
+$bwrFill = array();
+for ($i = 0; $i < 500; $i++) { $bwrFill['ZZZ|fill_' . $i] = true; }
+update_option('nmmpro_autopay_scan_incomplete_next', $bwrFill, false); // builder at its cap
+as_tick(3 * 3600); // head a0,a1,h  (wrap W1): h overflows -> BTC dirty
+$covMapW = get_option('nmmpro_autopay_scan_covered_at', array());
+sok('wrap head overflow: W1 does not stamp BTC',   !(is_array($covMapW) && isset($covMapW['BTC'])), 'map=' . (is_array($covMapW) ? implode(',', array_keys($covMapW)) : '(scalar)'));
+$bwrGrow();
+$GLOBALS['bwr_full'] = false; // nothing in sweep 2 is incomplete except h's W1 visit
+as_tick(3 * 3600); // xmrwrap_0..2
+as_tick(3 * 3600); // xmrwrap_3,4 + head a0  (wrap W2)
+$covMapW = get_option('nmmpro_autopay_scan_covered_at', array());
+sok('wrap head overflow: W2 still does not stamp BTC', !(is_array($covMapW) && isset($covMapW['BTC'])), 'map=' . (is_array($covMapW) ? implode(',', array_keys($covMapW)) : '(scalar)'));
+
+remove_filter('pre_http_request', $btcMockWrap, 10);
+remove_all_filters('nmmpro_autopay_priority_window');
+foreach (array('btcwrap_a0', 'btcwrap_a1', 'btcwrap_h') as $addr) { delete_option('nmmpro_BTC_transactions_consumed_for_' . $addr); }
+
 remove_all_filters('nmmpro_xmr_account_transactions');
 remove_all_filters('nmmpro_autopay_scan_budget');
 remove_all_actions('nmmpro_autopay_address_checked');
@@ -821,5 +916,252 @@ delete_option('nmmpro_autopay_scan_sweep_start');
 delete_option('nmmpro_autopay_scan_dirty');
 delete_option('nmmpro_autopay_scan_incomplete');
 delete_option('nmmpro_autopay_scan_incomplete_next');
+
+// --- ERC-20 node answers stamp coverage only up to their horizon -----------
+// When Blockscout cannot answer, a public node's answer verifies the address
+// only up to the node's horizon (its tip time minus MAX_TIP_AHEAD_SEC and
+// HORIZON_MARGIN_SEC), and
+// only when the node shows its log index reaches that far. The coin's
+// coverage stamp must never be later than the earliest horizon the sweep
+// relied on - including one from an earlier tick of a multi-tick sweep - so
+// expiry can never act on time the node had not shown.
+$GLOBALS['ev_mode'] = 'node'; // 'node': proves its index; 'noproof': no Transfer near the tip; 'blockscout': Blockscout answers
+$GLOBALS['ev_tip_time'] = time() - 3;
+$evMargin = NMMPRO_Evm_Transfers::MAX_TIP_AHEAD_SEC + NMMPRO_Evm_Transfers::HORIZON_MARGIN_SEC;
+$evHorizon = $GLOBALS['ev_tip_time'] - $evMargin;
+$evMock = function ($pre, $args, $url) {
+	$host = (string) wp_parse_url($url, PHP_URL_HOST);
+	$reply = function ($body, $code = 200) {
+		return array('response' => array('code' => $code), 'body' => is_string($body) ? $body : wp_json_encode($body), 'headers' => array(), 'cookies' => array());
+	};
+	if ($host === 'polygon.blockscout.com' || $host === 'base.blockscout.com') {
+		return $GLOBALS['ev_mode'] === 'blockscout' ? $reply(array('status' => '0', 'message' => 'No transactions found', 'result' => array())) : $reply('challenge', 403);
+	}
+	if ($host !== 'polygon-bor-rpc.publicnode.com' && $host !== 'base-rpc.publicnode.com') {
+		return $pre;
+	}
+	// Base's node can run at its own tip time (ev_tip_time_base), so two coins
+	// in one sweep can carry different horizons.
+	$tipTime = ($host === 'base-rpc.publicnode.com' && isset($GLOBALS['ev_tip_time_base'])) ? $GLOBALS['ev_tip_time_base'] : $GLOBALS['ev_tip_time'];
+	$req = json_decode($args['body'], true);
+	$tip = 50000000;
+	$rpc = function ($result) use ($reply) { return $reply(array('jsonrpc' => '2.0', 'id' => 1, 'result' => $result)); };
+	$hash = function ($n) { return '0x' . hash('sha256', 'ev' . $n); };
+	if ($req['method'] === 'eth_blockNumber') {
+		return $rpc('0x' . dechex($tip));
+	}
+	if ($req['method'] === 'eth_getBlockByNumber') {
+		$n = hexdec(substr($req['params'][0], 2));
+		return $rpc(array('number' => '0x' . dechex($n), 'hash' => $hash($n), 'timestamp' => '0x' . dechex($tipTime - ($tip - $n) * 2)));
+	}
+	if ($req['method'] === 'eth_getLogs') {
+		$filter = $req['params'][0];
+		// No transfers to the addresses; one to someone else near the tip,
+		// served only to the index proof (no recipient filter).
+		if (isset($filter['topics'][2]) || $GLOBALS['ev_mode'] !== 'node') {
+			return $rpc(array());
+		}
+		return $rpc(array(array(
+			'address' => $filter['address'], 'topics' => array(NMMPRO_Evm_Transfers::TRANSFER_TOPIC, '0x' . str_repeat('0', 64), '0x' . str_repeat('0', 64)),
+			'data' => '0x' . str_repeat('0', 63) . '1', 'blockNumber' => '0x' . dechex($tip - 1), 'blockHash' => $hash($tip - 1),
+			'transactionHash' => '0x' . str_repeat('e', 64), 'logIndex' => '0x0', 'removed' => false,
+		)));
+	}
+	return $pre;
+};
+add_filter('pre_http_request', $evMock, 10, 3);
+$evReset = function ($addresses) use ($wpdb, $pt) {
+	$wpdb->query("DELETE FROM `$pt`");
+	foreach (array('cursor', 'retry', 'covered_at', 'sweep_start', 'dirty', 'incomplete', 'incomplete_next', 'horizon_next') as $opt) {
+		delete_option('nmmpro_autopay_scan_' . $opt);
+	}
+	foreach ($addresses as $i => $address) {
+		$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDTPOL','unpaid',%d,%d,'1.00000000',0)", $address, time() - 2 * HOUR_IN_SECONDS, 790000 + $i));
+	}
+};
+$evCov = function () {
+	$m = get_option('nmmpro_autopay_scan_covered_at', array());
+	return (is_array($m) && isset($m['USDTPOL'])) ? (int) $m['USDTPOL'] : null;
+};
+$evA = '0x' . str_repeat('a', 40);
+$evB = '0x' . str_repeat('b', 40);
+
+$evReset(array($evA));
+$GLOBALS['ev_mode'] = 'node';
+as_tick(3 * 3600);
+sok('node with index proof: coin stamped at its horizon',  $evCov() === $evHorizon, 'cov=' . var_export($evCov(), true) . ' want=' . $evHorizon);
+sok('  not at the sweep time, which is later',             $evCov() !== null && $evCov() < time() - 300);
+sok('  and the address is not excluded',                   !as_excluded('USDTPOL|' . $evA));
+
+$evReset(array($evA));
+$GLOBALS['ev_mode'] = 'noproof';
+as_tick(3 * 3600);
+sok('node without the proof: the address is excluded',     as_excluded('USDTPOL|' . $evA), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+
+$evReset(array($evA));
+$GLOBALS['ev_mode'] = 'blockscout';
+as_tick(3 * 3600);
+sok('control: Blockscout stamps the sweep time',          $evCov() !== null && $evCov() >= time() - 60 && !as_excluded('USDTPOL|' . $evA), 'cov=' . var_export($evCov(), true));
+
+// Two addresses, one a tick: the node's horizon from the FIRST tick must
+// still cap the stamp written at the wrap two ticks later - not be replaced
+// by a later node visit's later horizon, nor dropped when Blockscout answers.
+add_filter('nmmpro_autopay_scan_budget', function () { return 1; });
+$evReset(array($evA, $evB));
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 200; // a node a little behind
+$evEarly = $GLOBALS['ev_tip_time'] - $evMargin;
+as_tick(3 * 3600); // a, by the lagging node
+sok('multi-tick: the horizon is kept for the sweep',      ($h = get_option('nmmpro_autopay_scan_horizon_next', array())) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evEarly && $evCov() === null);
+$GLOBALS['ev_tip_time'] = time() - 3;
+as_tick(3 * 3600); // b, by a current node: a later horizon
+sok('  a later horizon does not replace it',              ($h = get_option('nmmpro_autopay_scan_horizon_next', array())) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evEarly);
+$GLOBALS['ev_mode'] = 'blockscout';
+as_tick(3 * 3600); // wraps: a again, by Blockscout - the sweep is complete
+sok('  the wrap stamps the earliest horizon, not the start', $evCov() === $evEarly, 'cov=' . var_export($evCov(), true) . ' want=' . $evEarly);
+sok('  and the next sweep starts with no horizon',        get_option('nmmpro_autopay_scan_horizon_next', null) === array());
+
+// The sweep that starts at a wrap counts that tick's head rows as visited, so
+// it inherits the horizons the wrap tick itself relied on.
+$GLOBALS['ev_mode'] = 'node';
+as_tick(3 * 3600); // b, by the node
+as_tick(3 * 3600); // wraps: a, by the node
+$h = get_option('nmmpro_autopay_scan_horizon_next', array());
+sok('a wrap by the node: the next sweep inherits its horizon', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evHorizon, 'next=' . wp_json_encode($h));
+sok('  and the completed sweep is stamped at the horizon',     $evCov() === $evHorizon, 'cov=' . var_export($evCov(), true));
+
+// A tick that covers the whole backlog WITHOUT wrapping (here: an empty
+// cursor and exactly a budget's worth of addresses) also starts the next
+// sweep. If the backlog then grows past the budget, the next tick wraps on
+// head rows alone - so the horizons the full tick relied on must be handed
+// on, or an address only the node vouched for is stamped at the sweep start.
+add_filter('nmmpro_autopay_scan_budget', function () { return 2; });
+$evC = '0x' . str_repeat('c', 40);
+$evReset(array($evA, $evC));
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 250;
+$evLagging = $GLOBALS['ev_tip_time'] - $evMargin;
+as_tick(3 * 3600); // a and c by the node: the page holds the whole backlog, no wrap
+$h = get_option('nmmpro_autopay_scan_horizon_next', null);
+sok('a full tick that does not wrap hands its horizon to the next sweep', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === $evLagging, 'next=' . wp_json_encode($h));
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDTPOL','unpaid',%d,%d,'1.00000000',0)", $evB, time(), 790099));
+$GLOBALS['ev_mode'] = 'blockscout';
+$GLOBALS['ev_tip_time'] = time() - 3;
+as_tick(3 * 3600); // wraps on head rows a and b only; c was last seen through the node
+sok('  so the next wrap on head rows alone stamps no later than it', $evCov() !== null && $evCov() <= $evLagging, 'cov=' . var_export($evCov(), true) . ' want<=' . $evLagging);
+
+// The same hand-on for exclusions: an address the full tick could not verify
+// (a node answer without the index proof) must stay excluded through the next
+// sweep, which counts that visit as its own and may wrap without revisiting it.
+$evReset(array($evA, $evC));
+$GLOBALS['ev_mode'] = 'noproof';
+as_tick(3 * 3600); // a and c by the node, unproven: the whole backlog, no wrap
+sok('a full tick that does not wrap excludes the unverified address', as_excluded('USDTPOL|' . $evC));
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDTPOL','unpaid',%d,%d,'1.00000000',0)", $evB, time(), 790099));
+$GLOBALS['ev_mode'] = 'blockscout';
+as_tick(3 * 3600); // wraps on head rows a and b only; c is not revisited
+sok('  and it stays excluded after the next wrap on head rows alone', as_excluded('USDTPOL|' . $evC), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
+remove_all_filters('nmmpro_autopay_scan_budget');
+add_filter('nmmpro_autopay_scan_budget', function () { return 1; }); // as the checks below expect
+
+// An unreadable builder bounds nothing: a later node visit must not
+// overwrite it, and at the wrap the coin loses its stamp (no expiry) rather
+// than keep one the sweep cannot vouch for.
+$evReset(array($evA, $evB));
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => '99999999999'), false);
+$GLOBALS['ev_mode'] = 'node';
+as_tick(3 * 3600); // a, by the node: not a wrap
+$h = get_option('nmmpro_autopay_scan_horizon_next', null);
+sok('a stored horizon that is not a timestamp is not replaced by a node\'s', is_array($h) && isset($h['USDTPOL']) && $h['USDTPOL'] === '99999999999', 'next=' . wp_json_encode($h));
+$evReset(array($evA, $evB));
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => null), false);
+as_tick(3 * 3600); // a, by the node: not a wrap
+$h = get_option('nmmpro_autopay_scan_horizon_next', null);
+sok('  nor a stored null (unknown, not absent)',           is_array($h) && array_key_exists('USDTPOL', $h) && $h['USDTPOL'] === null, 'next=' . wp_json_encode($h));
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => 1000), false);
+as_tick(3 * 3600); // b, by the node
+as_tick(3 * 3600); // a again: the wrap
+sok('  and at the wrap that coin is left unstamped',       $evCov() === null, 'cov=' . var_export($evCov(), true));
+$evReset(array($evA, $evB));
+update_option('nmmpro_autopay_scan_horizon_next', 'garbage', false);
+as_tick(3 * 3600);
+sok('  nor a builder that is not a list',                  get_option('nmmpro_autopay_scan_horizon_next', null) === 'garbage');
+
+$evReset(array($evA));
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => 1000), false);
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => 'soon'), false);
+remove_all_filters('nmmpro_autopay_scan_budget');
+$GLOBALS['ev_mode'] = 'blockscout';
+as_tick(3 * 3600);
+sok('a horizon that is not a timestamp: the coin is left unstamped', $evCov() === null, 'cov=' . var_export($evCov(), true));
+
+// The wrap drops an address's exclusion before it writes the new stamp. If a
+// write in between fails, the old stamp stays - so it must already have come
+// down to the node's horizon, which here is EARLIER than the old stamp.
+$evReset(array($evA));
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 240;
+$evLate = $GLOBALS['ev_tip_time'] - $evMargin;
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => time() - 180), false);
+update_option('nmmpro_autopay_scan_incomplete', array('USDTPOL|' . $evA => true), false);
+update_option('nmmpro_autopay_scan_sweep_start', 12345, false);
+$evBlock = function ($new, $old) { return $old; }; // the sweep_start write fails
+add_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $evBlock, 10, 2);
+as_tick(3 * 3600);
+remove_filter('pre_update_option_nmmpro_autopay_scan_sweep_start', $evBlock, 10);
+sok('a wrap that fails after dropping the exclusion',       !as_excluded('USDTPOL|' . $evA) && (int) get_option('nmmpro_autopay_scan_sweep_start') === 12345);
+sok('  leaves the stamp lowered to the node\'s horizon',     $evCov() !== null && $evCov() <= $evLate, 'cov=' . var_export($evCov(), true) . ' want<=' . $evLate);
+$GLOBALS['ev_tip_time'] = time() - 3;
+
+// Two coins in one sweep: each is stamped at its OWN horizon, and a coin
+// whose horizon is unknown loses only its own stamp.
+$evCovOf = function ($coin) {
+	$m = get_option('nmmpro_autopay_scan_covered_at', array());
+	return (is_array($m) && isset($m[$coin])) ? (int) $m[$coin] : null;
+};
+$evTwoCoins = function () use ($evReset, $evA, $evB, $wpdb, $pt) {
+	$evReset(array($evA));
+	$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDCBAS','unpaid',%d,%d,'1.00000000',0)", $evB, time() - 2 * HOUR_IN_SECONDS, 790098));
+};
+$evTwoCoins();
+$GLOBALS['ev_mode'] = 'node';
+$GLOBALS['ev_tip_time'] = time() - 300;    // Polygon's node is behind
+$GLOBALS['ev_tip_time_base'] = time() - 3; // Base's is current
+$evPolyH = $GLOBALS['ev_tip_time'] - $evMargin;
+$evBaseH = $GLOBALS['ev_tip_time_base'] - $evMargin;
+as_tick(3 * 3600); // both addresses by their nodes: the whole backlog
+sok('two coins: each is stamped at its own horizon', $evCovOf('USDTPOL') === $evPolyH && $evCovOf('USDCBAS') === $evBaseH, 'pol=' . var_export($evCovOf('USDTPOL'), true) . ' want ' . $evPolyH . ', base=' . var_export($evCovOf('USDCBAS'), true) . ' want ' . $evBaseH);
+$evTwoCoins();
+update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => 1000, 'USDCBAS' => 1000), false);
+update_option('nmmpro_autopay_scan_horizon_next', array('USDTPOL' => null), false);
+as_tick(3 * 3600);
+sok('  an unknown horizon unstamps only its own coin', $evCovOf('USDTPOL') === null && $evCovOf('USDCBAS') === $evBaseH, 'pol=' . var_export($evCovOf('USDTPOL'), true) . ' base=' . var_export($evCovOf('USDCBAS'), true));
+unset($GLOBALS['ev_tip_time_base']);
+$GLOBALS['ev_tip_time'] = time() - 3;
+
+// Whichever write of the wrap's chain fails, an address whose exclusion is
+// dropped is never left with a stamp later than the node's horizon, and the
+// next tick completes the wrap.
+foreach (array('covered_at', 'incomplete', 'incomplete_next', 'horizon_next', 'sweep_start') as $evFailing) {
+	$evReset(array($evA));
+	$GLOBALS['ev_mode'] = 'node';
+	$GLOBALS['ev_tip_time'] = time() - 240;
+	$evLate = $GLOBALS['ev_tip_time'] - $evMargin;
+	update_option('nmmpro_autopay_scan_covered_at', array('USDTPOL' => time() - 180), false);
+	update_option('nmmpro_autopay_scan_incomplete', array('USDTPOL|' . $evA => true), false);
+	update_option('nmmpro_autopay_scan_sweep_start', 12345, false);
+	add_filter('pre_update_option_nmmpro_autopay_scan_' . $evFailing, $evBlock, 10, 2);
+	as_tick(3 * 3600);
+	remove_filter('pre_update_option_nmmpro_autopay_scan_' . $evFailing, $evBlock, 10);
+	sok('the ' . $evFailing . ' write fails: excluded or stamped no later than the horizon', as_excluded('USDTPOL|' . $evA) || ($evCov() !== null && $evCov() <= $evLate), 'excl=' . var_export(as_excluded('USDTPOL|' . $evA), true) . ' cov=' . var_export($evCov(), true) . ' want<=' . $evLate);
+	as_tick(3 * 3600);
+	sok('  and the next tick completes the wrap', !as_excluded('USDTPOL|' . $evA) && $evCov() !== null && $evCov() <= $evLate, 'excl=' . var_export(as_excluded('USDTPOL|' . $evA), true) . ' cov=' . var_export($evCov(), true));
+}
+$GLOBALS['ev_tip_time'] = time() - 3;
+
+remove_filter('pre_http_request', $evMock, 10);
+$evReset(array());
+delete_option('nmmpro_autopay_scan_last_run');
+delete_option('nmmpro_autopay_scan_horizon_next');
 
 echo $GLOBALS['as_ok'] ? "\nAUTOPAY-SCAN CHECKS PASSED\n" : "\nAUTOPAY-SCAN CHECKS FAILED\n";

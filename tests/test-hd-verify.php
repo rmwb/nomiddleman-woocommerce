@@ -1010,16 +1010,22 @@ foreach (array('a1', 'a2', 'a3') as $n) {
 	hv_pay('hv_rr_' . $n, 'rr-' . $n, '45680863668', 0);                // pending: never cancelled over
 }
 list($rrTail) = hv_assign('hv_rr_z', '456.80863668', 'on-hold', $expiredAt2);
-$slowRr = function ($pre, $args, $url) { if (strpos($url, '/addrs/hv_rr_') !== false) { usleep(600000); } return $pre; };
+// The budget is checked before each address, so with c seconds per address a
+// pass gets through about budget/c of them. The test needs a pass to stop
+// before the last order (3c > budget) yet get past the first (c <= budget):
+// 0.8 s per address against 1.8 s leaves up to 1 s of overhead per address
+// for a slow CI runner (0.6 s against 1.0 s failed there).
+$slowRr = function ($pre, $args, $url) { if (strpos($url, '/addrs/hv_rr_') !== false) { usleep(800000); } return $pre; };
+$rrBudget = function () { return 1.8; };
 $passes = 0;
 add_filter('pre_http_request', $slowRr, 5, 3);
-add_filter('nmmpro_hd_pass_budget_sec', $budget);
+add_filter('nmmpro_hd_pass_budget_sec', $rrBudget);
 for ($pass = 1; $pass <= 3 && hv_status($rrTail) !== 'cancelled'; $pass++) {
 	$wpdb->query("UPDATE `{$GLOBALS['hv_table']}` SET `last_checked` = 1 WHERE `address` LIKE 'hv\\_rr\\_%'");
 	hv_expire();
 	$passes = $pass;
 }
-remove_filter('nmmpro_hd_pass_budget_sec', $budget);
+remove_filter('nmmpro_hd_pass_budget_sec', $rrBudget);
 remove_filter('pre_http_request', $slowRr, 5);
 hv_ok('an expired order behind ones that cannot be cancelled is reached',   hv_status($rrTail) === 'cancelled' && $passes <= 2, hv_status($rrTail) . ' after ' . $passes . ' passes');
 hv_ok('  and the ones with a pending payment are still not cancelled',     count(array_filter($rr, function ($o) { return hv_status($o) === 'on-hold'; })) === 3);

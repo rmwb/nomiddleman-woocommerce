@@ -95,6 +95,61 @@ add_filter( 'nmmpro_api_url', function ( $url ) {
 } );
 ```
 
+### ERC-20 tokens: two sources, tried in order
+
+Token transfers (the ERC-20 tokens on Ethereum, and the Polygon, Arbitrum and
+Base stablecoins) are read from the first source that answers:
+
+1. the chain's **Blockscout** instance;
+2. a **public JSON-RPC node**, read log by log.
+
+The node is used only when Blockscout fails. A node's answer lets payments be
+matched. For expiry it counts only up to eleven minutes before the node's
+newest block (ten, plus one for a chain clock running ahead of this server's),
+and only when the node first shows that its record of token transfers is
+current (the token's own transfers near that block). So an order whose address
+was last checked through a node is cancelled up to about eleven minutes later
+than it would be through Blockscout, never earlier. When the node cannot show
+that, the address is not counted as checked until a later pass can. A node
+whose newest block is more than five minutes old, or dated more than a minute
+ahead of this server's clock, is not used, and neither is an answer with more
+than 100 transfers to the address in the window. When both sources fail,
+nothing is matched or expired on that address in that pass, as before.
+
+Every one of these requests passes through `nmmpro_api_url`, so you can point
+any of them at your own instance. A JSON-RPC replacement must be a node of the
+same chain.
+
+### `nmmpro_evm_rpc_nodes` — choose the JSON-RPC nodes
+
+```php
+$nodes = apply_filters( 'nmmpro_evm_rpc_nodes', $nodes, $chain_id );
+```
+
+`$nodes` is an ordered list of `array( url, max_blocks_per_request )`.
+`$chain_id` is `1` (Ethereum), `137` (Polygon), `42161` (Arbitrum) or `8453`
+(Base). The second value is the largest block range the node accepts in one
+`eth_getLogs` call; a range the node refuses makes that node fail, and the
+next is tried.
+
+```php
+// Put your own Arbitrum node first, and keep the default as a second choice.
+add_filter( 'nmmpro_evm_rpc_nodes', function ( $nodes, $chain_id ) {
+    if ( $chain_id === 42161 ) {
+        array_unshift( $nodes, array( 'https://arbitrum.example.com/rpc', 10000 ) );
+    }
+    return $nodes;
+}, 10, 2 );
+```
+
+A node must be following the chain: one whose newest block is more than 5
+minutes old is refused. Each block that holds a transfer is checked against
+its header by hash, and the tip is read again at the end, so a reorganisation
+during the read fails the fetch. A fetch is limited to 250 requests and one
+minute per node, which is enough for 100 transfers in 100 different blocks; an
+address with more transfers than that within the lookback cannot be read this
+way, and waits for Blockscout.
+
 ### `nmmpro_sol_allow_private_rpc` — permit a local Solana RPC in the setting
 
 ```php

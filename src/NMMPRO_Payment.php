@@ -495,6 +495,7 @@ class NMMPRO_Payment {
 		$newFailed = array();
 		$coinDirty = array();       // whole-coin exclusions (unverifiable ticker)
 		$incompleteKeys = array();  // per-ADDRESS exclusions ("crypto|address")
+		$horizonByCrypto = array(); // per-coin cap on the coverage stamp (see page_certifies_until)
 
 		foreach ($toProcess as $record) {
 			$cryptoId = $record['cryptocurrency'];
@@ -566,6 +567,16 @@ class NMMPRO_Payment {
 					// auto-cancel.
 					$incompleteKeys[self::scan_key($record)] = true;
 				}
+				else {
+					// A source that sees the chain only up to some time (the
+					// ERC-20 JSON-RPC fallback) verified this address up to
+					// that time, not up to now: the coin's stamp for this
+					// sweep must not be later than it.
+					$until = self::page_certifies_until($fetched);
+					if ($until !== null && (!isset($horizonByCrypto[$cryptoId]) || $until < $horizonByCrypto[$cryptoId])) {
+						$horizonByCrypto[$cryptoId] = $until;
+					}
+				}
 			}
 		}
 
@@ -633,6 +644,29 @@ class NMMPRO_Payment {
 				$builder[$incompleteKey] = true;
 			}
 			$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', $builder);
+		}
+
+		// The same for the per-coin horizons: the earliest time up to which
+		// any address of the coin was verified in the sweep in progress. Like
+		// an exclusion, it must be durable before the cursor passes the
+		// address, or the wrap would stamp the sweep's start for an address
+		// that was only seen up to an earlier time.
+		// A builder that is not a list, or a coin whose stored value is not a
+		// timestamp, is left exactly as found: the wrap reads either as
+		// "unknown" and stamps nothing for it, which a merge must not undo.
+		if ($certify && $persisted && !empty($horizonByCrypto)) {
+			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
+			if (is_array($horizons)) {
+				foreach ($horizonByCrypto as $horizonCryptoId => $until) {
+					// array_key_exists, not isset: a stored null is "unknown"
+					// too, and must not read as "nothing stored yet".
+					if (!array_key_exists($horizonCryptoId, $horizons)
+						|| (is_int($horizons[$horizonCryptoId]) && $until < $horizons[$horizonCryptoId])) {
+						$horizons[$horizonCryptoId] = $until;
+					}
+				}
+				$persisted = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $horizons);
+			}
 		}
 
 		if ($certify && $persisted && !empty($coinDirty)) {
@@ -722,17 +756,90 @@ class NMMPRO_Payment {
 				$promoted[$failedKey] = true;
 			}
 
+			// The completed sweep's horizons, read before the builder resets.
+			// A value that is not a timestamp cannot be trusted to bound
+			// anything, so its coin is not stamped at all this time.
+			$horizons = NMMPRO_Compat::get_option('nmmpro_autopay_scan_horizon_next', array());
+			$unknownHorizon = array();
+			if (!is_array($horizons)) {
+				$horizons = array();
+				foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $unknownCryptoId) {
+					$unknownHorizon[$unknownCryptoId] = true;
+				}
+			}
+			foreach ($horizons as $horizonCryptoId => $until) {
+				if (!is_int($until)) {
+					$unknownHorizon[$horizonCryptoId] = true;
+				}
+			}
+			foreach (array_keys($unknownHorizon) as $unknownCryptoId) {
+				$excludedCryptos[$unknownCryptoId] = true;
+			}
+
+			// The exclusions are about to be dropped for addresses this sweep
+			// verified, but a node answer verified its address only up to its
+			// horizon, which may be EARLIER than the coin's current stamp. So
+			// the current stamp comes down to the horizon first (and goes for a
+			// coin whose horizon is unknown): if any later write fails, what
+			// remains is a stamp no later than what was verified. Lowering a
+			// stamp only ever delays an expiry.
+			$coveredNow = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
+			$lowered = is_array($coveredNow) ? $coveredNow : array();
+			foreach ($lowered as $coveredCryptoId => $coveredAt) {
+				if (isset($unknownHorizon[$coveredCryptoId])) {
+					unset($lowered[$coveredCryptoId]);
+				}
+				elseif (isset($horizons[$coveredCryptoId]) && (int) $coveredAt > $horizons[$coveredCryptoId]) {
+					$lowered[$coveredCryptoId] = $horizons[$coveredCryptoId];
+				}
+			}
+			$lowerFirst = is_array($coveredNow) && $lowered !== $coveredNow;
+
+			// The sweep now starting counts this tick's rows as visited (see
+			// sweep_start below): the head rows of a wrapping page, or the
+			// whole page of a tick that covered the backlog without wrapping
+			// (whose cursor now sits at the end, so the next tick may wrap
+			// on head rows alone). Either way it inherits this tick's
+			// horizons; a few too many only make its stamp earlier.
+			$nextHorizons = $horizonByCrypto;
+
+			// This tick's rows OPEN the sweep now starting (its start is
+			// stamped at this tick): the head rows of a wrapping page, or the
+			// whole page of a tick that covered the backlog without wrapping.
+			// The next sweep counts their visit here as its own - and its wrap
+			// can come on a shorter head page, so nothing guarantees they are
+			// visited again before it. Seed the next sweep's builder
+			// and coin-level dirty set with this tick's incompleteness, or a
+			// head row whose only visit in that sweep was incomplete would
+			// lose its exclusion while its coin is stamped. Conservative: this
+			// tick's tail rows are carried too, and simply stay excluded until
+			// the following wrap (one extra sweep of deferral, never a missed
+			// one). Same cap as the builder: overflow falls back to the coin.
+			$carryIncomplete = array();
+			$carryDirty = $coinDirty;
+			foreach (array_keys($incompleteKeys) as $incompleteKey) {
+				if (count($carryIncomplete) >= 500) {
+					$incompleteParts = explode('|', $incompleteKey, 2);
+					$carryDirty[$incompleteParts[0]] = true;
+					continue;
+				}
+				$carryIncomplete[$incompleteKey] = true;
+			}
+
 			// Coverage is the one write that authorises cancelling somebody's
 			// order, so it goes LAST, after everything it depends on is durable.
 			// Each step is fenced in its own statement; stopping after any of
-			// them leaves the previous stamp, which the exclusions written so
-			// far still make safe - every address they dropped was verified
-			// cleanly during this sweep, after that stamp.
-			$published = NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete', $promoted)
-				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', array())
+			// them leaves the previous stamp, lowered above to every horizon
+			// this sweep relied on, which the exclusions written so far still
+			// make safe - every address they dropped was verified cleanly
+			// during this sweep, up to that lowered stamp.
+			$published = (!$lowerFirst || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_covered_at', $lowered))
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete', $promoted)
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_incomplete_next', $carryIncomplete)
+				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_horizon_next', $nextHorizons)
 				// The next sweep begins with the head rows this tick just fetched.
 				&& NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_sweep_start', $now)
-				&& (empty($excludedCryptos) || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', array()));
+				&& ((empty($excludedCryptos) && empty($carryDirty)) || NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_dirty', $carryDirty));
 
 			if ($published) {
 				$coveredMap = NMMPRO_Compat::get_option('nmmpro_autopay_scan_covered_at', array());
@@ -741,7 +848,7 @@ class NMMPRO_Payment {
 				}
 				foreach ($paymentRepo->get_distinct_unpaid_cryptos() as $sweptCryptoId) {
 					if (!isset($excludedCryptos[$sweptCryptoId])) {
-						$coveredMap[$sweptCryptoId] = $stampAt;
+						$coveredMap[$sweptCryptoId] = isset($horizons[$sweptCryptoId]) ? min($stampAt, $horizons[$sweptCryptoId]) : $stampAt;
 					}
 				}
 				NMMPRO_Util::fenced_update_option('nmmpro_autopay_scan_covered_at', $coveredMap);
@@ -991,14 +1098,25 @@ class NMMPRO_Payment {
 	 * When an adapter reports no raw metadata (not yet instrumented), the
 	 * filtered result is used as a floor - it can only under-detect, so
 	 * instrumenting an adapter strictly tightens the check.
+	 *
+	 * A source that reported its page as not certifiable (the ERC-20 JSON-RPC
+	 * fallback, when its node could not show that its log index is current)
+	 * is treated as possibly truncated whatever its size: its payments are
+	 * matched, but the address is not certified on this visit. One that
+	 * certifies only up to a time is judged like any other page here; the
+	 * sweep caps the coin's stamp at that time (page_certifies_until()).
 	 */
 	public static function page_possibly_truncated($cryptoId, $fetchResult, $transactionLifetime, $now) {
+		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
+		if (is_array($pageMeta) && array_key_exists(2, $pageMeta) && $pageMeta[2] === false) {
+			return true;
+		}
+
 		$cap = NMMPRO_Blockchain::adapter_page_cap($cryptoId);
 		if ($cap < 1) {
 			return false;
 		}
 
-		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
 		$transactions = isset($fetchResult['transactions']) ? $fetchResult['transactions'] : array();
 
 		if (is_array($pageMeta)) {
@@ -1030,6 +1148,22 @@ class NMMPRO_Payment {
 		// sitting exactly on the cutoff proves nothing about eligible
 		// same-second history below the page.
 		return ($oldest === null) || ((int) $oldest >= ($now - (int) $transactionLifetime));
+	}
+
+	/**
+	 * The time up to which one address visit verified the chain, when the
+	 * source said so (the ERC-20 JSON-RPC fallback reports its node's
+	 * horizon through NMMPRO_Blockchain::note_raw_page()); null for a source
+	 * that answers as of now. Whether the visit certifies at all is
+	 * page_possibly_truncated()'s question.
+	 */
+	public static function page_certifies_until($fetchResult) {
+		$pageMeta = isset($fetchResult['page']) ? $fetchResult['page'] : null;
+		if (is_array($pageMeta) && array_key_exists(2, $pageMeta) && is_int($pageMeta[2])) {
+			return $pageMeta[2];
+		}
+
+		return null;
 	}
 
 	/**
@@ -1645,13 +1779,13 @@ class NMMPRO_Payment {
 			$result = NMMPRO_Blockchain::get_xtz_address_transactions($address);
 		}
 		if ($cryptoId === 'REP') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('REP', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('REP', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'MLN') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('MLN', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('MLN', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'GNO') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GNO', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GNO', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'LTC') {
 			$result = NMMPRO_Blockchain::get_ltc_address_transactions($address);
@@ -1660,25 +1794,25 @@ class NMMPRO_Payment {
 			$result = NMMPRO_Blockchain::get_btc_address_transactions($address);
 		}
 		if ($cryptoId === 'BAT') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BAT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BAT', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'BNB') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BNB', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('BNB', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'HOT') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('HOT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('HOT', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'LINK') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('LINK', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('LINK', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'OMG') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('OMG', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('OMG', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'ZRX') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('ZRX', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('ZRX', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'GUSD') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GUSD', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('GUSD', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'WAVES') {
 			$result = NMMPRO_Blockchain::get_waves_address_transactions($address);
@@ -1693,10 +1827,10 @@ class NMMPRO_Payment {
             $result = NMMPRO_Blockchain::get_dgb_address_transactions($address);
         }
         if ($cryptoId === 'USDC') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDC', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDC', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'USDT') {
-			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDT', $address);
+			$result = NMMPRO_Blockchain::get_erc20_address_transactions('USDT', $address, $transactionLifetime);
 		}
 		if ($cryptoId === 'USDTTRX') {
 			$result = NMMPRO_Blockchain::get_trc20_usdt_address_transactions($address);
@@ -1712,7 +1846,7 @@ class NMMPRO_Payment {
 		if (!isset($result)) {
 			$cryptos = NMMPRO_Cryptocurrencies::get();
 			if (isset($cryptos[$cryptoId]) && $cryptos[$cryptoId]->is_erc20_token()) {
-				$result = NMMPRO_Blockchain::get_erc20_address_transactions($cryptoId, $address);
+				$result = NMMPRO_Blockchain::get_erc20_address_transactions($cryptoId, $address, $transactionLifetime);
 			}
 			else {
 				$result = array('result' => 'error', 'message' => 'No verification available');
