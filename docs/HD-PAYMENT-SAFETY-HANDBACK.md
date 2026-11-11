@@ -210,7 +210,7 @@ The audit is read-only (`wp nmmpro-hd audit`); usage is in [HD-RECONCILIATION.md
 7. **Third-party hooks are not exactly-once.** `payment_complete()` side effects of other plugins can repeat if WooCommerce fails between its save and our claim settlement. This is the same limit documented for Autopay.
 8. **QTUM and BTX lose Privacy Mode.** Stores using it must switch to Classic Mode.
 9. **Manual work.** Legacy held orders and audit findings need a person.
-10. **Changelog size.** With the 2.13.0 entry, the README changelog is at about 4,990 of Plugin Check's 5,000 words; the next release must trim it.
+10. **Changelog size.** With the 2.13.0 entry, the README changelog was at about 4,990 of Plugin Check's 5,000 words. Resolved in 2.14.0: entries 2.6.0 and older moved to `changelog.txt`, which ships with the plugin.
 11. **Untested paths** (from § 4 and § 5): the uncertain claim commit; a concurrent real Autopay/Privacy Mode run on one address; MySQL before 8.0; the test suites on PHP before 8.3.
 12. **Autopay limits come with the merge.** They are listed in [AUTOPAY-SAFETY.md § Known limits](AUTOPAY-SAFETY.md#known-limits). Two are new since the baseline:
     - **Lease migration.** Until the payment table's lease migration has recorded itself (`nmmpro_payment_lease_schema`), Autopay settles no in-flight record and expires no order. Payments are still matched and their orders completed. The migration retries on every page load, but a site where it can never record stays in that state. Privacy Mode does not depend on it.
