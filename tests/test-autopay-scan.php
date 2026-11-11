@@ -1046,6 +1046,18 @@ $GLOBALS['ev_mode'] = 'blockscout';
 $GLOBALS['ev_tip_time'] = time() - 3;
 as_tick(3 * 3600); // wraps on head rows a and b only; c was last seen through the node
 sok('  so the next wrap on head rows alone stamps no later than it', $evCov() !== null && $evCov() <= $evLagging, 'cov=' . var_export($evCov(), true) . ' want<=' . $evLagging);
+
+// The same hand-on for exclusions: an address the full tick could not verify
+// (a node answer without the index proof) must stay excluded through the next
+// sweep, which counts that visit as its own and may wrap without revisiting it.
+$evReset(array($evA, $evC));
+$GLOBALS['ev_mode'] = 'noproof';
+as_tick(3 * 3600); // a and c by the node, unproven: the whole backlog, no wrap
+sok('a full tick that does not wrap excludes the unverified address', as_excluded('USDTPOL|' . $evC));
+$wpdb->query($wpdb->prepare("INSERT INTO `$pt` (address,cryptocurrency,status,ordered_at,order_id,order_amount,hd_address) VALUES (%s,'USDTPOL','unpaid',%d,%d,'1.00000000',0)", $evB, time(), 790099));
+$GLOBALS['ev_mode'] = 'blockscout';
+as_tick(3 * 3600); // wraps on head rows a and b only; c is not revisited
+sok('  and it stays excluded after the next wrap on head rows alone', as_excluded('USDTPOL|' . $evC), 'excl=' . implode(',', array_keys(get_option('nmmpro_autopay_scan_incomplete', array()))));
 remove_all_filters('nmmpro_autopay_scan_budget');
 add_filter('nmmpro_autopay_scan_budget', function () { return 1; }); // as the checks below expect
 

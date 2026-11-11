@@ -145,9 +145,10 @@ add_filter( 'nmmpro_evm_rpc_nodes', function ( $nodes, $chain_id ) {
 A node must be following the chain: one whose newest block is more than 5
 minutes old is refused. Each block that holds a transfer is checked against
 its header by hash, and the tip is read again at the end, so a reorganisation
-during the read fails the fetch. A fetch is limited to 40 requests and one
-minute per node; an address whose transfers within the lookback sit in more
-than about 30 blocks cannot be read this way, and waits for Blockscout.
+during the read fails the fetch. A fetch is limited to 250 requests and one
+minute per node, which is enough for 100 transfers in 100 different blocks; an
+address with more transfers than that within the lookback cannot be read this
+way, and waits for Blockscout.
 
 ### `nmmpro_sol_allow_private_rpc` — permit a local Solana RPC in the setting
 
