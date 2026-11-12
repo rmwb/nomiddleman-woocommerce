@@ -1,4 +1,14 @@
-# Downgrading to 2.12.0 or earlier
+# Downgrading
+
+## From 2.14.0 to 2.13.0
+
+2.14.0 changes no table structure and adds no payment-record state, so 2.13.0 can take over without a procedure. Know what it gives up:
+
+- **No node fallback.** 2.13.0 reads ERC-20 transfers from Blockscout only. Polygon, Arbitrum and Base Blockscout currently answer with a Cloudflare challenge, so for USDT and USDC on those chains 2.13.0 neither matches payments nor expires orders. Check those orders by hand while it runs.
+- **The ledger keeps its lower-case twins.** 2.13.0 matches hashes exactly as served. Blockscout serves lower case, which the twins cover, so a transaction already used stays used.
+- **Harmless leftovers:** the options `nmmpro_autopay_scan_horizon_next` and `nmmpro_consumed_hash_case_v1`. Uninstalling removes both. If you upgrade again, the second tells 2.14.0 the case fold has already run, so a row 2.13.0 recorded in another case in the meantime is not folded. Blockscout does not serve such hashes, so in practice there is none.
+
+## To 2.12.0 or earlier
 
 This release adds one payment-record state, `cancelling`: automatic expiry holds it for the moment between claiming an expired order and WooCommerce confirming the cancellation. Every tick, `NMMPRO_Payment::recover_interrupted_cancellations()` settles any such row left behind by an interrupted request.
 
@@ -6,7 +16,7 @@ This release adds one payment-record state, `cancelling`: automatic expiry holds
 
 Do **not** rewrite these rows to `unpaid` by hand. Whether the order was actually cancelled is recorded on the order, not the payment record. Let the plugin settle each row from its order, and only while nothing can create new ones.
 
-## Privacy Mode first
+### Privacy Mode first
 
 Earlier releases decide Privacy Mode payments from an address's lifetime total. That total is exactly what let funds received before an order existed pay it. Before downgrading, switch every Privacy Mode coin to **Classic Mode** and keep it there until this release (or a later one) is back. The full rollback rules are in `docs/HD-DEPLOYMENT.md`:
 - never restore an old database snapshot over live orders;
@@ -14,7 +24,7 @@ Earlier releases decide Privacy Mode payments from an address's lifetime total. 
 
 Earlier releases leave this release's `retired` and `review` records alone, so they neither recycle retired addresses nor pay orders held for review.
 
-## Before you start
+### Before you start
 
 - **Only the background job creates `cancelling` rows**, and only in a pass that holds the cron lock. On a server without usable named locks, or before MySQL 5.7.5, no pass is ever exclusive (the Status screen says "Automatic cancellation ... is paused"), so this version never creates `cancelling` rows there. Check with the query in step 3. If it shows none, you can skip straight to step 5.
 - **Multisite:** every step applies to every site. Run each command once per site, with `--url=`:
@@ -23,7 +33,7 @@ Earlier releases leave this release's `retired` and `review` records alone, so t
   wp site list --field=url | xargs -I{} wp --url={} option update nmmpro_background_paused 1
   ```
 
-## Procedure
+### Procedure
 
 Keep this version installed and active until step 5.
 
@@ -61,7 +71,7 @@ Keep this version installed and active until step 5.
 
    If you stopped any runners in step 2, restart them.
 
-## Leftover data
+### Leftover data
 
 - The payment table keeps its `lease_gen` column. 2.12.0 does not use it, and its `DEFAULT 0` keeps 2.12.0's inserts working.
 - These options are unused by 2.12.0 and harmless to keep. Uninstalling the plugin removes them:
